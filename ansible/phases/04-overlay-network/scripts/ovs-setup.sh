@@ -13,6 +13,7 @@ echo "  EDGE_IP=${EDGE_IP:-}"
 echo "  CELL_COUNT=${CELL_COUNT:-0}"
 echo "  RAN_INTERFACE=${RAN_INTERFACE:-}"
 echo "  RAN_BRIDGE_MODE=${RAN_BRIDGE_MODE:-disabled}"
+echo "  RAN_SUBNET=${RAN_SUBNET:-}"
 
 BRIDGES=(br-n1 br-n2 br-n3 br-n4 br-n6e br-n6c)
 
@@ -147,15 +148,14 @@ bridge_ran_interface() {
 
 if [[ "${RAN_BRIDGE_MODE:-disabled}" != "disabled" ]] && [[ "$NODE_NAME" == "worker" ]]; then
   RAN_IF="${RAN_INTERFACE:-}"
-  
-  # Auto-detect RAN interface if not specified
-  if [[ -z "$RAN_IF" ]]; then
-    # Look for interface on 192.168.57.x subnet (RAN network)
-    RAN_IF=$(ip -o addr show | grep '192\.168\.57\.' | awk '{print $2}' | head -1)
-    if [[ -z "$RAN_IF" ]]; then
-      # Fallback: third interface (enp0s9 or eth2)
-      RAN_IF=$(ip link | grep -E '^[0-9]+: (enp0s9|eth2):' | sed 's/.*: \([^:]*\):.*/\1/' | head -1)
-    fi
+
+  # Auto-detect RAN interface from RAN_SUBNET when not explicitly set.
+  # Vagrant assigns the worker an IP inside physical_ran_subnet, so we
+  # look for the NIC carrying an address in that range.
+  if [[ -z "$RAN_IF" ]] && [[ -n "${RAN_SUBNET:-}" ]]; then
+    RAN_PREFIX=$(echo "$RAN_SUBNET" | cut -d'/' -f1 | sed 's/\.[0-9]*$//')
+    RAN_PREFIX_RE=$(echo "$RAN_PREFIX" | sed 's/\./\\./g')
+    RAN_IF=$(ip -o addr show | grep "${RAN_PREFIX_RE}\." | awk '{print $2}' | head -1)
   fi
   
   if [[ -n "$RAN_IF" ]] && ip link show "$RAN_IF" &>/dev/null; then
@@ -188,6 +188,15 @@ if [[ "${RAN_BRIDGE_MODE:-disabled}" != "disabled" ]] && [[ "$NODE_NAME" == "wor
         ovs-vsctl --may-exist add-port br-n3 patch-n3-ran -- \
           set interface patch-n3-ran type=patch options:peer=patch-ran-n3
         echo "  Created br-ran with patches to br-n2 and br-n3"
+        # Assign gateway IP to br-ran so the worker can route between
+        # the physical RAN subnet and the overlay N2/N3 networks.
+        # The gNB uses this as its default gateway.
+        if [[ -n "${RAN_SUBNET:-}" ]]; then
+          RAN_GW_IP=$(echo "$RAN_SUBNET" | sed 's|\.[0-9]*/|.1/|')
+          ensure_bridge_ip br-ran "$RAN_GW_IP"
+          # Secondary router IP on br-n3 for UPF return traffic.
+          ensure_bridge_ip br-n3 10.203.0.254/24
+        fi
         ;;
       *)
         echo "⚠️  Unknown RAN_BRIDGE_MODE: ${RAN_BRIDGE_MODE}, skipping"
@@ -200,6 +209,17 @@ if [[ "${RAN_BRIDGE_MODE:-disabled}" != "disabled" ]] && [[ "$NODE_NAME" == "wor
 else
   if [[ "${RAN_BRIDGE_MODE:-disabled}" != "disabled" ]]; then
     echo "ℹ️  RAN bridging only available on worker node"
+  fi
+  # When RAN_BRIDGE_MODE is disabled, explicitly tear down br-ran if it exists.
+  # This ensures Disable (dashboard) leaves no leftover bridge after step 5 restarts the DS pod.
+  if [[ "$NODE_NAME" == "worker" ]] && ovs-vsctl br-exists br-ran 2>/dev/null; then
+    echo "🧹 Tearing down br-ran (RAN_BRIDGE_MODE=disabled)"
+    ovs-vsctl --if-exists del-port br-n2 patch-n2-ran
+    ovs-vsctl --if-exists del-port br-n3 patch-n3-ran
+    ovs-vsctl --if-exists del-port br-ran patch-ran-n2
+    ovs-vsctl --if-exists del-port br-ran patch-ran-n3
+    ovs-vsctl --if-exists del-br br-ran
+    echo "  -> br-ran removed"
   fi
 fi
 

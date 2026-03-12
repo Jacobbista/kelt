@@ -1,0 +1,1314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>5G UE Probe</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.min.js"></script>
+    <style>
+        :root {
+            --bg: #0b0e14; --bg-1: #131720; --bg-2: #1a1f2b; --bg-3: #20263a;
+            --border: rgba(255,255,255,0.06); --border-hi: rgba(255,255,255,0.13);
+            --blue: #3b82f6; --green: #22c55e; --cyan: #06b6d4;
+            --red: #ef4444; --amber: #f59e0b; --purple: #a855f7; --indigo: #6366f1;
+            --txt: #e2e8f0; --txt2: #94a3b8; --txt3: #475569;
+        }
+        * { font-family: 'Inter', sans-serif; box-sizing: border-box; }
+        body { background: var(--bg); color: var(--txt); }
+
+        /* ---- Layout ---- */
+        .sidebar { width: 220px; flex-shrink: 0; }
+        .main-pane { flex: 1; min-width: 0; }
+        .app-wrap { display: flex; gap: 1.5rem; padding: 1.25rem; min-height: 100vh; }
+
+        /* ---- Nav ---- */
+        .nav-brand { font-weight: 800; font-size: 1rem; color: var(--txt); padding: .5rem 0 1.5rem; display: flex; align-items: center; gap: .5rem; }
+        .nav-item { display: flex; align-items: center; gap: .6rem; padding: .55rem .75rem; border-radius: 10px; color: var(--txt2); font-size: .82rem; font-weight: 500; cursor: pointer; transition: all .15s; margin-bottom: .2rem; border: none; background: none; width: 100%; text-align: left; }
+        .nav-item:hover { background: var(--bg-2); color: var(--txt); }
+        .nav-item.active { background: var(--bg-3); color: var(--txt); font-weight: 600; }
+        .nav-sep { font-size: .6rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--txt3); padding: 1rem .75rem .3rem; }
+        .ws-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--txt3); display: inline-block; }
+        .ws-dot.on { background: var(--green); animation: pulse 1.2s infinite; }
+        @keyframes pulse { 0%,100% {opacity:1} 50% {opacity:.35} }
+
+        /* ---- Panel ---- */
+        .panel { display: none; }
+        .panel.active { display: block; }
+        .panel-title { font-size: 1.1rem; font-weight: 700; margin-bottom: .25rem; }
+        .panel-sub { font-size: .8rem; color: var(--txt2); margin-bottom: 1.5rem; }
+
+        /* ---- Cards ---- */
+        .card_ { background: var(--bg-1); border: 1px solid var(--border); border-radius: 14px; padding: 1.25rem; margin-bottom: 1rem; }
+        .card_:hover { border-color: var(--border-hi); }
+        .card-label { font-size: .65rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--txt3); margin-bottom: .75rem; }
+
+        /* ---- Interface cards ---- */
+        .iface-row { display: flex; align-items: center; justify-content: space-between; padding: .9rem 1.1rem; border-radius: 12px; background: var(--bg-2); border: 1px solid var(--border); margin-bottom: .5rem; transition: border-color .2s; }
+        .iface-row:hover { border-color: var(--blue); }
+        .iface-name { font-weight: 700; font-size: .9rem; }
+        .iface-mac { font-size: .7rem; color: var(--txt3); font-family: monospace; margin-top: .1rem; }
+        .tag { font-size: .62rem; font-weight: 700; padding: .2em .55em; border-radius: 5px; }
+        .tag-ue { background: rgba(34,197,94,.15); color: var(--green); }
+        .tag-router { background: rgba(245,158,11,.15); color: var(--amber); }
+
+        /* ---- NS table ---- */
+        .ns-tbl { width: 100%; font-size: .82rem; }
+        .ns-tbl th { color: var(--txt3); font-weight: 600; font-size: .65rem; text-transform: uppercase; letter-spacing: .07em; border-bottom: 1px solid var(--border); padding: .5rem .6rem; }
+        .ns-tbl td { padding: .65rem .6rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
+        .ns-empty { color: var(--txt3); font-style: italic; font-size: .85rem; text-align: center; padding: 1.5rem; }
+
+        /* ---- Metric chips ---- */
+        .chip-row { display: flex; gap: .75rem; flex-wrap: wrap; margin-top: .5rem; }
+        .chip { flex: 1; min-width: 110px; padding: 1rem; border-radius: 12px; text-align: center; border: 1px solid var(--border); }
+        .chip .c-label { font-size: .62rem; text-transform: uppercase; letter-spacing: .08em; opacity: .65; }
+        .chip .c-val { font-size: 1.8rem; font-weight: 800; margin: .15rem 0; }
+        .chip .c-unit { font-size: .65rem; opacity: .55; }
+        .chip-ping { background: linear-gradient(135deg,#164e63,#083344); color: #67e8f9; }
+        .chip-dl   { background: linear-gradient(135deg,#14532d,#052e16); color: #86efac; }
+        .chip-ul   { background: linear-gradient(135deg,#1e3a5f,#0c1a30); color: #93c5fd; }
+
+        /* ---- Buttons ---- */
+        .btn_ { border: none; font-weight: 600; border-radius: 9px; padding: .45em 1.1em; font-size: .82rem; cursor: pointer; transition: all .15s; }
+        .btn_:disabled { opacity: .45; cursor: not-allowed; }
+        .btn-blue   { background: var(--blue); color: #fff; }
+        .btn-blue:hover:not(:disabled) { background: #2563eb; }
+        .btn-red    { background: transparent; border: 1.5px solid var(--red); color: var(--red); }
+        .btn-red:hover:not(:disabled) { background: var(--red); color: #fff; }
+        .btn-amber  { background: var(--amber); color: #1a1200; }
+        .btn-amber:hover:not(:disabled) { background: #d97706; }
+        .btn-green  { background: var(--green); color: #052e16; font-weight: 700; }
+        .btn-green:hover:not(:disabled) { background: #16a34a; }
+        .btn-start  { background: linear-gradient(135deg,var(--indigo),var(--purple)); color: #fff; font-weight: 700; font-size: .9rem; padding: .55em 1.8em; border-radius: 10px; box-shadow: 0 4px 18px rgba(99,102,241,.3); }
+        .btn-start:hover:not(:disabled) { box-shadow: 0 6px 24px rgba(99,102,241,.45); transform: translateY(-1px); }
+        .btn-stop   { background: var(--red); color: #fff; font-weight: 700; font-size: .9rem; padding: .55em 1.8em; border-radius: 10px; }
+        .btn-stop:hover:not(:disabled) { background: #dc2626; }
+
+        /* ---- Test status bar ---- */
+        .test-bar { display: flex; align-items: center; gap: .6rem; font-size: .8rem; color: var(--txt2); padding: .5rem 0; }
+        .t-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--txt3); }
+        .t-dot.run { background: var(--green); animation: pulse 1s infinite; }
+
+        /* ---- Charts ---- */
+        .chart-wrap { position: relative; height: 240px; margin-top: .75rem; }
+        .chart-title { font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .09em; color: var(--txt3); margin-bottom: .25rem; }
+
+        /* ---- Ping table ---- */
+        .ping-tbl { width: 100%; font-size: .78rem; }
+        .ping-tbl th { color: var(--txt3); font-size: .62rem; text-transform: uppercase; letter-spacing: .06em; border-bottom: 1px solid var(--border); padding: .4rem .5rem; font-weight: 600; }
+        .ping-tbl td { padding: .4rem .5rem; border-bottom: 1px solid var(--border); font-family: monospace; }
+        .ping-tbl tbody { max-height: 280px; }
+        .ping-row-new { animation: fadeIn .3s ease; }
+        @keyframes fadeIn { from {opacity:0;transform:translateY(-4px)} to {opacity:1;transform:translateY(0)} }
+
+        /* ---- Summary badges ---- */
+        .sum-badge { display: inline-block; padding: .3em .75em; border-radius: 7px; font-size: .75rem; font-weight: 600; margin: .2rem .15rem; }
+
+        /* ---- Forms ---- */
+        .form-control, .form-select { background: var(--bg); border: 1px solid #334155; color: var(--txt); border-radius: 9px; font-size: .85rem; padding: .55rem .75rem; transition: all .2s ease; }
+        .form-control:focus, .form-select:focus { background: var(--bg); color: var(--txt); border-color: var(--blue); box-shadow: 0 0 0 3px rgba(59,130,246,.15); }
+        .form-label { color: var(--txt3); font-size: .68rem; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; }
+
+        /* ---- Log ---- */
+        .log-box { background: var(--bg); border: 1px solid var(--border); border-radius: 9px; padding: .65rem; font-family: monospace; font-size: .72rem; color: var(--green); max-height: 110px; overflow-y: auto; margin-top: .65rem; display: none; }
+
+        /* ---- Alert ---- */
+        .alert_ { border-radius: 10px; border: none; font-size: .82rem; padding: .6rem 1rem; margin-bottom: .75rem; }
+        .alert-ok  { background: rgba(34,197,94,.12); color: #86efac; border: 1px solid rgba(34,197,94,.2); }
+        .alert-err { background: rgba(239,68,68,.12); color: #fca5a5; border: 1px solid rgba(239,68,68,.2); }
+
+        #alerts { min-height: 2rem; }
+
+        .sp { width: .9rem; height: .9rem; border-width: 2px; vertical-align: middle; }
+    </style>
+</head>
+<body>
+<div class="app-wrap">
+
+    <!-- ===== SIDEBAR ===== -->
+    <div class="sidebar">
+        <div class="nav-brand">📡 5G Probe <span class="ws-dot" id="wsDot"></span></div>
+
+        <div class="nav-sep">Infrastructure</div>
+        <button class="nav-item active" data-panel="setup" onclick="nav('setup')">⚙️ Device Setup</button>
+        <button class="nav-item" data-panel="namespaces" onclick="nav('namespaces')">📋 Namespaces</button>
+
+        <div class="nav-sep">Tests</div>
+        <button class="nav-item" data-panel="throughput" onclick="nav('throughput')">📶 Throughput <small style="color:var(--txt3);font-size:.65rem;">iperf3</small></button>
+        <button class="nav-item" data-panel="latency" onclick="nav('latency')">📍 Latency <small style="color:var(--txt3);font-size:.65rem;">ping</small></button>
+        <button class="nav-item" data-panel="bufferbloat" onclick="nav('bufferbloat')">🌊 Bufferbloat <small style="color:var(--txt3);font-size:.65rem;">loaded RTT</small></button>
+
+        <div class="nav-sep">Results</div>
+        <button class="nav-item" data-panel="results" onclick="nav('results');loadResults();">📁 Test Results</button>
+
+        <div class="nav-sep">System</div>
+        <div style="padding:.5rem .75rem; font-size:.75rem;color:var(--txt3);" id="sysStatus">–</div>
+    </div>
+
+    <!-- ===== MAIN ===== -->
+    <div class="main-pane">
+        <div id="alerts"></div>
+
+        <!-- ====================================================== -->
+        <!-- PANEL: Setup                                            -->
+        <!-- ====================================================== -->
+        <div class="panel active" id="panel-setup">
+            <div class="panel-title">Device Setup</div>
+            <div class="panel-sub">Isolate a USB interface into its own network namespace. The system auto-assigns the namespace name (<code>ue1</code>, <code>ue2</code>, …).</div>
+
+            <div class="card_">
+                <div class="card-label">USB Interfaces on Host</div>
+                <div id="ifaceList"><span class="text-secondary" style="font-size:.85rem;">Scanning…</span></div>
+                <div id="isoLog" class="log-box"></div>
+            </div>
+
+            <div class="card_">
+                <div class="card-label">Quick Connectivity Check</div>
+                <div class="row g-2 align-items-end">
+                    <div class="col-md-3">
+                        <label class="form-label">Namespace</label>
+                        <select id="qNs" class="form-select form-select-sm"></select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Target IP</label>
+                        <input type="text" id="qIp" class="form-control form-control-sm" value="10.45.0.1">
+                    </div>
+                    <div class="col-md-2">
+                        <button class="btn_ btn-green" onclick="quickBench()" id="btnQB">▶ Run</button>
+                    </div>
+                </div>
+                <div id="qbLoad" class="mt-2" style="display:none;font-size:.8rem;color:var(--txt2);">
+                    <span class="spinner-border sp me-1"></span>Running (~15s)…
+                </div>
+                <div class="chip-row mt-2">
+                    <div class="chip chip-ping"><div class="c-label">Latency</div><div class="c-val" id="vPing">--</div><div class="c-unit">ms</div></div>
+                    <div class="chip chip-dl"><div class="c-label">Downlink</div><div class="c-val" id="vDl">--</div><div class="c-unit">Mbps</div></div>
+                    <div class="chip chip-ul"><div class="c-label">Uplink</div><div class="c-val" id="vUl">--</div><div class="c-unit">Mbps</div></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ====================================================== -->
+        <!-- PANEL: Namespaces                                       -->
+        <!-- ====================================================== -->
+        <div class="panel" id="panel-namespaces">
+            <div class="panel-title">Active Namespaces</div>
+            <div class="panel-sub">Namespaces currently active on the host. Reset to move interfaces back and destroy the namespace.</div>
+            <div class="card_">
+                <div id="nsTable"><div class="ns-empty">No active namespaces.</div></div>
+            </div>
+        </div>
+
+        <!-- ====================================================== -->
+        <!-- PANEL: Throughput (iperf3)                             -->
+        <!-- ====================================================== -->
+        <div class="panel" id="panel-throughput">
+            <div class="panel-title">Throughput Test</div>
+            <div class="panel-sub">Uses <strong>iperf3</strong> to measure TCP or UDP throughput. Requires an iperf3 server at the target IP.
+            <br><span style="font-size:.75em;color:var(--txt3);">TCP: limited by kernel congestion window (CUBIC/BBR). UDP: bypasses TCP stack — measures raw radio channel capacity. If TCP &lt;&lt; UDP, the issue is TCP tuning, not the antenna.</span></div>
+
+            <div class="card_">
+                <div class="row g-2 align-items-end mb-3 ignore-screenshot">
+                    <div class="col-md-2">
+                        <label class="form-label">Namespace</label>
+                        <select id="tpNs" class="form-select form-select-sm"></select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">iperf3 Server IP</label>
+                        <input type="text" id="tpIp" class="form-control form-control-sm" value="10.45.0.1">
+                    </div>
+                    <div class="col-md-1">
+                        <label class="form-label">Duration (s)</label>
+                        <input type="number" id="tpDur" class="form-control form-control-sm" value="15" min="3" max="600">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">Direction</label>
+                        <select id="tpMode" class="form-select form-select-sm">
+                            <option value="dl">⬇ Downlink</option>
+                            <option value="ul">⬆ Uplink</option>
+                            <option value="both">🔁 Sequential (DL → UL)</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">Protocol</label>
+                        <select id="tpProto" class="form-select form-select-sm" onchange="toggleBwField()">
+                            <option value="tcp">TCP</option>
+                            <option value="udp">UDP</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2" id="bwCol" style="display:none;">
+                        <label class="form-label">BW Target</label>
+                        <select id="tpBw" class="form-select form-select-sm">
+                            <option value="50M">50 Mbps</option>
+                            <option value="100M">100 Mbps</option>
+                            <option value="200M" selected>200 Mbps</option>
+                            <option value="500M">500 Mbps</option>
+                            <option value="1G">1 Gbps</option>
+                            <option value="0">Unlimited (MAX)</option>
+                        </select>
+                    </div>
+                    <div class="col-md-1 text-end">
+                        <button class="btn_ btn-start" id="btnTp" onclick="startThroughput()">▶ Start</button>
+                    </div>
+                </div>
+
+                <div class="test-bar">
+                    <span class="t-dot" id="tpDot"></span>
+                    <span id="tpMsg">Ready</span>
+                </div>
+
+                <div class="chart-title">Throughput (Mbps)</div>
+                <div class="chart-wrap"><canvas id="chartTP"></canvas></div>
+
+                <div id="tpSummary" class="mt-2" style="display:none;"></div>
+            </div>
+        </div>
+
+        <!-- ====================================================== -->
+        <!-- PANEL: Latency (ping)                                  -->
+        <!-- ====================================================== -->
+        <div class="panel" id="panel-latency">
+            <div class="panel-title">Latency Test</div>
+            <div class="panel-sub">Uses <strong>ping (ICMP)</strong> to measure round-trip time, jitter and packet loss.
+            <br><span style="font-size:.75em;color:var(--txt3);">RTT = full round-trip (ICMP Echo → Reply). Est. OWD = RTT/2 (assumes symmetric path). Jitter = |RTT[n] − RTT[n−1]| (instantaneous variation, relevant for VoIP/video).</span></div>
+
+            <div class="card_">
+                <div class="row g-2 align-items-end mb-3 ignore-screenshot">
+                    <div class="col-md-3">
+                        <label class="form-label">Namespace</label>
+                        <select id="latNs" class="form-select form-select-sm"></select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Target (IP or host)</label>
+                        <input type="text" id="latIp" class="form-control form-control-sm" value="10.45.0.1">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">Packets</label>
+                        <input type="number" id="latCount" class="form-control form-control-sm" value="60" min="5" max="3000">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">Interval (s)</label>
+                        <input type="number" id="latInterval" class="form-control form-control-sm" value="0.5" min="0.2" max="5" step="0.1">
+                    </div>
+                    <div class="col-md-2 text-end">
+                        <button class="btn_ btn-start" id="btnLat" onclick="startLatency()">▶ Start</button>
+                    </div>
+                </div>
+
+                <div class="test-bar">
+                    <span class="t-dot" id="latDot"></span>
+                    <span id="latMsg">Ready</span>
+                </div>
+
+                <!-- Live stats chips -->
+                <div class="chip-row" id="latChips" style="display:none;">
+                    <div class="chip chip-ping"><div class="c-label">RTT (current)</div><div class="c-val" id="latCur">--</div><div class="c-unit">ms</div></div>
+                    <div class="chip" style="background:linear-gradient(135deg,#0c4a6e,#082f49);color:#7dd3fc;border:none;"><div class="c-label">Est. OWD (RTT/2)</div><div class="c-val" id="latOwd">--</div><div class="c-unit">ms</div></div>
+                    <div class="chip chip-dl" style="background:linear-gradient(135deg,#1e3a5f,#0c1a30);color:#93c5fd;"><div class="c-label">Min RTT</div><div class="c-val" id="latMin">--</div><div class="c-unit">ms</div></div>
+                    <div class="chip chip-ul" style="background:linear-gradient(135deg,#3b0764,#1e1b4b);color:#c4b5fd;"><div class="c-label">Max RTT</div><div class="c-val" id="latMax">--</div><div class="c-unit">ms</div></div>
+                    <div class="chip chip-ping" style="background:linear-gradient(135deg,#1c1917,#0c0a09);color:#d4d4d4;"><div class="c-label">Avg RTT</div><div class="c-val" id="latAvg">--</div><div class="c-unit">ms</div></div>
+                    <div class="chip" style="background:linear-gradient(135deg,#0f3460,#0a1628);color:#fbbf24;border:none;"><div class="c-label">Jitter (avg)</div><div class="c-val" id="latJitter">--</div><div class="c-unit">ms</div></div>
+                    <div class="chip" style="background:linear-gradient(135deg,#450a0a,#1c0a0a);color:#fca5a5;border:none;"><div class="c-label">Loss</div><div class="c-val" id="latLoss">0</div><div class="c-unit">pkts</div></div>
+                </div>
+
+                <div class="chart-title mt-2">RTT &amp; Jitter per Packet (ms)</div>
+                <div class="chart-wrap"><canvas id="chartLat"></canvas></div>
+
+                <!-- Per-packet table (last N) -->
+                <div class="card-label mt-3">Packet Log (last 20)</div>
+                <div style="overflow-x:auto;">
+                    <table class="ping-tbl">
+                        <thead><tr><th>Seq</th><th>RTT (ms)</th><th>Est. OWD (ms)</th><th>Jitter (ms)</th><th>TTL</th><th>Size</th></tr></thead>
+                        <tbody id="pingLog"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <!-- ====================================================== -->
+        <!-- PANEL: Bufferbloat                                       -->
+        <!-- ====================================================== -->
+        <div class="panel" id="panel-bufferbloat">
+            <div class="panel-title" style="display:flex;align-items:center;gap:.75rem;">
+                🌊 Bufferbloat (Loaded Latency)
+            </div>
+            <div class="panel-sub" style="font-size:.9rem; line-height:1.6; color:var(--txt2);">
+                This test evaluates how well the 5G link (dongle + UPF) manages its queues via AQM (Active Queue Management).<br>
+                It runs a heavy <strong>iperf3 throughput test</strong> to saturate the link, while simultaneously sending a continuous <strong>ping</strong>.<br>
+                <span style="color:var(--txt3);font-size:.85rem;"><strong>What to watch for:</strong> If the red RTT chart (latency) spikes severely when throughput hits its peak, the link suffers from Bufferbloat. A healthy link keeps latency stable even under maximum load. <strong>Sequential mode</strong> tests this in both DL and UL directions automatically.</span>
+            </div>
+
+            <!-- Radio pre-check callout -->
+            <div style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.25);border-radius:12px;padding:1rem 1.25rem;margin-bottom:1rem;font-size:.82rem;">
+                <strong style="color:var(--amber);">📻 Before you run — check the radio</strong>
+                <div style="color:var(--txt2);margin-top:.4rem;line-height:1.7;">
+                    Open the dongle WebUI (see Namespaces panel), go to <strong>Status → Network</strong> and verify:
+                    <ul style="margin:.35rem 0 0 1rem;padding:0;">
+                        <li><strong>Mode:</strong> must be 5G NR (not 4G fallback)</li>
+                        <li><strong>RSRP:</strong> ideally &gt; −100 dBm (−80 dBm = excellent)</li>
+                        <li><strong>RSSI / RSRQ:</strong> stable between runs — if this fluctuates, it explains throughput variance, not bufferbloat</li>
+                    </ul>
+                    Note the values before each test run for your thesis log.
+                </div>
+            </div>
+
+            <div class="card_">
+                <div class="row g-2 align-items-end mb-3 ignore-screenshot">
+                    <div class="col-md-2">
+                        <label class="form-label">Namespace</label>
+                        <select id="bbNs" class="form-select form-select-sm"></select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">iperf3 Server IP</label>
+                        <input type="text" id="bbIp" class="form-control form-control-sm" value="10.45.0.1">
+                    </div>
+                    <div class="col-md-1">
+                        <label class="form-label">Duration</label>
+                        <input type="number" id="bbDur" class="form-control form-control-sm" value="20" min="5" max="600">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">Direction</label>
+                        <select id="bbMode" class="form-select form-select-sm">
+                            <option value="dl">⬇ Downlink</option>
+                            <option value="ul">⬆ Uplink</option>
+                            <option value="both" selected>🔁 Sequential (DL → UL)</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">Protocol</label>
+                        <select id="bbProto" class="form-select form-select-sm" onchange="toggleBbBwField()">
+                            <option value="tcp">TCP</option>
+                            <option value="udp">UDP</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2" id="bbBwCol" style="display:none;">
+                        <label class="form-label">BW Target</label>
+                        <select id="bbBw" class="form-select form-select-sm">
+                            <option value="50M">50 Mbps</option>
+                            <option value="100M">100 Mbps</option>
+                            <option value="200M" selected>200 Mbps</option>
+                            <option value="500M">500 Mbps</option>
+                            <option value="1G">1 Gbps</option>
+                            <option value="0">Unlimited (MAX)</option>
+                        </select>
+                    </div>
+                    <div class="col-md-1 text-end">
+                        <button class="btn_ btn-start" id="btnBb" onclick="startBufferbloat()">▶ Start</button>
+                    </div>
+                </div>
+
+                <div class="test-bar">
+                    <span class="t-dot" id="bbDot"></span>
+                    <span id="bbMsg">Ready — iperf3 + ping will run together</span>
+                </div>
+
+                <!-- Dual charts side by side -->
+                <div class="row g-3 mt-1">
+                    <div class="col-md-6">
+                        <div class="chart-title">Throughput — iperf3 (Mbps)</div>
+                        <div class="chart-wrap"><canvas id="chartBbTp"></canvas></div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="chart-title">RTT under load — ping (ms) <span style="color:var(--amber);font-size:.7em;">← watch this spike</span></div>
+                        <div class="chart-wrap"><canvas id="chartBbLat"></canvas></div>
+                    </div>
+                </div>
+
+                <div id="bbSummary" class="mt-3" style="display:none;"></div>
+            </div>
+        </div>
+
+<!-- ====================================================== -->
+<!-- PANEL: Test Results                                      -->
+<!-- ====================================================== -->
+<div class="panel" id="panel-results">
+    <div class="panel-title">📁 Saved Test Results</div>
+    <div class="panel-sub">Screenshots and summaries of completed tests, auto-saved after each run. Organized by date.</div>
+    <div id="resultsContainer" style="margin-top:1rem;">
+        <div style="color:var(--txt3);font-size:.85rem;">Loading…</div>
+    </div>
+</div>
+
+<!-- ====================================================== -->
+<!-- MODAL: Result Viewer                                     -->
+<!-- ====================================================== -->
+<div id="resultModal" class="modal-overlay" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:9999;backdrop-filter:blur(4px);justify-content:center;align-items:center;">
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;width:95%;max-width:1200px;max-height:95vh;display:flex;flex-direction:column;box-shadow:0 25px 50px -12px rgba(0,0,0,0.5);">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:1rem 1.5rem;border-bottom:1px solid var(--border);">
+            <div style="font-weight:600;font-size:1.1rem;" id="modalTitle">Test Result</div>
+            <div style="display:flex;gap:.5rem;">
+                <button class="btn btn-sm btn-outline-secondary" onclick="copyResultImage()">📋 Copy Image</button>
+                <button class="btn btn-sm btn-outline-secondary" id="btnOpenFolder" onclick="openResultFolder()">📂 Open Folder</button>
+                <button class="btn btn-sm btn-outline-danger" onclick="deleteResultImage()">🗑️ Delete</button>
+                <button class="btn btn-sm btn-secondary" onclick="closeResultModal()" style="margin-left:1rem;">✕ Close</button>
+            </div>
+        </div>
+        <div style="padding:1.5rem;overflow-y:auto;display:flex;flex-direction:column;gap:1.5rem;background:#0f172a;">
+            <div style="display:flex;justify-content:center;align-items:center;background:var(--bg);padding:1rem;border-radius:8px;border:1px solid var(--border);">
+                <img id="resultModalImg" src="" style="max-width:100%;object-fit:contain;border-radius:6px;box-shadow:0 4px 6px -1px rgba(0,0,0,0.1);">
+            </div>
+            <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:1rem;">
+                <div style="font-weight:600;font-size:.9rem;color:var(--txt2);margin-bottom:.5rem;">Test Metadata (JSON)</div>
+                <pre id="resultModalMeta" style="margin:0;font-size:.8rem;color:var(--txt3);white-space:pre-wrap;word-wrap:break-word;"></pre>
+            </div>
+        </div>
+    </div>
+</div>
+
+</div><!-- .app-wrap -->
+
+<script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
+<script>
+// =====================================================================
+// Globals
+// =====================================================================
+const socket = io();
+let chartTP = null, chartLat = null, chartBbTp = null, chartBbLat = null;
+let tpRunning = false, latRunning = false, bbRunning = false;
+let tpData = [], latData = [], jitterData = [], bbTpData = [], bbLatData = [];
+let latSent = 0, latLost = 0, latPrevRtt = null;
+
+function toggleBwField() {
+    document.getElementById('bwCol').style.display = document.getElementById('tpProto').value === 'udp' ? 'block' : 'none';
+}
+function toggleBbBwField() {
+    document.getElementById('bbBwCol').style.display = document.getElementById('bbProto').value === 'udp' ? 'block' : 'none';
+}
+
+// =====================================================================
+// Navigation
+// =====================================================================
+function nav(id) {
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    document.getElementById('panel-' + id).classList.add('active');
+    document.querySelector(`[data-panel="${id}"]`).classList.add('active');
+}
+
+// =====================================================================
+// Alerts
+// =====================================================================
+function notify(msg, ok = false) {
+    const d = document.createElement('div');
+    d.className = 'alert_ ' + (ok ? 'alert-ok' : 'alert-err');
+    d.textContent = msg;
+    const c = document.getElementById('alerts');
+    c.prepend(d);
+    setTimeout(() => d.remove(), 7000);
+}
+
+// =====================================================================
+// SocketIO status
+// =====================================================================
+socket.on('connect', () => {
+    document.getElementById('wsDot').className = 'ws-dot on';
+});
+socket.on('disconnect', () => {
+    document.getElementById('wsDot').className = 'ws-dot';
+    setTpUI(false); setLatUI(false);
+});
+
+// =====================================================================
+// Status refresh
+// =====================================================================
+async function refresh() {
+    try {
+        const r = await fetch('/api/status');
+        const j = await r.json();
+        const d = j.data;
+
+        // Sidebar info
+        document.getElementById('sysStatus').textContent = `${d.host_interfaces.length} USB | ${d.namespaces.length} NS`;
+
+        // Interface list
+        const box = document.getElementById('ifaceList');
+        if (!d.host_interfaces.length) {
+            box.innerHTML = '<span style="font-size:.82rem;color:var(--txt3);">No USB (enx*) interfaces on host (all may be isolated).</span>';
+        } else {
+            box.innerHTML = d.host_interfaces.map(i => {
+                const router = i.role === 'router';
+                return `<div class="iface-row">
+                    <div>
+                        <div class="iface-name">${i.name}</div>
+                        <div class="iface-mac">${i.mac} <span class="tag ${router ? 'tag-router' : 'tag-ue'} ms-2">${i.vendor} — ${router ? '⚠️ Router/Uplink' : '📱 UE Dongle'}</span></div>
+                    </div>
+                    <button class="btn_ btn-blue" onclick="doIsolate('${i.name}')">🔒 Isolate</button>
+                </div>`;
+            }).join('');
+        }
+
+        // Namespace table
+        const ntc = document.getElementById('nsTable');
+        if (!d.namespaces.length) {
+            ntc.innerHTML = '<div class="ns-empty">No active namespaces. Isolate a device first.</div>';
+        } else {
+            ntc.innerHTML = '<table class="ns-tbl"><thead><tr><th>Namespace</th><th>Interfaces</th><th>WebUI</th><th></th></tr></thead><tbody>' +
+                d.namespaces.map(ns => `<tr>
+                    <td><strong>${ns.name}</strong></td>
+                    <td style="font-family:monospace;">${ns.interfaces.join(', ') || '<em>none</em>'}</td>
+                    <td><a class="btn_ btn-amber" style="font-size:.72rem;padding:.3em .75em;" href="http://localhost:${ns.webui_port}" target="_blank">🌐 :${ns.webui_port}</a></td>
+                    <td><button class="btn_ btn-red" style="font-size:.72rem;padding:.3em .8em;" onclick="doReset('${ns.name}')">🗑 Reset</button></td>
+                </tr>`).join('') + '</tbody></table>';
+        }
+
+        // Populate all namespace selects
+        const opts = d.namespaces.length
+            ? d.namespaces.map(n => `<option value="${n.name}">${n.name}</option>`).join('')
+            : '<option value="ue1">ue1</option>';
+        ['qNs', 'tpNs', 'latNs', 'bbNs'].forEach(id => document.getElementById(id).innerHTML = opts);
+
+    } catch(_) {
+        document.getElementById('sysStatus').textContent = 'Offline';
+    }
+}
+
+// =====================================================================
+// Isolate / Reset
+// =====================================================================
+async function doIsolate(iface) {
+    const log = document.getElementById('isoLog');
+    log.style.display = 'block'; log.textContent = `Isolating ${iface}…\n`;
+    try {
+        const r = await fetch('/api/isolate', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({interface: iface}) });
+        const j = await r.json();
+        if (j.data?.logs) log.textContent = j.data.logs.join('\n');
+        notify(j.message, j.status === 'success');
+    } catch(e) { notify('Error: ' + e.message); }
+    await refresh();
+}
+
+async function doReset(ns) {
+    if (!confirm(`Reset "${ns}"? Interface will return to host.`)) return;
+    try {
+        const r = await fetch('/api/reset', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({namespace: ns}) });
+        const j = await r.json();
+        const log = document.getElementById('isoLog');
+        log.style.display = 'block';
+        if (j.data?.logs) log.textContent = j.data.logs.join('\n');
+        notify(j.message, j.status === 'success');
+    } catch(e) { notify('Error: ' + e.message); }
+    await refresh();
+}
+
+// =====================================================================
+// Quick Check
+// =====================================================================
+async function quickBench() {
+    const btn = document.getElementById('btnQB');
+    btn._t = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<span class="spinner-border sp me-1"></span>';
+    document.getElementById('qbLoad').style.display = 'block';
+    ['vPing','vDl','vUl'].forEach(id => document.getElementById(id).textContent = '--');
+    try {
+        const r = await fetch('/api/benchmark', { method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({namespace: document.getElementById('qNs').value, target_ip: document.getElementById('qIp').value}) });
+        const d = await r.json();
+        if (d.status === 'success') {
+            document.getElementById('vPing').textContent = d.ping_idle_ms;
+            document.getElementById('vDl').textContent = d.dl_mbps;
+            document.getElementById('vUl').textContent = d.ul_mbps;
+            notify('Quick check complete!', true);
+        } else notify('Error: ' + (d.message || 'Unknown'));
+    } catch(e) { notify('Error: ' + e.message); }
+    btn.disabled = false; btn.innerHTML = btn._t;
+    document.getElementById('qbLoad').style.display = 'none';
+}
+
+// =====================================================================
+// Chart helpers
+// =====================================================================
+function mkGrad(ctx, hex) {
+    const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+    const gr = ctx.createLinearGradient(0, 0, 0, 240);
+    gr.addColorStop(0, `rgba(${r},${g},${b},0.35)`);
+    gr.addColorStop(1, `rgba(${r},${g},${b},0.02)`);
+    return gr;
+}
+
+function mkChart(id, label, color, yLabel) {
+    const ctx = document.getElementById(id).getContext('2d');
+    return new Chart(ctx, {
+        type: 'line',
+        data: { labels: [], datasets: [{ label, data: [], borderColor: color, backgroundColor: mkGrad(ctx, color), fill: true, tension: .35, pointRadius: 2.5, borderWidth: 2 }] },
+        options: { responsive: true, maintainAspectRatio: false, animation: { duration: 200 },
+            scales: { y: { beginAtZero: true, grid: {color:'rgba(255,255,255,.04)'}, ticks: {color:'#94a3b8'}, title: {display:true,text:yLabel,color:'#64748b'} },
+                      x: { grid: {color:'rgba(255,255,255,.02)'}, ticks: {color:'#94a3b8', maxTicksLimit: 30} } },
+            plugins: { legend: { labels: {color:'#e2e8f0'} } } }
+    });
+}
+
+// Throughput chart with optional Loss % on right axis + Jitter dashed line
+function mkChartTp(id, label, color) {
+    const ctx = document.getElementById(id).getContext('2d');
+    return new Chart(ctx, {
+        type: 'line',
+        data: { labels: [], datasets: [
+            { label, data: [], borderColor: color, backgroundColor: mkGrad(ctx, color), fill: true, tension: .35, pointRadius: 2, borderWidth: 2, yAxisID: 'y' },
+            { label: 'Loss %', data: [], borderColor: '#ef4444', backgroundColor: 'transparent', fill: false, tension: .3, pointRadius: 1.5, borderWidth: 1.5, borderDash: [5,3], yAxisID: 'y1' },
+            { label: 'Jitter (ms)', data: [], borderColor: '#fbbf24', backgroundColor: 'transparent', fill: false, tension: .3, pointRadius: 1.5, borderWidth: 1.5, borderDash: [3,2], yAxisID: 'y2' },
+        ] },
+        options: { responsive: true, maintainAspectRatio: false, animation: { duration: 150 },
+            scales: {
+                y:  { beginAtZero: true, grid: {color:'rgba(255,255,255,.04)'}, ticks: {color:'#94a3b8'}, title: {display:true,text:'Mbps',color:'#64748b'}, position: 'left' },
+                y1: { beginAtZero: true, max: 100, grid: {drawOnChartArea: false}, ticks: {color:'#fca5a5',callback:v=>v+'%'}, title: {display:true,text:'Loss %',color:'#ef4444'}, position: 'right', display: false },
+                y2: { beginAtZero: true, grid: {drawOnChartArea: false}, ticks: {color:'#fbbf24'}, title: {display:true,text:'Jitter ms',color:'#fbbf24'}, position: 'right', display: false },
+                x:  { grid: {color:'rgba(255,255,255,.02)'}, ticks: {color:'#94a3b8', maxTicksLimit: 30} }
+            },
+            plugins: { legend: { labels: {color:'#e2e8f0'} } }
+        }
+    });
+}
+
+function mkChartDual(id) {
+    const ctx = document.getElementById(id).getContext('2d');
+    return new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [
+                { label: 'RTT (ms)', data: [], borderColor: '#ef4444', backgroundColor: mkGrad(ctx, '#ef4444'), fill: true, tension: .35, pointRadius: 2.5, borderWidth: 2, yAxisID: 'y' },
+                { label: 'Jitter (ms)', data: [], borderColor: '#fbbf24', backgroundColor: 'transparent', fill: false, tension: .35, pointRadius: 2, borderWidth: 1.5, borderDash: [4,3], yAxisID: 'y' },
+            ]
+        },
+        options: { responsive: true, maintainAspectRatio: false, animation: { duration: 200 },
+            scales: {
+                y: { beginAtZero: true, grid: {color:'rgba(255,255,255,.04)'}, ticks: {color:'#94a3b8'}, title: {display:true,text:'ms',color:'#64748b'} },
+                x: { grid: {color:'rgba(255,255,255,.02)'}, ticks: {color:'#94a3b8', maxTicksLimit: 20} }
+            },
+            plugins: { legend: { labels: {color:'#e2e8f0'} } }
+        }
+    });
+}
+
+function pushChart(chart, label, value) {
+    chart.data.labels.push(label);
+    chart.data.datasets[0].data.push(value);
+    chart.update('none');
+}
+
+// =====================================================================
+// THROUGHPUT test
+// =====================================================================
+function setTpUI(running) {
+    tpRunning = running;
+    const btn = document.getElementById('btnTp');
+    const dot = document.getElementById('tpDot');
+    if (running) {
+        btn.className = 'btn_ btn-stop'; btn.textContent = '⏹ Stop'; btn.onclick = stopTest;
+        dot.className = 't-dot run';
+    } else {
+        btn.className = 'btn_ btn-start'; btn.textContent = '▶ Start'; btn.onclick = startThroughput;
+        btn.disabled = false; dot.className = 't-dot';
+    }
+}
+
+function startThroughput() {
+    const ns = document.getElementById('tpNs').value;
+    const ip = document.getElementById('tpIp').value;
+    const dur = parseInt(document.getElementById('tpDur').value) || 15;
+    const mode = document.getElementById('tpMode').value;
+    const proto = document.getElementById('tpProto').value;
+    const bw = document.getElementById('tpBw').value;
+
+    tpData = [];
+    if (chartTP) chartTP.destroy();
+    const directionStr = mode === 'both' ? 'Sequential (DL → UL)' : (mode === 'dl' ? 'Downlink' : 'Uplink');
+    chartTP = mkChartTp('chartTP', `${directionStr} (Mbps)`, mode === 'dl' ? '#22c55e' : '#3b82f6');
+    document.getElementById('tpSummary').style.display = 'none';
+    document.getElementById('tpMsg').textContent = 'Starting…';
+    setTpUI(true);
+
+    socket.emit('start_live_benchmark', { namespace: ns, target_ip: ip, duration: dur, mode, proto, bandwidth: bw, with_ping: false });
+}
+
+// =====================================================================
+// LATENCY test
+// =====================================================================
+function setLatUI(running) {
+    latRunning = running;
+    const btn = document.getElementById('btnLat');
+    const dot = document.getElementById('latDot');
+    if (running) {
+        btn.className = 'btn_ btn-stop'; btn.textContent = '⏹ Stop'; btn.onclick = stopTest;
+        dot.className = 't-dot run';
+        document.getElementById('latChips').style.display = 'flex';
+    } else {
+        btn.className = 'btn_ btn-start'; btn.textContent = '▶ Start'; btn.onclick = startLatency;
+        btn.disabled = false; dot.className = 't-dot';
+    }
+}
+
+function startLatency() {
+    const ns = document.getElementById('latNs').value;
+    const ip = document.getElementById('latIp').value;
+    const count = parseInt(document.getElementById('latCount').value) || 60;
+    const interval = parseFloat(document.getElementById('latInterval').value) || 0.5;
+
+    latData = []; jitterData = []; latSent = 0; latLost = 0; latPrevRtt = null;
+    document.getElementById('pingLog').innerHTML = '';
+    ['latCur','latOwd','latMin','latMax','latAvg','latJitter'].forEach(id => document.getElementById(id).textContent = '--');
+    document.getElementById('latLoss').textContent = '0';
+    if (chartLat) chartLat.destroy();
+    chartLat = mkChartDual('chartLat');
+    document.getElementById('latMsg').textContent = 'Starting…';
+    setLatUI(true);
+
+    socket.emit('start_live_ping', { namespace: ns, target_ip: ip, count, interval });
+}
+
+// =====================================================================
+// BUFFERBLOAT test
+// =====================================================================
+function setBbUI(running) {
+    bbRunning = running;
+    const btn = document.getElementById('btnBb');
+    const dot = document.getElementById('bbDot');
+    if (running) {
+        btn.className = 'btn_ btn-stop'; btn.textContent = '⏹ Stop'; btn.onclick = stopTest;
+        dot.className = 't-dot run';
+    } else {
+        btn.className = 'btn_ btn-start'; btn.textContent = '▶ Start'; btn.onclick = startBufferbloat;
+        btn.disabled = false; dot.className = 't-dot';
+    }
+}
+
+function startBufferbloat() {
+    const ns = document.getElementById('bbNs').value;
+    const ip = document.getElementById('bbIp').value;
+    const dur = parseInt(document.getElementById('bbDur').value) || 20;
+    const mode = document.getElementById('bbMode').value;
+    const proto = document.getElementById('bbProto').value;
+    const bw = document.getElementById('bbBw').value;
+
+    bbTpData = []; bbLatData = [];
+    if (chartBbTp) chartBbTp.destroy();
+    if (chartBbLat) chartBbLat.destroy();
+    const directionStr = mode === 'both' ? 'Seq DL→UL' : (mode === 'dl' ? 'DL' : 'UL');
+    chartBbTp = mkChartTp('chartBbTp', `Throughput (${directionStr}, ${proto.toUpperCase()})`, mode === 'dl' ? '#22c55e' : '#3b82f6');
+    chartBbLat = mkChart('chartBbLat', 'Loaded RTT', '#ef4444', 'ms');
+    document.getElementById('bbSummary').style.display = 'none';
+    document.getElementById('bbMsg').textContent = 'Starting iperf3 + ping…';
+    setBbUI(true);
+
+    socket.emit('start_live_benchmark', { namespace: ns, target_ip: ip, duration: dur, mode, proto, bandwidth: bw, with_ping: true });
+}
+
+function stopTest() {
+    socket.emit('stop_live_test');
+}
+
+// =====================================================================
+// SocketIO events (unified)
+// =====================================================================
+socket.on('test_status', (data) => {
+    if (latRunning) document.getElementById('latMsg').textContent = data.message || data.status;
+    if (tpRunning) document.getElementById('tpMsg').textContent = data.message || data.status;
+    if (bbRunning) document.getElementById('bbMsg').textContent = data.message || data.status;
+});
+
+// iperf3 data → throughput chart OR bufferbloat chart
+socket.on('iperf_data', (data) => {
+    const phaseLabel = data.phase ? data.phase.toUpperCase() : '';
+    const udpLabel = data.proto === 'udp' ? 'UDP' : '';
+    const suffix = [phaseLabel, udpLabel].filter(x => x).join(' ');
+    const label = `${data.second}s${suffix ? ' (' + suffix + ')' : ''}`;
+
+    // Pick the active chart
+    let chart = null;
+    if (tpRunning) {
+        tpData.push({ phase: data.phase || document.getElementById('tpMode').value, mbps: data.mbps });
+        chart = chartTP;
+    } else if (bbRunning) {
+        bbTpData.push({ phase: data.phase || document.getElementById('bbMode').value, mbps: data.mbps });
+        chart = chartBbTp;
+    }
+
+    if (chart) {
+        chart.data.labels.push(label);
+
+        // Apply a 3-point (1.5s) Moving Average to smooth the TCP sawtooth effect
+        // while keeping the exact raw data in tpData/bbTpData for summaries.
+        const dataArr = tpRunning ? tpData : bbTpData;
+        const currentPhase = data.phase || (tpRunning ? document.getElementById('tpMode').value : document.getElementById('bbMode').value);
+        const phaseData = dataArr.filter(d => d.phase === currentPhase).map(d => d.mbps);
+        
+        const windowSize = 3;
+        const slice = phaseData.slice(-windowSize);
+        // The slice includes the new data point because we already pushed to dataArr before this block
+        const smoothedMbps = slice.length > 0 ? slice.reduce((a, b) => a + b, 0) / slice.length : data.mbps;
+
+        // Plot the smoothed value on the chart
+        chart.data.datasets[0].data.push(smoothedMbps);
+
+        // Dataset 1 & 2: reused for either UDP (Loss%, Jitter) or TCP (Retransmits, Cwnd)
+        const hasLoss = data.loss_pct != null;
+        const hasRetr = data.retr != null;
+        const hasCwnd = data.cwnd_kb != null;
+        const hasJitter = data.jitter_ms != null;
+
+        // Dataset 1: Loss % (UDP) or Retransmits (TCP)
+        if (hasLoss) {
+            chart.data.datasets[1].data.push(data.loss_pct);
+            if (!chart.options.scales.y1.display) {
+                chart.data.datasets[1].label = 'Loss %';
+                chart.options.scales.y1.title.text = 'Loss %';
+                chart.options.scales.y1.ticks.callback = v => v + '%';
+                chart.options.scales.y1.max = 100;
+                chart.options.scales.y1.display = true;
+            }
+        } else if (hasRetr) {
+            chart.data.datasets[1].data.push(data.retr);
+            if (!chart.options.scales.y1.display) {
+                chart.data.datasets[1].label = 'Retransmits';
+                chart.data.datasets[1].borderColor = '#f87171';
+                chart.options.scales.y1.title.text = 'Retransmits';
+                chart.options.scales.y1.title.color = '#f87171';
+                chart.options.scales.y1.ticks.color = '#fca5a5';
+                chart.options.scales.y1.ticks.callback = v => v;
+                delete chart.options.scales.y1.max;
+                chart.options.scales.y1.display = true;
+            }
+        } else {
+            chart.data.datasets[1].data.push(null);
+        }
+
+        // Dataset 2: Jitter ms (UDP) or Cwnd KB (TCP)
+        if (hasJitter) {
+            chart.data.datasets[2].data.push(data.jitter_ms);
+            if (!chart.options.scales.y2.display) {
+                chart.data.datasets[2].label = 'Jitter (ms)';
+                chart.options.scales.y2.title.text = 'Jitter ms';
+                chart.options.scales.y2.display = true;
+            }
+        } else if (hasCwnd) {
+            chart.data.datasets[2].data.push(data.cwnd_kb);
+            if (!chart.options.scales.y2.display) {
+                chart.data.datasets[2].label = 'Cwnd (KB)';
+                chart.data.datasets[2].borderColor = '#38bdf8';
+                chart.options.scales.y2.title.text = 'Cwnd KB';
+                chart.options.scales.y2.title.color = '#38bdf8';
+                chart.options.scales.y2.ticks.color = '#7dd3fc';
+                chart.options.scales.y2.display = true;
+            }
+        } else {
+            chart.data.datasets[2].data.push(null);
+        }
+
+        chart.update('none');
+
+        // Sender-side warning badge
+        if (data.sender_side) {
+            const msgEl = tpRunning ? document.getElementById('tpMsg') : document.getElementById('bbMsg');
+            msgEl.textContent = `⚠ UDP UL: chart shows injected traffic (sender-side) — real stats at end`;
+        }
+    }
+});
+
+// ping data → latency chart + table OR bufferbloat chart
+socket.on('ping_data', (data) => {
+    if (latRunning) {
+        latSent++;
+        latData.push(data.ms);
+
+        // Compute jitter: |RTT[n] - RTT[n-1]|
+        const jitter = latPrevRtt !== null ? Math.abs(data.ms - latPrevRtt) : 0;
+        jitterData.push(jitter);
+        latPrevRtt = data.ms;
+
+        const owd = data.ms / 2;
+        const avg = latData.reduce((a,b)=>a+b,0) / latData.length;
+        const avgJitter = jitterData.reduce((a,b)=>a+b,0) / jitterData.length;
+
+        chartLat.data.labels.push('#' + data.seq);
+        chartLat.data.datasets[0].data.push(data.ms);
+        chartLat.data.datasets[1].data.push(jitter);
+        chartLat.update('none');
+
+        document.getElementById('latCur').textContent = data.ms.toFixed(1);
+        document.getElementById('latOwd').textContent = owd.toFixed(1);
+        document.getElementById('latMin').textContent = Math.min(...latData).toFixed(1);
+        document.getElementById('latMax').textContent = Math.max(...latData).toFixed(1);
+        document.getElementById('latAvg').textContent = avg.toFixed(1);
+        document.getElementById('latJitter').textContent = avgJitter.toFixed(2);
+
+        const tbody = document.getElementById('pingLog');
+        const tr = document.createElement('tr');
+        tr.className = 'ping-row-new';
+        const rttColor = data.ms < 20 ? '#86efac' : data.ms < 80 ? '#fde68a' : '#fca5a5';
+        const jColor = jitter < 5 ? '#86efac' : jitter < 20 ? '#fde68a' : '#fca5a5';
+        tr.innerHTML = `<td>${data.seq}</td><td style="color:${rttColor}">${data.ms.toFixed(2)}</td><td style="color:var(--txt2)">${owd.toFixed(2)}</td><td style="color:${jColor}">${jitter.toFixed(2)}</td><td>${data.ttl ?? '--'}</td><td>${data.bytes ? data.bytes + 'B' : '--'}</td>`;
+        tbody.prepend(tr);
+        while (tbody.children.length > 20) tbody.removeChild(tbody.lastChild);
+    } else if (bbRunning) {
+        bbLatData.push(data.ms);
+        pushChart(chartBbLat, '#' + data.seq, data.ms);
+    }
+});
+
+socket.on('test_complete', (data) => {
+    const wasTp = tpRunning, wasLat = latRunning, wasBb = bbRunning;
+    setTpUI(false); setLatUI(false); setBbUI(false);
+
+    const phases = data.phases || [];
+    const calcM = (arr) => arr.length ? { avg: (arr.reduce((a,b)=>a+b,0)/arr.length).toFixed(2), peak: Math.max(...arr).toFixed(2) } : null;
+
+    // Helper: build badge HTML for one phase using server-side summary
+    function phaseBadge(ph, chartData) {
+        const dir = ph.phase === 'dl' ? 'DL' : 'UL';
+        const bgColor = ph.phase === 'dl' ? 'rgba(34,197,94,.15)' : 'rgba(59,130,246,.15)';
+        const fgColor = ph.phase === 'dl' ? '#86efac' : '#93c5fd';
+        const clientM = calcM(chartData.filter(d => d.phase === ph.phase).map(d => d.mbps));
+
+        let html = '';
+        let realMbps;
+
+        if (ph.sender_side && !ph.retro_fixed) {
+            // UDP/TCP Uplink without server output: chart data is sender-side (injected), NOT real throughput
+            realMbps = ph.receiver_mbps != null ? ph.receiver_mbps.toFixed(2) : (clientM ? clientM.avg : '?');
+            const injected = ph.sender_mbps != null ? ph.sender_mbps.toFixed(0) : (clientM ? clientM.peak : '?');
+            html += `<span class="sum-badge" style="background:${bgColor};color:${fgColor};">${dir} Received ${realMbps} Mbps</span>`;
+            html += `<span class="sum-badge" style="background:rgba(245,158,11,.1);color:#fbbf24;">⚠ Injected ${injected} Mbps (chart = sender-side)</span>`;
+        } else {
+            // TCP or UDP DL (receiver-side), OR UL with retro_fixed true receiver telemetry
+            realMbps = ph.receiver_mbps != null ? ph.receiver_mbps.toFixed(2) : (clientM ? clientM.avg : '?');
+            const peakMbps = clientM ? clientM.peak : '?';
+            html += `<span class="sum-badge" style="background:${bgColor};color:${fgColor};">${dir} Avg ${realMbps} Mbps (Peak ${peakMbps})</span>`;
+            if (ph.retro_fixed) {
+                html += `<span class="sum-badge" style="background:rgba(34,197,94,.1);color:#4ade80;">✓ Chart shows exact receiver telemetry</span>`;
+            }
+        }
+
+        // Show loss for UDP
+        if (ph.loss_pct != null && ph.loss_pct > 0) {
+            const lossColor = ph.loss_pct < 5 ? '#86efac' : ph.loss_pct < 20 ? '#fde68a' : '#fca5a5';
+            html += `<span class="sum-badge" style="background:rgba(239,68,68,.1);color:${lossColor};">${dir} Loss ${ph.loss_pct}% (${ph.lost}/${ph.total})</span>`;
+        }
+        // Show jitter for UDP
+        if (ph.jitter_ms != null) {
+            html += `<span class="sum-badge" style="background:rgba(251,191,36,.1);color:#fbbf24;">${dir} Jitter ${ph.jitter_ms.toFixed(2)} ms</span>`;
+        }
+        // Show retransmits for TCP
+        if (ph.total_retr != null) {
+            const retrColor = ph.total_retr < 10 ? '#86efac' : ph.total_retr < 50 ? '#fde68a' : '#fca5a5';
+            html += `<span class="sum-badge" style="background:rgba(248,113,113,.1);color:${retrColor};">${dir} Retransmits ${ph.total_retr} ${ph.total_retr > 0 ? '⚠ congestion control active' : '✓ clean'}</span>`;
+        }
+        return { html, mbps: realMbps, dir };
+    }
+
+    if (wasTp && tpData.length > 0) {
+        // OVERWRITE CHART DATA WITH SERVER INTERVALS IF APPLICABLE
+        let chartNeedsUpdate = false;
+        for (const ph of phases) {
+            if (ph.sender_side && ph.server_intervals && ph.server_intervals.length > 0) {
+                let phasePoints = tpData.filter(d => d.phase === ph.phase);
+                let numPoints = Math.min(phasePoints.length, ph.server_intervals.length);
+                for (let i = 0; i < numPoints; i++) {
+                    phasePoints[i].mbps = ph.server_intervals[i].mbps;
+                }
+                ph.retro_fixed = true;
+                chartNeedsUpdate = true;
+            }
+        }
+
+        if (chartNeedsUpdate) {
+            // RE-CALCULATE MOVING AVERAGE for the entire chart
+            const datasetData = [];
+            for (let i = 0; i < tpData.length; i++) {
+                let sum = 0, count = 0;
+                for (let j = Math.max(0, i - 2); j <= i; j++) {
+                    if (tpData[j].phase === tpData[i].phase) {
+                        sum += tpData[j].mbps;
+                        count++;
+                    }
+                }
+                datasetData.push({ x: tpData[i].x, y: parseFloat((sum / count).toFixed(2)) });
+            }
+            chartTp.data.datasets[0].data = datasetData;
+            chartTp.update();
+        }
+
+        let htmlStr = ''; let msgStr = 'Done — ';
+        for (const ph of phases) {
+            const b = phaseBadge(ph, tpData);
+            htmlStr += b.html;
+            msgStr += `${b.dir}: ${b.mbps} Mbps `;
+        }
+        const el = document.getElementById('tpSummary');
+        el.innerHTML = htmlStr;
+        el.style.display = 'block';
+        document.getElementById('tpMsg').textContent = msgStr.trim();
+    }
+
+    if (wasLat && latData.length > 0) {
+        const avg = (latData.reduce((a,b)=>a+b,0)/latData.length).toFixed(2);
+        document.getElementById('latMsg').textContent = `Done — ${latData.length} packets, avg ${avg} ms`;
+    }
+
+    if (wasBb && bbTpData.length > 0) {
+        let chartNeedsUpdate = false;
+        for (const ph of phases) {
+            if (ph.sender_side && ph.server_intervals && ph.server_intervals.length > 0) {
+                let phasePoints = bbTpData.filter(d => d.phase === ph.phase);
+                let numPoints = Math.min(phasePoints.length, ph.server_intervals.length);
+                for (let i = 0; i < numPoints; i++) {
+                    phasePoints[i].mbps = ph.server_intervals[i].mbps;
+                }
+                ph.retro_fixed = true;
+                chartNeedsUpdate = true;
+            }
+        }
+
+        if (chartNeedsUpdate) {
+            const datasetData = [];
+            for (let i = 0; i < bbTpData.length; i++) {
+                let sum = 0, count = 0;
+                for (let j = Math.max(0, i - 2); j <= i; j++) {
+                    if (bbTpData[j].phase === bbTpData[i].phase) {
+                        sum += bbTpData[j].mbps;
+                        count++;
+                    }
+                }
+                datasetData.push({ x: bbTpData[i].x, y: parseFloat((sum / count).toFixed(2)) });
+            }
+            chartBbTp.data.datasets[0].data = datasetData;
+            chartBbTp.update();
+        }
+
+        let htmlStr = ''; let msgStr = 'Done — ';
+        for (const ph of phases) {
+            const b = phaseBadge(ph, bbTpData);
+            htmlStr += b.html;
+            msgStr += `${b.dir}: ${b.mbps} Mbps `;
+        }
+        if (bbLatData.length > 0) {
+            const avgLat = (bbLatData.reduce((a,b)=>a+b,0)/bbLatData.length).toFixed(2);
+            const maxLat = Math.max(...bbLatData).toFixed(2);
+            htmlStr += `<span class="sum-badge" style="background:rgba(239,68,68,.15);color:#fca5a5;margin-left:1rem;">Max RTT ${maxLat} ms</span>
+                        <span class="sum-badge" style="background:rgba(239,68,68,.15);color:#fca5a5;">Avg RTT ${avgLat} ms</span>`;
+        }
+        const el = document.getElementById('bbSummary');
+        el.innerHTML = htmlStr;
+        el.style.display = 'block';
+        document.getElementById('bbMsg').textContent = msgStr.trim();
+    }
+
+    if (data.status === 'error') notify('Test error: ' + data.message);
+    else if (data.status !== 'stopped') {
+        notify('Test complete!', true);
+        // Add full telemetry to the payload for the JSON sidecar
+        const payload = data;
+        payload.lat_data = latData;
+        payload.bb_lat_data = bbLatData;
+
+        // Auto-save screenshot after a short delay (let DOM update)
+        setTimeout(() => {
+            if (wasTp) saveTestScreenshot('throughput', document.getElementById('tpMode').value, document.getElementById('tpProto').value, payload);
+            if (wasLat) saveTestScreenshot('latency', '', '', payload);
+            if (wasBb) saveTestScreenshot('bufferbloat', document.getElementById('bbMode').value, document.getElementById('bbProto').value, payload);
+        }, 500);
+    }
+});
+
+// =====================================================================
+// Init
+// =====================================================================
+window.addEventListener('DOMContentLoaded', refresh);
+
+// =====================================================================
+// Test Results — save & browse
+// =====================================================================
+async function saveTestScreenshot(testType, direction, protocol, summaryData) {
+    // Determine which panel to capture
+    let captureEl;
+    if (testType === 'throughput') captureEl = document.querySelector('#panel-throughput .card_');
+    else if (testType === 'latency') captureEl = document.querySelector('#panel-latency .card_');
+    else if (testType === 'bufferbloat') captureEl = document.querySelector('#panel-bufferbloat .card_');
+    if (!captureEl) return;
+
+    try {
+        const canvas = await html2canvas(captureEl, {
+            backgroundColor: '#0f172a',
+            scale: 2,
+            useCORS: true,
+            logging: false,
+            ignoreElements: (element) => element.classList && element.classList.contains('ignore-screenshot')
+        });
+        const dataUrl = canvas.toDataURL('image/png');
+        // If summaryData is an object, JSON-ify it nicely
+        const summaryMsg = typeof summaryData === 'object' ? JSON.stringify(summaryData, null, 2) : summaryData;
+
+        await fetch('/api/save_result', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                image: dataUrl,
+                test_type: testType,
+                direction: direction,
+                protocol: protocol,
+                summary: summaryMsg
+            })
+        });
+    } catch (e) {
+        console.warn('Screenshot save failed:', e);
+    }
+}
+
+async function loadResults() {
+    const container = document.getElementById('resultsContainer');
+    container.innerHTML = '<div style="color:var(--txt3);font-size:.85rem;">Loading…</div>';
+    try {
+        const r = await fetch('/api/results');
+        const data = await r.json();
+        const dates = Object.keys(data);
+        if (!dates.length) {
+            container.innerHTML = '<div style="color:var(--txt3);font-size:.9rem;padding:2rem 0;text-align:center;">No saved results yet. Run a test and it will appear here automatically.</div>';
+            return;
+        }
+        let html = '';
+        for (const date of dates) {
+            const items = data[date];
+            html += `<div class="card_" style="margin-bottom:1rem;">`;
+            html += `<div class="card-label" style="margin-bottom:.75rem;">📅 ${date} <span style="color:var(--txt3);font-size:.75rem;">(${items.length} test${items.length>1?'s':''})</span></div>`;
+            html += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:.75rem;">`;
+            for (const item of items) {
+                const time = item.timestamp ? item.timestamp.split('T')[1].split('.')[0] : '';
+                const typeIcon = item.test_type === 'throughput' ? '📶' : item.test_type === 'latency' ? '📍' : '🌊';
+                const dirLabel = item.direction === 'both' ? 'DL→UL' : (item.direction || '').toUpperCase();
+                const protoLabel = (item.protocol || '').toUpperCase();
+                const tag = [dirLabel, protoLabel].filter(x=>x).join(' · ');
+                html += `<div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;overflow:hidden;cursor:pointer;transition:border-color .2s;" onmouseenter="this.style.borderColor='var(--blue)'" onmouseleave="this.style.borderColor='var(--border)'" onclick="openResultModal('${item.date}', '${item.image}')">`;
+                html += `<img src="/api/results/${item.date}/${item.image}" style="width:100%;height:140px;object-fit:cover;object-position:top;display:block;border-bottom:1px solid var(--border);" loading="lazy">`;
+                html += `<div style="padding:.6rem .75rem;">`;
+                html += `<div style="font-size:.8rem;font-weight:600;color:var(--txt);">${typeIcon} ${item.test_type.charAt(0).toUpperCase()+item.test_type.slice(1)} <span style="color:var(--txt3);font-weight:400;">${tag}</span></div>`;
+                html += `<div style="font-size:.7rem;color:var(--txt3);margin-top:.2rem;">🕐 ${time}</div>`;
+                if (item.summary) html += `<div style="font-size:.7rem;color:var(--txt2);margin-top:.3rem;line-height:1.4;">${item.summary}</div>`;
+                html += `</div></div>`;
+            }
+            html += `</div></div>`;
+        }
+        container.innerHTML = html;
+    } catch (e) {
+        container.innerHTML = `<div style="color:#fca5a5;font-size:.85rem;">Error loading results: ${e.message}</div>`;
+    }
+}
+
+// Modal State
+let currentResultDate = null;
+let currentResultFilename = null;
+let currentResultMeta = null;
+
+async function openResultModal(date, image) {
+    currentResultDate = date;
+    currentResultFilename = image;
+    document.getElementById('resultModalImg').src = `/api/results/${date}/${image}`;
+    document.getElementById('modalTitle').textContent = `Test Result - ${date} ${image}`;
+
+    try {
+        // Fetch JSON metadata
+        const jsonName = image.replace('.png', '.json');
+        const res = await fetch(`/api/results/${date}/${jsonName}`);
+        if (res.ok) {
+            currentResultMeta = await res.json();
+            // Display raw JSON payload inside the modal's <pre>
+            if (currentResultMeta.summary && (currentResultMeta.summary.startsWith('{') || currentResultMeta.summary.startsWith('['))) {
+                try {
+                    // Try parsing the summary and formatting it nicer if it's JSON
+                    let parsed = JSON.parse(currentResultMeta.summary);
+                    delete parsed.raw; // removing spam
+                    document.getElementById('resultModalMeta').textContent = JSON.stringify(parsed, null, 2);
+                } catch(pe) {
+                    document.getElementById('resultModalMeta').textContent = currentResultMeta.summary;
+                }
+            } else {
+                document.getElementById('resultModalMeta').textContent = currentResultMeta.summary || 'No metadata available';
+            }
+        }
+    } catch (e) {
+        document.getElementById('resultModalMeta').textContent = 'Error loading metadata';
+    }
+
+    const modal = document.getElementById('resultModal');
+    modal.style.display = 'flex';
+    // Small animation
+    modal.style.opacity = '0';
+    setTimeout(() => modal.style.opacity = '1', 10);
+    modal.style.transition = 'opacity 0.15s ease';
+}
+
+function closeResultModal() {
+    document.getElementById('resultModal').style.display = 'none';
+    document.getElementById('resultModalImg').src = '';
+    document.getElementById('resultModalMeta').textContent = '';
+    currentResultDate = null;
+    currentResultFilename = null;
+    currentResultMeta = null;
+}
+
+// Global key listener for ESC
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && document.getElementById('resultModal').style.display === 'flex') {
+        closeResultModal();
+    }
+});
+
+// Close modal on background click
+document.getElementById('resultModal').addEventListener('click', (e) => {
+    if (e.target === document.getElementById('resultModal')) closeResultModal();
+});
+
+async function copyResultImage() {
+    if (!currentResultDate || !currentResultFilename) return;
+    try {
+        const response = await fetch(`/api/results/${currentResultDate}/${currentResultFilename}`);
+        const blob = await response.blob();
+        
+        // Check for secure context and clipboard support
+        if (navigator.clipboard && navigator.clipboard.write) {
+            await navigator.clipboard.write([
+                new ClipboardItem({ [blob.type]: blob })
+            ]);
+            notify('Image copied to clipboard!', true);
+        } else {
+             // Fallback if not on HTTPS or missing API
+            alert('Clipboard access denied (likely due to non-HTTPS local IP). Please Right-Click the image and select "Copy image".');
+        }
+    } catch (e) {
+        notify('Failed to copy image: ' + e.message);
+    }
+}
+
+async function openResultFolder() {
+    if (!currentResultDate) return;
+    try {
+        const res = await fetch(`/api/open_folder/${currentResultDate}`, { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) notify('Folder opened in file manager.', true);
+        else notify('Error: ' + data.error);
+    } catch (e) {
+        notify('Failed to open folder: ' + e.message);
+    }
+}
+
+async function deleteResultImage() {
+    if (!currentResultDate || !currentResultFilename) return;
+    if (!confirm('Are you sure you want to delete this test result? This cannot be undone.')) return;
+
+    try {
+        const res = await fetch(`/api/results/${currentResultDate}/${currentResultFilename}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (data.ok) {
+            notify('Test result deleted.', true);
+            closeResultModal();
+            loadResults(); // refresh the grid
+        } else {
+            notify('Error deleting: ' + data.error);
+        }
+    } catch (e) {
+        notify('Failed to delete: ' + e.message);
+    }
+}
+
+</script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

@@ -35,6 +35,9 @@ class E2ETestSuite:
             ("Network Interfaces", self.test_network_interfaces),
             ("5G Protocol Connectivity", self.test_5g_protocol_connectivity),
             ("UERANSIM Deployment", self.test_ueransim_deployment),
+            ("RAN Mode Primitives", self.test_ran_mode_primitives),
+            ("RAN Overlay Labeling", self.test_ran_overlay_labeling),
+            ("Edge Placement Semantics", self.test_edge_placement_semantics),
             ("MEC Deployment", self.test_mec_deployment),
             ("End-to-End Connectivity", self.test_end_to_end_connectivity)
         ]
@@ -343,6 +346,88 @@ class E2ETestSuite:
         except Exception as e:
             self.logger.warning(f"MEC deployment test failed (MEC might not be deployed): {e}")
             return True  # MEC is optional
+
+    def test_ran_mode_primitives(self) -> bool:
+        """Validate resources required by dashboard RAN mode control."""
+        self.logger.info("Testing RAN mode primitives...")
+        try:
+            fiveg_pods = self.kubectl.get_pods("5g")
+            gnb_like = [p for p in fiveg_pods if "gnb" in p["metadata"]["name"].lower()]
+            ue_like = [p for p in fiveg_pods if "ue" in p["metadata"]["name"].lower()]
+
+            if not gnb_like and not ue_like:
+                self.logger.warning("No UERANSIM pods found (simulated RAN not deployed)")
+                return True
+
+            labelled = 0
+            for p in gnb_like + ue_like:
+                labels = p["metadata"].get("labels", {})
+                if labels.get("component") in {"gnb", "ue"} or labels.get("app") in {"ue"}:
+                    labelled += 1
+
+            if labelled == 0:
+                self.logger.error("UERANSIM pods are missing expected labels (component/app)")
+                return False
+
+            self.logger.success(f"Found {labelled} UERANSIM pods with dashboard-compatible labels")
+            return True
+        except Exception as e:
+            self.logger.error(f"RAN mode primitives test failed: {e}")
+            return False
+
+    def test_edge_placement_semantics(self) -> bool:
+        """Check expected edge/datacenter placement model for infra topology."""
+        self.logger.info("Testing edge placement semantics...")
+        try:
+            fiveg_pods = self.kubectl.get_pods("5g")
+            edge_gnb_ue = []
+            wrong_place = []
+            for p in fiveg_pods:
+                name = p["metadata"]["name"].lower()
+                node = p["spec"].get("nodeName", "")
+                if "gnb" in name or "ue" in name:
+                    edge_gnb_ue.append((name, node))
+                    if node and "edge" not in node.lower():
+                        wrong_place.append((name, node))
+
+            if not edge_gnb_ue:
+                self.logger.warning("No gNB/UE pods found for edge placement checks")
+                return True
+            if wrong_place:
+                self.logger.error(f"gNB/UE not on edge nodes: {wrong_place}")
+                return False
+
+            self.logger.success(f"All detected gNB/UE pods run on edge nodes ({len(edge_gnb_ue)} checked)")
+            return True
+        except Exception as e:
+            self.logger.error(f"Edge placement semantics test failed: {e}")
+            return False
+
+    def test_ran_overlay_labeling(self) -> bool:
+        """Ensure simulated RAN resources are labeled for runtime overlay management."""
+        self.logger.info("Testing RAN overlay labeling...")
+        try:
+            fiveg_pods = self.kubectl.get_pods("5g")
+            ran_pods = [p for p in fiveg_pods if ("gnb" in p["metadata"]["name"].lower() or "ue" in p["metadata"]["name"].lower())]
+            if not ran_pods:
+                self.logger.warning("No RAN pods found for overlay labeling checks")
+                return True
+
+            invalid = []
+            for p in ran_pods:
+                labels = p["metadata"].get("labels", {})
+                manager = labels.get("managed-by")
+                if manager not in {"ansible", "dashboard"}:
+                    invalid.append(p["metadata"]["name"])
+
+            if invalid:
+                self.logger.error(f"RAN pods missing managed-by label: {invalid}")
+                return False
+            self.logger.success("RAN pods are labeled for baseline/runtime overlay tracking")
+            return True
+        except Exception as e:
+            self.logger.error(f"RAN overlay labeling test failed: {e}")
+            return False
     
     def test_end_to_end_connectivity(self) -> bool:
         """Test end-to-end connectivity"""

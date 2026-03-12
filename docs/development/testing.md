@@ -60,6 +60,9 @@ make e2e
 - Network interfaces (N1-N6)
 - Protocol connectivity
 - UERANSIM deployment
+- RAN mode primitives (dashboard-compatible gNB/UE labels)
+- RAN overlay labeling (baseline Ansible vs runtime dashboard)
+- Edge placement semantics (gNB/UE scheduled on edge)
 - End-to-end connectivity
 
 ### Protocol Tests

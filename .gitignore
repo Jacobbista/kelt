@@ -16,6 +16,7 @@ Thumbs.db
 
 # Vagrant
 .vagrant/
+.physical_ran_bridge_applied
 *.vmdk
 *.vdi
 *.vbox
@@ -32,9 +33,24 @@ kubeconfig
 k3s_token
 edge_token
 
+# 5G probe results
+5g-probe/results/
+
+# Dashboard build artifacts and env
+dashboard/frontend/dist/
+dashboard/backend/.env.runtime
+
 # OVS
 ovs-vswitchd.log
 ovsdb-server.log
+
+# Node
+node_modules/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
 
 # Boxes
 *.box

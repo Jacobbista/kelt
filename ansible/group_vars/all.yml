@@ -93,21 +93,23 @@ test_n6c_enabled: false
 # Physical RAN Integration (for femtocell/small cell connectivity)
 # See docs/deployment/physical-ran.md for details
 #
-# physical_ran_enabled: Enable/disable physical RAN connectivity
-# physical_ran_interface: Host interface bridged to physical RAN (e.g., enp0s9)
-# physical_ran_subnet: Subnet of the physical RAN network
-# amf_physical_ran_ip: IP address for AMF on the physical RAN network
-#                      (this is the IP the gNB connects to for NGAP/SCTP)
+# physical_ran_enabled:  toggled at runtime via env var or extra-vars
+# physical_ran_interface: worker VM NIC connected to the RAN network.
+#   Leave empty for auto-detection: the OVS setup script finds the
+#   interface whose IP falls within physical_ran_subnet.
+# physical_ran_subnet: subnet of the physical RAN network
+# amf_physical_ran_ip: IP for AMF on the RAN network (gNB connects here)
 #
-physical_ran_enabled: true
-physical_ran_interface: "enp0s9"
-physical_ran_subnet: "192.168.5.0/24"
+physical_ran_enabled: false
+physical_ran_interface: ""
+physical_ran_subnet: "192.168.6.0/24"
 # AMF's IP on the physical RAN network (gNB connects here)
-amf_physical_ran_ip: "192.168.5.150"
+amf_physical_ran_ip: "192.168.6.150"
 
 # Bridge physical RAN to both N2 and N3 when using real gNB/UE.
 # This enables NGAP (control plane) and GTP-U (user plane) end-to-end.
-ran_bridge_mode: n2_n3
+# Derived from physical_ran_enabled — override with extra-vars if needed.
+ran_bridge_mode: "{{ 'n2_n3' if (physical_ran_enabled | default(false) | bool) else 'disabled' }}"
 ran_interface: "{{ physical_ran_interface }}"
 
 # Keep edge UPF disabled by default in current physical-RAN profile.

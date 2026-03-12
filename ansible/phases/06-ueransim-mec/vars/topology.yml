@@ -1,6 +1,7 @@
 ---
 # UERANSIM Topology Configuration (Phase 6 scoped)
 # One cell == one gNB. gNB/UE run on edge by default (realistic RAN placement).
+ueransim_enabled: true
 
 ueransim_topology:
   cells:

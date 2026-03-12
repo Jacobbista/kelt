@@ -14,6 +14,7 @@ metadata:
     app: ue
     component: ue
     cell-id: "{{ cell.id }}"
+    managed-by: ansible
 spec:
   serviceName: ue-cell-{{ cell.id }}
   replicas: {{ ue_count }}
@@ -27,6 +28,7 @@ spec:
         app: ue
         component: ue
         cell-id: "{{ cell.id }}"
+        managed-by: ansible
       annotations:
         k8s.v1.cni.cncf.io/networks: |
           [ {"name": "n2-cell-{{ cell.id }}", "interface": "n2"} ]

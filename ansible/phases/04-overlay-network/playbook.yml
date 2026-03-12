@@ -59,17 +59,18 @@
       retries: 24
       delay: 5
 
-    - name: OVS DS present and running
+    - name: OVS DS present and ready (setup script may take ~60-90s after boot)
       kubernetes.core.k8s_info:
         api_version: apps/v1
         kind: DaemonSet
         namespace: kube-system
         kubeconfig: "/home/vagrant/kubeconfig"
       register: ds_all
-    - assert:
-        that:
-          - (ds_all.resources | selectattr('metadata.name','match','^ds-net-setup-(worker|edge)$') | list | length) == 2
-          - (ds_all.resources | selectattr('metadata.name','match','^ds-net-setup-(worker|edge)$') | map(attribute='status.numberReady') | map('int') | sum) == 2
+      until: >-
+        (ds_all.resources | selectattr('metadata.name','match','^ds-net-setup-(worker|edge)$') | list | length) == 2
+        and (ds_all.resources | selectattr('metadata.name','match','^ds-net-setup-(worker|edge)$') | map(attribute='status.numberReady') | map('default', 0) | map('int') | sum) == 2
+      retries: 12
+      delay: 10
 
     - name: NADs present
       kubernetes.core.k8s_info:

@@ -6,7 +6,7 @@
 
 ```bash
 # One-liner: Check if PFCP is working
-kubectl -n 5g exec deploy/smf -- bash -lc 'ss -unap | grep 8805 && echo "SMF listening" || echo "SMF not listening"; nc -zuvw1 10.204.0.101 8805 && echo "UPF-edge reachable" || echo "UPF-edge unreachable"'
+sudo k3s kubectl -n 5g exec deploy/smf -- bash -lc 'ss -unap | grep 8805 && echo "SMF listening" || echo "SMF not listening"; nc -zuvw1 10.204.0.101 8805 && echo "UPF-edge reachable" || echo "UPF-edge unreachable"'
 ```
 
 ## Step-by-Step Diagnostics
@@ -15,82 +15,82 @@ kubectl -n 5g exec deploy/smf -- bash -lc 'ss -unap | grep 8805 && echo "SMF lis
 
 ```bash
 # Check SMF is listening on PFCP port 8805
-kubectl -n 5g exec deploy/smf -- bash -lc 'ss -unap | grep 8805'
+sudo k3s kubectl -n 5g exec deploy/smf -- bash -lc 'ss -unap | grep 8805'
 
 # Expected output: udp 0 0 0.0.0.0:8805 0.0.0.0:* users:(("open5gs-smfd",pid=123,fd=5))
 
 # Check SMF process
-kubectl -n 5g exec deploy/smf -- ps aux | grep smf
+sudo k3s kubectl -n 5g exec deploy/smf -- ps aux | grep smf
 
 # Check SMF configuration
-kubectl -n 5g exec deploy/smf -- cat /etc/open5gs/smf.yaml | grep -A5 pfcp
+sudo k3s kubectl -n 5g exec deploy/smf -- cat /etc/open5gs/smf.yaml | grep -A5 pfcp
 ```
 
 ### 2. Check UPF PFCP Clients
 
 ```bash
 # Check UPF-edge PFCP client
-kubectl -n 5g exec deploy/upf-edge -- bash -lc 'ss -unap | grep 8805'
+sudo k3s kubectl -n 5g exec deploy/upf-edge -- bash -lc 'ss -unap | grep 8805'
 
 # Check UPF-cloud PFCP client
-kubectl -n 5g exec deploy/upf-cloud -- bash -lc 'ss -unap | grep 8805'
+sudo k3s kubectl -n 5g exec deploy/upf-cloud -- bash -lc 'ss -unap | grep 8805'
 
 # Check UPF processes
-kubectl -n 5g exec deploy/upf-edge -- ps aux | grep upf
-kubectl -n 5g exec deploy/upf-cloud -- ps aux | grep upf
+sudo k3s kubectl -n 5g exec deploy/upf-edge -- ps aux | grep upf
+sudo k3s kubectl -n 5g exec deploy/upf-cloud -- ps aux | grep upf
 ```
 
 ### 3. Network Interface Verification
 
 ```bash
 # Check SMF N4 interface
-kubectl -n 5g exec deploy/smf -- ip -o -4 addr show dev n4
+sudo k3s kubectl -n 5g exec deploy/smf -- ip -o -4 addr show dev n4
 # Expected: 10.204.0.100/24
 
 # Check UPF-edge N4 interface
-kubectl -n 5g exec deploy/upf-edge -- ip -o -4 addr show dev n4
+sudo k3s kubectl -n 5g exec deploy/upf-edge -- ip -o -4 addr show dev n4
 # Expected: 10.204.0.101/24
 
 # Check UPF-cloud N4 interface
-kubectl -n 5g exec deploy/upf-cloud -- ip -o -4 addr show dev n4
+sudo k3s kubectl -n 5g exec deploy/upf-cloud -- ip -o -4 addr show dev n4
 # Expected: 10.204.0.102/24
 
 # Check routing table
-kubectl -n 5g exec deploy/smf -- ip route show dev n4
-kubectl -n 5g exec deploy/upf-edge -- ip route show dev n4
+sudo k3s kubectl -n 5g exec deploy/smf -- ip route show dev n4
+sudo k3s kubectl -n 5g exec deploy/upf-edge -- ip route show dev n4
 ```
 
 ### 4. Connectivity Tests
 
 ```bash
 # Test SMF → UPF-edge connectivity
-kubectl -n 5g exec deploy/smf -- ping -c 3 -I n4 10.204.0.101
+sudo k3s kubectl -n 5g exec deploy/smf -- ping -c 3 -I n4 10.204.0.101
 
 # Test SMF → UPF-cloud connectivity
-kubectl -n 5g exec deploy/smf -- ping -c 3 -I n4 10.204.0.102
+sudo k3s kubectl -n 5g exec deploy/smf -- ping -c 3 -I n4 10.204.0.102
 
 # Test PFCP port connectivity
-kubectl -n 5g exec deploy/smf -- nc -zuvw1 10.204.0.101 8805
-kubectl -n 5g exec deploy/smf -- nc -zuvw1 10.204.0.102 8805
+sudo k3s kubectl -n 5g exec deploy/smf -- nc -zuvw1 10.204.0.101 8805
+sudo k3s kubectl -n 5g exec deploy/smf -- nc -zuvw1 10.204.0.102 8805
 
 # Test with telnet (if available)
-kubectl -n 5g exec deploy/smf -- telnet 10.204.0.101 8805
+sudo k3s kubectl -n 5g exec deploy/smf -- telnet 10.204.0.101 8805
 ```
 
 ### 5. Multus Network Status
 
 ```bash
 # Check NetworkAttachmentDefinition exists
-kubectl -n 5g get net-attach-def n4-net
+sudo k3s kubectl -n 5g get net-attach-def n4-net
 
 # Check SMF pod network status
-kubectl -n 5g get pod -l app=smf -o json | jq -r '.items[0].metadata.annotations["k8s.v1.cni.cncf.io/network-status"]' | jq '.'
+sudo k3s kubectl -n 5g get pod -l app=smf -o json | jq -r '.items[0].metadata.annotations["k8s.v1.cni.cncf.io/network-status"]' | jq '.'
 
 # Check UPF-edge pod network status
-kubectl -n 5g get pod -l app=upf-edge -o json | jq -r '.items[0].metadata.annotations["k8s.v1.cni.cncf.io/network-status"]' | jq '.'
+sudo k3s kubectl -n 5g get pod -l app=upf-edge -o json | jq -r '.items[0].metadata.annotations["k8s.v1.cni.cncf.io/network-status"]' | jq '.'
 
 # Check UPF-cloud pod network status
-kubectl -n 5g get pod -l app=upf-cloud -o json | jq -r '.items[0].metadata.annotations["k8s.v1.cni.cncf.io/network-status"]' | jq '.'
+sudo k3s kubectl -n 5g get pod -l app=upf-cloud -o json | jq -r '.items[0].metadata.annotations["k8s.v1.cni.cncf.io/network-status"]' | jq '.'
 ```
 
 ### 6. OVS Bridge Verification
@@ -115,33 +115,33 @@ ip -d link show | grep -A2 vxlan-n4
 
 ```bash
 # Real-time SMF logs
-kubectl -n 5g logs deploy/smf -c smf -f
+sudo k3s kubectl -n 5g logs deploy/smf -c smf -f
 
 # Recent SMF logs with PFCP context
-kubectl -n 5g logs deploy/smf -c smf --tail=500 | grep -i pfcp
+sudo k3s kubectl -n 5g logs deploy/smf -c smf --tail=500 | grep -i pfcp
 
 # SMF logs with timestamps
-kubectl -n 5g logs deploy/smf -c smf --tail=200 --timestamps
+sudo k3s kubectl -n 5g logs deploy/smf -c smf --tail=200 --timestamps
 
 # Check for PFCP errors
-kubectl -n 5g logs deploy/smf -c smf --tail=1000 | grep -i "pfcp\|error\|fail"
+sudo k3s kubectl -n 5g logs deploy/smf -c smf --tail=1000 | grep -i "pfcp\|error\|fail"
 ```
 
 ### UPF Logs
 
 ```bash
 # UPF-edge logs
-kubectl -n 5g logs deploy/upf-edge -c upf -f
+sudo k3s kubectl -n 5g logs deploy/upf-edge -c upf -f
 
 # UPF-cloud logs
-kubectl -n 5g logs deploy/upf-cloud -c upf -f
+sudo k3s kubectl -n 5g logs deploy/upf-cloud -c upf -f
 
 # UPF logs with PFCP context
-kubectl -n 5g logs deploy/upf-edge -c upf --tail=500 | grep -i pfcp
-kubectl -n 5g logs deploy/upf-cloud -c upf --tail=500 | grep -i pfcp
+sudo k3s kubectl -n 5g logs deploy/upf-edge -c upf --tail=500 | grep -i pfcp
+sudo k3s kubectl -n 5g logs deploy/upf-cloud -c upf --tail=500 | grep -i pfcp
 
 # Check for UPF errors
-kubectl -n 5g logs deploy/upf-edge -c upf --tail=1000 | grep -i "error\|fail\|pfcp"
+sudo k3s kubectl -n 5g logs deploy/upf-edge -c upf --tail=1000 | grep -i "error\|fail\|pfcp"
 ```
 
 ## Common Issues & Solutions
@@ -157,10 +157,10 @@ kubectl -n 5g logs deploy/upf-edge -c upf --tail=1000 | grep -i "error\|fail\|pf
 
 ```bash
 # Check if port is already in use
-kubectl -n 5g exec deploy/smf -- netstat -tulpn | grep 8805
+sudo k3s kubectl -n 5g exec deploy/smf -- netstat -tulpn | grep 8805
 
 # Check SMF configuration
-kubectl -n 5g exec deploy/smf -- cat /etc/open5gs/smf.yaml | grep -A10 pfcp
+sudo k3s kubectl -n 5g exec deploy/smf -- cat /etc/open5gs/smf.yaml | grep -A10 pfcp
 ```
 
 **Solution:**
@@ -180,10 +180,10 @@ kubectl -n 5g exec deploy/smf -- cat /etc/open5gs/smf.yaml | grep -A10 pfcp
 
 ```bash
 # Check UPF N4 interface
-kubectl -n 5g exec deploy/upf-edge -- ip addr show dev n4
+sudo k3s kubectl -n 5g exec deploy/upf-edge -- ip addr show dev n4
 
 # Check routing
-kubectl -n 5g exec deploy/upf-edge -- ip route show dev n4
+sudo k3s kubectl -n 5g exec deploy/upf-edge -- ip route show dev n4
 
 # Check VXLAN tunnel
 sudo ovs-vsctl show | grep -A5 br-n4
@@ -206,13 +206,13 @@ sudo ovs-vsctl show | grep -A5 br-n4
 
 ```bash
 # Check pod annotations
-kubectl -n 5g get pod -l app=smf -o json | jq '.items[0].metadata.annotations'
+sudo k3s kubectl -n 5g get pod -l app=smf -o json | jq '.items[0].metadata.annotations'
 
 # Check Multus DaemonSet
-kubectl -n kube-system get ds kube-multus-ds
+sudo k3s kubectl -n kube-system get ds kube-multus-ds
 
 # Check Multus logs
-kubectl -n kube-system logs -l app=multus --tail=100
+sudo k3s kubectl -n kube-system logs -l app=multus --tail=100
 ```
 
 **Solution:**
@@ -232,12 +232,12 @@ kubectl -n kube-system logs -l app=multus --tail=100
 
 ```bash
 # Check OVS DaemonSet
-kubectl -n kube-system get ds ds-net-setup-worker
-kubectl -n kube-system get ds ds-net-setup-edge
+sudo k3s kubectl -n kube-system get ds ds-net-setup-worker
+sudo k3s kubectl -n kube-system get ds ds-net-setup-edge
 
 # Check OVS DaemonSet logs
-kubectl -n kube-system logs -l app=ds-net-setup-worker --tail=200
-kubectl -n kube-system logs -l app=ds-net-setup-edge --tail=200
+sudo k3s kubectl -n kube-system logs -l app=ds-net-setup-worker --tail=200
+sudo k3s kubectl -n kube-system logs -l app=ds-net-setup-edge --tail=200
 
 # Check VXLAN interfaces
 ip -d link show | grep vxlan
@@ -255,10 +255,10 @@ ip -d link show | grep vxlan
 
 ```bash
 # Capture PFCP traffic on SMF
-kubectl -n 5g exec deploy/smf -- tcpdump -i n4 -n port 8805
+sudo k3s kubectl -n 5g exec deploy/smf -- tcpdump -i n4 -n port 8805
 
 # Capture PFCP traffic on UPF-edge
-kubectl -n 5g exec deploy/upf-edge -- tcpdump -i n4 -n port 8805
+sudo k3s kubectl -n 5g exec deploy/upf-edge -- tcpdump -i n4 -n port 8805
 
 # Capture on host (if needed)
 sudo tcpdump -i br-n4 -n port 8805
@@ -268,20 +268,20 @@ sudo tcpdump -i br-n4 -n port 8805
 
 ```bash
 # Test PFCP message exchange
-kubectl -n 5g exec deploy/smf -- bash -c 'for i in {1..10}; do nc -zuvw1 10.204.0.101 8805 && echo "Success $i" || echo "Failed $i"; sleep 1; done'
+sudo k3s kubectl -n 5g exec deploy/smf -- bash -c 'for i in {1..10}; do nc -zuvw1 10.204.0.101 8805 && echo "Success $i" || echo "Failed $i"; sleep 1; done'
 
 # Test with different packet sizes
-kubectl -n 5g exec deploy/smf -- ping -c 10 -s 1472 -I n4 10.204.0.101
+sudo k3s kubectl -n 5g exec deploy/smf -- ping -c 10 -s 1472 -I n4 10.204.0.101
 ```
 
 ### Configuration Validation
 
 ```bash
 # Compare with expected configuration
-kubectl -n 5g exec deploy/smf -- cat /etc/open5gs/smf.yaml | grep -A20 pfcp
+sudo k3s kubectl -n 5g exec deploy/smf -- cat /etc/open5gs/smf.yaml | grep -A20 pfcp
 
 # Check static IP assignments
-kubectl -n 5g exec deploy/smf -- ip addr show dev n4 | grep 10.204.0.100
-kubectl -n 5g exec deploy/upf-edge -- ip addr show dev n4 | grep 10.204.0.101
-kubectl -n 5g exec deploy/upf-cloud -- ip addr show dev n4 | grep 10.204.0.102
+sudo k3s kubectl -n 5g exec deploy/smf -- ip addr show dev n4 | grep 10.204.0.100
+sudo k3s kubectl -n 5g exec deploy/upf-edge -- ip addr show dev n4 | grep 10.204.0.101
+sudo k3s kubectl -n 5g exec deploy/upf-cloud -- ip addr show dev n4 | grep 10.204.0.102
 ```

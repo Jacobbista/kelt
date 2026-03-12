@@ -6,7 +6,7 @@
 
 ```bash
 # One-liner: Check Multus and NADs status
-kubectl -n kube-system get ds kube-multus-ds && echo "Multus OK" || echo "Multus FAIL"; kubectl get net-attach-def -A | wc -l && echo "NADs found"
+sudo k3s kubectl -n kube-system get ds kube-multus-ds && echo "Multus OK" || echo "Multus FAIL"; kubectl get net-attach-def -A | wc -l && echo "NADs found"
 ```
 
 ## Step-by-Step Diagnostics
@@ -15,38 +15,38 @@ kubectl -n kube-system get ds kube-multus-ds && echo "Multus OK" || echo "Multus
 
 ```bash
 # Check Multus DaemonSet status
-kubectl -n kube-system get ds kube-multus-ds
+sudo k3s kubectl -n kube-system get ds kube-multus-ds
 
 # Expected output: READY 2/2 (one on worker, one on edge)
 
 # Check Multus DaemonSet details
-kubectl -n kube-system describe ds kube-multus-ds
+sudo k3s kubectl -n kube-system describe ds kube-multus-ds
 
 # Check Multus pods
-kubectl -n kube-system get pods -l app=multus
+sudo k3s kubectl -n kube-system get pods -l app=multus
 
 # Check Multus pod logs
-kubectl -n kube-system logs -l app=multus --tail=100
+sudo k3s kubectl -n kube-system logs -l app=multus --tail=100
 ```
 
 ### 2. Inspect NetworkAttachmentDefinitions
 
 ```bash
 # List all NADs
-kubectl get net-attach-def -A
+sudo k3s kubectl get net-attach-def -A
 
 # Check specific NADs for 5G interfaces
-kubectl -n 5g get net-attach-def n1-net -o yaml
-kubectl -n 5g get net-attach-def n2-net -o yaml
-kubectl -n 5g get net-attach-def n3-net -o yaml
-kubectl -n 5g get net-attach-def n4-net -o yaml
+sudo k3s kubectl -n 5g get net-attach-def n1-net -o yaml
+sudo k3s kubectl -n 5g get net-attach-def n2-net -o yaml
+sudo k3s kubectl -n 5g get net-attach-def n3-net -o yaml
+sudo k3s kubectl -n 5g get net-attach-def n4-net -o yaml
 
 # Check MEC NADs
-kubectl -n mec get net-attach-def n6-mec-net -o yaml
-kubectl -n 5g get net-attach-def n6-cld-net -o yaml
+sudo k3s kubectl -n mec get net-attach-def n6-mec-net -o yaml
+sudo k3s kubectl -n 5g get net-attach-def n6-cld-net -o yaml
 
 # Check NAD configuration details
-kubectl -n 5g get net-attach-def n3-net -o json | jq '.spec.config'
+sudo k3s kubectl -n 5g get net-attach-def n3-net -o json | jq '.spec.config'
 ```
 
 ### 3. Pod Network Status Analysis
@@ -54,44 +54,44 @@ kubectl -n 5g get net-attach-def n3-net -o json | jq '.spec.config'
 ```bash
 # Get pod network status for AMF
 POD=$(kubectl -n 5g get pods -l app=amf -o jsonpath='{.items[0].metadata.name}')
-kubectl -n 5g get pod $POD -o json | jq -r '.metadata.annotations["k8s.v1.cni.cncf.io/network-status"]' | jq '.'
+sudo k3s kubectl -n 5g get pod $POD -o json | jq -r '.metadata.annotations["k8s.v1.cni.cncf.io/network-status"]' | jq '.'
 
 # Get pod network status for SMF
 POD=$(kubectl -n 5g get pods -l app=smf -o jsonpath='{.items[0].metadata.name}')
-kubectl -n 5g get pod $POD -o json | jq -r '.metadata.annotations["k8s.v1.cni.cncf.io/network-status"]' | jq '.'
+sudo k3s kubectl -n 5g get pod $POD -o json | jq -r '.metadata.annotations["k8s.v1.cni.cncf.io/network-status"]' | jq '.'
 
 # Get pod network status for UPF-edge
 POD=$(kubectl -n 5g get pods -l app=upf-edge -o jsonpath='{.items[0].metadata.name}')
-kubectl -n 5g get pod $POD -o json | jq -r '.metadata.annotations["k8s.v1.cni.cncf.io/network-status"]' | jq '.'
+sudo k3s kubectl -n 5g get pod $POD -o json | jq -r '.metadata.annotations["k8s.v1.cni.cncf.io/network-status"]' | jq '.'
 
 # Get pod network status for gNB
 POD=$(kubectl -n 5g get pods -l app=gnb -o jsonpath='{.items[0].metadata.name}')
-kubectl -n 5g get pod $POD -o json | jq -r '.metadata.annotations["k8s.v1.cni.cncf.io/network-status"]' | jq '.'
+sudo k3s kubectl -n 5g get pod $POD -o json | jq -r '.metadata.annotations["k8s.v1.cni.cncf.io/network-status"]' | jq '.'
 ```
 
 ### 4. Interface Verification
 
 ```bash
 # Check AMF interfaces
-kubectl -n 5g exec deploy/amf -- ip addr show
-kubectl -n 5g exec deploy/amf -- ip -o -4 addr show dev n1
-kubectl -n 5g exec deploy/amf -- ip -o -4 addr show dev n2
+sudo k3s kubectl -n 5g exec deploy/amf -- ip addr show
+sudo k3s kubectl -n 5g exec deploy/amf -- ip -o -4 addr show dev n1
+sudo k3s kubectl -n 5g exec deploy/amf -- ip -o -4 addr show dev n2
 
 # Check SMF interfaces
-kubectl -n 5g exec deploy/smf -- ip addr show
-kubectl -n 5g exec deploy/smf -- ip -o -4 addr show dev n4
+sudo k3s kubectl -n 5g exec deploy/smf -- ip addr show
+sudo k3s kubectl -n 5g exec deploy/smf -- ip -o -4 addr show dev n4
 
 # Check UPF-edge interfaces
-kubectl -n 5g exec deploy/upf-edge -- ip addr show
-kubectl -n 5g exec deploy/upf-edge -- ip -o -4 addr show dev n3
-kubectl -n 5g exec deploy/upf-edge -- ip -o -4 addr show dev n4
-kubectl -n 5g exec deploy/upf-edge -- ip -o -4 addr show dev n6
+sudo k3s kubectl -n 5g exec deploy/upf-edge -- ip addr show
+sudo k3s kubectl -n 5g exec deploy/upf-edge -- ip -o -4 addr show dev n3
+sudo k3s kubectl -n 5g exec deploy/upf-edge -- ip -o -4 addr show dev n4
+sudo k3s kubectl -n 5g exec deploy/upf-edge -- ip -o -4 addr show dev n6
 
 # Check UPF-cloud interfaces
-kubectl -n 5g exec deploy/upf-cloud -- ip addr show
-kubectl -n 5g exec deploy/upf-cloud -- ip -o -4 addr show dev n3
-kubectl -n 5g exec deploy/upf-cloud -- ip -o -4 addr show dev n4
-kubectl -n 5g exec deploy/upf-cloud -- ip -o -4 addr show dev n6
+sudo k3s kubectl -n 5g exec deploy/upf-cloud -- ip addr show
+sudo k3s kubectl -n 5g exec deploy/upf-cloud -- ip -o -4 addr show dev n3
+sudo k3s kubectl -n 5g exec deploy/upf-cloud -- ip -o -4 addr show dev n4
+sudo k3s kubectl -n 5g exec deploy/upf-cloud -- ip -o -4 addr show dev n6
 ```
 
 ### 5. Whereabouts IPAM Configuration
@@ -106,8 +106,8 @@ ssh edge "ls -l /etc/cni/net.d/whereabouts.d/"
 ssh edge "cat /etc/cni/net.d/whereabouts.d/whereabouts.conf"
 
 # Check Whereabouts IP pools
-kubectl get ipaddresspools -A
-kubectl get overlappingrangeipreservations -A
+sudo k3s kubectl get ipaddresspools -A
+sudo k3s kubectl get overlappingrangeipreservations -A
 ```
 
 ### 6. CNI Configuration Files
@@ -139,14 +139,14 @@ ssh edge "ls -l /opt/cni/bin/"
 
 ```bash
 # Check Multus DaemonSet status
-kubectl -n kube-system get ds kube-multus-ds
+sudo k3s kubectl -n kube-system get ds kube-multus-ds
 
 # Check Multus pod logs
-kubectl -n kube-system logs -l app=multus --tail=100
+sudo k3s kubectl -n kube-system logs -l app=multus --tail=100
 
 # Check node resources
-kubectl describe node worker
-kubectl describe node edge
+sudo k3s kubectl describe node worker
+sudo k3s kubectl describe node edge
 ```
 
 **Solution:**
@@ -166,11 +166,11 @@ kubectl describe node edge
 
 ```bash
 # Check if NADs exist
-kubectl get net-attach-def -A
+sudo k3s kubectl get net-attach-def -A
 
 # Check OVS DaemonSet logs
-kubectl -n kube-system logs -l app=ds-net-setup-worker --tail=200
-kubectl -n kube-system logs -l app=ds-net-setup-edge --tail=200
+sudo k3s kubectl -n kube-system logs -l app=ds-net-setup-worker --tail=200
+sudo k3s kubectl -n kube-system logs -l app=ds-net-setup-edge --tail=200
 ```
 
 **Solution:**
@@ -190,13 +190,13 @@ kubectl -n kube-system logs -l app=ds-net-setup-edge --tail=200
 
 ```bash
 # Check pod annotations
-kubectl -n 5g get pod <pod-name> -o json | jq '.metadata.annotations'
+sudo k3s kubectl -n 5g get pod <pod-name> -o json | jq '.metadata.annotations'
 
 # Check pod network status
-kubectl -n 5g get pod <pod-name> -o json | jq -r '.metadata.annotations["k8s.v1.cni.cncf.io/network-status"]' | jq '.'
+sudo k3s kubectl -n 5g get pod <pod-name> -o json | jq -r '.metadata.annotations["k8s.v1.cni.cncf.io/network-status"]' | jq '.'
 
 # Check Multus logs
-kubectl -n kube-system logs -l app=multus --tail=100
+sudo k3s kubectl -n kube-system logs -l app=multus --tail=100
 ```
 
 **Solution:**
@@ -219,13 +219,13 @@ kubectl -n kube-system logs -l app=multus --tail=100
 ssh worker "cat /etc/cni/net.d/whereabouts.d/whereabouts.conf"
 
 # Check IP pools
-kubectl get ipaddresspools -A
+sudo k3s kubectl get ipaddresspools -A
 
 # Check overlapping reservations
-kubectl get overlappingrangeipreservations -A
+sudo k3s kubectl get overlappingrangeipreservations -A
 
 # Check Whereabouts logs
-kubectl -n kube-system logs -l app=whereabouts --tail=100
+sudo k3s kubectl -n kube-system logs -l app=whereabouts --tail=100
 ```
 
 **Solution:**
@@ -242,7 +242,7 @@ kubectl -n kube-system logs -l app=whereabouts --tail=100
 # Get detailed network status for all pods
 for pod in $(kubectl -n 5g get pods -o jsonpath='{.items[*].metadata.name}'); do
   echo "=== $pod ==="
-  kubectl -n 5g get pod $pod -o json | jq -r '.metadata.annotations["k8s.v1.cni.cncf.io/network-status"]' | jq '.'
+  sudo k3s kubectl -n 5g get pod $pod -o json | jq -r '.metadata.annotations["k8s.v1.cni.cncf.io/network-status"]' | jq '.'
   echo
 done
 ```
@@ -251,29 +251,29 @@ done
 
 ```bash
 # Check interface statistics
-kubectl -n 5g exec deploy/amf -- cat /proc/net/dev | grep -E "n1|n2"
-kubectl -n 5g exec deploy/smf -- cat /proc/net/dev | grep n4
-kubectl -n 5g exec deploy/upf-edge -- cat /proc/net/dev | grep -E "n3|n4|n6"
+sudo k3s kubectl -n 5g exec deploy/amf -- cat /proc/net/dev | grep -E "n1|n2"
+sudo k3s kubectl -n 5g exec deploy/smf -- cat /proc/net/dev | grep n4
+sudo k3s kubectl -n 5g exec deploy/upf-edge -- cat /proc/net/dev | grep -E "n3|n4|n6"
 ```
 
 ### Routing Table Analysis
 
 ```bash
 # Check routing tables
-kubectl -n 5g exec deploy/amf -- ip route show
-kubectl -n 5g exec deploy/smf -- ip route show
-kubectl -n 5g exec deploy/upf-edge -- ip route show
-kubectl -n 5g exec deploy/upf-cloud -- ip route show
+sudo k3s kubectl -n 5g exec deploy/amf -- ip route show
+sudo k3s kubectl -n 5g exec deploy/smf -- ip route show
+sudo k3s kubectl -n 5g exec deploy/upf-edge -- ip route show
+sudo k3s kubectl -n 5g exec deploy/upf-cloud -- ip route show
 ```
 
 ### CNI Plugin Verification
 
 ```bash
 # Check CNI plugins are available
-kubectl -n 5g exec deploy/amf -- ls -l /opt/cni/bin/
+sudo k3s kubectl -n 5g exec deploy/amf -- ls -l /opt/cni/bin/
 
 # Check CNI configuration
-kubectl -n 5g exec deploy/amf -- cat /etc/cni/net.d/00-multus.conf
+sudo k3s kubectl -n 5g exec deploy/amf -- cat /etc/cni/net.d/00-multus.conf
 ```
 
 ## Troubleshooting Commands
@@ -282,39 +282,39 @@ kubectl -n 5g exec deploy/amf -- cat /etc/cni/net.d/00-multus.conf
 
 ```bash
 # Restart Multus DaemonSet
-kubectl -n kube-system rollout restart ds kube-multus-ds
+sudo k3s kubectl -n kube-system rollout restart ds kube-multus-ds
 
 # Restart OVS DaemonSet
-kubectl -n kube-system rollout restart ds ds-net-setup-worker
-kubectl -n kube-system rollout restart ds ds-net-setup-edge
+sudo k3s kubectl -n kube-system rollout restart ds ds-net-setup-worker
+sudo k3s kubectl -n kube-system rollout restart ds ds-net-setup-edge
 
 # Restart specific pod
-kubectl -n 5g rollout restart deployment/amf
-kubectl -n 5g rollout restart deployment/smf
+sudo k3s kubectl -n 5g rollout restart deployment/amf
+sudo k3s kubectl -n 5g rollout restart deployment/smf
 ```
 
 ### Configuration Validation
 
 ```bash
 # Validate NAD configuration
-kubectl -n 5g get net-attach-def n3-net -o json | jq '.spec.config' | jq '.'
+sudo k3s kubectl -n 5g get net-attach-def n3-net -o json | jq '.spec.config' | jq '.'
 
 # Check static IP assignments
-kubectl -n 5g exec deploy/amf -- ip addr show dev n1 | grep 10.201.0.100
-kubectl -n 5g exec deploy/amf -- ip addr show dev n2 | grep 10.202.0.100
-kubectl -n 5g exec deploy/smf -- ip addr show dev n4 | grep 10.204.0.100
+sudo k3s kubectl -n 5g exec deploy/amf -- ip addr show dev n1 | grep 10.201.0.100
+sudo k3s kubectl -n 5g exec deploy/amf -- ip addr show dev n2 | grep 10.202.0.100
+sudo k3s kubectl -n 5g exec deploy/smf -- ip addr show dev n4 | grep 10.204.0.100
 ```
 
 ### Log Analysis
 
 ```bash
 # Multus logs with timestamps
-kubectl -n kube-system logs -l app=multus --tail=200 --timestamps
+sudo k3s kubectl -n kube-system logs -l app=multus --tail=200 --timestamps
 
 # OVS DaemonSet logs
-kubectl -n kube-system logs -l app=ds-net-setup-worker --tail=200 --timestamps
-kubectl -n kube-system logs -l app=ds-net-setup-edge --tail=200 --timestamps
+sudo k3s kubectl -n kube-system logs -l app=ds-net-setup-worker --tail=200 --timestamps
+sudo k3s kubectl -n kube-system logs -l app=ds-net-setup-edge --tail=200 --timestamps
 
 # Whereabouts logs
-kubectl -n kube-system logs -l app=whereabouts --tail=200 --timestamps
+sudo k3s kubectl -n kube-system logs -l app=whereabouts --tail=200 --timestamps
 ```

@@ -33,8 +33,9 @@ metadata:
     app: {{ cell.gnb.name }}
     cell-id: "{{ cell.id }}"
     component: gnb
+    managed-by: ansible
 spec:
-  replicas: 1
+  replicas: {{ cell.gnb.replicas | default(1) }}
   selector:
     matchLabels:
       app: {{ cell.gnb.name }}
@@ -44,6 +45,7 @@ spec:
         app: {{ cell.gnb.name }}
         cell-id: "{{ cell.id }}"
         component: gnb
+        managed-by: ansible
       annotations:
         # Dynamic IPs from Whereabouts
         k8s.v1.cni.cncf.io/networks: |

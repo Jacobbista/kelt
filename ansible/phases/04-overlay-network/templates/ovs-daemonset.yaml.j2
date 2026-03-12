@@ -55,6 +55,8 @@ spec:
           value: "{{ ran_interface | default('') }}"
         - name: RAN_BRIDGE_MODE
           value: "{{ ran_bridge_mode | default('disabled') }}"
+        - name: RAN_SUBNET
+          value: "{{ physical_ran_subnet | default('') }}"
         command: ["sh","-c"]
         args:
           - |
@@ -66,12 +68,12 @@ spec:
             chmod +x /usr/local/bin/host-networkd-prepare.sh
             /usr/local/bin/host-networkd-prepare.sh
 
-            # 2) Crea bridge/tunnel OVS
+            # 2) Create OVS bridge/tunnel
             cp /scripts/ovs-setup.sh /usr/local/bin/ovs-setup.sh
             chmod +x /usr/local/bin/ovs-setup.sh
             /usr/local/bin/ovs-setup.sh
 
-            # 3) (opzionale) GC e dormi
+            # 3) (optional) GC and sleep
             if [ -f /scripts/ovs-gc.sh ]; then
               cp /scripts/ovs-gc.sh /usr/local/bin/ovs-gc.sh
               chmod +x /usr/local/bin/ovs-gc.sh

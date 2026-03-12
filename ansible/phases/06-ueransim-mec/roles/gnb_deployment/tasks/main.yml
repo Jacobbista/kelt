@@ -57,6 +57,7 @@
     definition: "{{ lookup('template', 'gnb-deployment.yaml.j2') }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
+  when: ueransim_enabled | default(true) | bool
 
 - name: Wait for gNB pods ready (per cell)
   kubernetes.core.k8s_info:
@@ -76,3 +77,4 @@
     label: "{{ item.gnb.name }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
+  when: ueransim_enabled | default(true) | bool

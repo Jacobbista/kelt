@@ -3,8 +3,14 @@ kind: Deployment
 metadata:
   name: {{ nf.name }}
   namespace: {{ namespace_5g }}
+{% set has_static_secondary_ips = (nf.networks | default([]) | selectattr('ips', 'defined') | list | length) > 0 %}
 spec:
   replicas: {{ nf.replicas | default(1) }}
+{% if has_static_secondary_ips %}
+  # Static Multus IPs cannot be safely rolled with overlapping old/new pods.
+  strategy:
+    type: Recreate
+{% endif %}
   selector:
     matchLabels:
       app: {{ nf.name }}

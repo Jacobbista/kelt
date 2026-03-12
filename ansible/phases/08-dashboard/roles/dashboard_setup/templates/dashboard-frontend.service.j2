@@ -1,0 +1,23 @@
+[Unit]
+Description=5G Dashboard Frontend (Vite Preview)
+After=network-online.target {{ dashboard_backend_service_name }}.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ dashboard_service_user }}
+WorkingDirectory={{ dashboard_frontend_dir }}
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=VITE_API_BASE=http://{{ dashboard_bind_host }}:{{ dashboard_backend_port }}
+{% if dashboard_mode == 'dev' %}
+Environment=CHOKIDAR_USEPOLLING=1
+Environment=WATCHPACK_POLLING=true
+ExecStart=/usr/bin/npm run dev -- --host 0.0.0.0 --port {{ dashboard_frontend_port }}
+{% else %}
+ExecStart=/usr/bin/npm run preview -- --host 0.0.0.0 --port {{ dashboard_frontend_port }}
+{% endif %}
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

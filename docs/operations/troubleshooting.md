@@ -20,14 +20,14 @@ Common issues and their solutions.
 
 ```bash
 # Cluster health
-kubectl get nodes
-kubectl get pods -A | grep -v Running
+sudo k3s kubectl get nodes
+sudo k3s kubectl get pods -A | grep -v Running
 
 # 5G Core status
-kubectl get pods -n 5g
+sudo k3s kubectl get pods -n 5g
 
 # Recent events
-kubectl get events -n 5g --sort-by='.lastTimestamp' | tail -20
+sudo k3s kubectl get events -n 5g --sort-by='.lastTimestamp' | tail -20
 ```
 
 ---
@@ -76,7 +76,7 @@ ansible-playbook phases/XX/playbook.yml -i inventory.ini -vvv
 
 **Diagnosis**:
 ```bash
-kubectl describe node <node-name>
+sudo k3s kubectl describe node <node-name>
 ```
 
 **Solutions**:
@@ -96,7 +96,7 @@ sudo systemctl restart k3s         # or k3s-agent
 
 **Diagnosis**:
 ```bash
-kubectl describe pod <pod-name> -n <namespace>
+sudo k3s kubectl describe pod <pod-name> -n <namespace>
 ```
 
 **Common causes**:
@@ -115,13 +115,13 @@ kubectl describe pod <pod-name> -n <namespace>
 **Diagnosis**:
 ```bash
 # Check NAD exists
-kubectl get net-attach-def -n 5g
+sudo k3s kubectl get net-attach-def -n 5g
 
 # Check pod annotations
-kubectl get pod <pod> -n 5g -o yaml | grep -A10 annotations
+sudo k3s kubectl get pod <pod> -n 5g -o yaml | grep -A10 annotations
 
 # Check Multus logs
-kubectl logs -n kube-system -l app=multus --tail=50
+sudo k3s kubectl logs -n kube-system -l app=multus --tail=50
 ```
 
 ### VXLAN Tunnel Down
@@ -144,8 +144,8 @@ nc -vzu 192.168.56.12 4789
 **Solutions**:
 ```bash
 # Restart OVS DaemonSet
-kubectl rollout restart ds/ds-net-setup-worker -n kube-system
-kubectl rollout restart ds/ds-net-setup-edge -n kube-system
+sudo k3s kubectl rollout restart ds/ds-net-setup-worker -n kube-system
+sudo k3s kubectl rollout restart ds/ds-net-setup-edge -n kube-system
 ```
 
 ### Pod Can't Reach Overlay IP
@@ -155,13 +155,13 @@ kubectl rollout restart ds/ds-net-setup-edge -n kube-system
 **Diagnosis**:
 ```bash
 # Check interface exists
-kubectl exec -n 5g <pod> -- ip addr show
+sudo k3s kubectl exec -n 5g <pod> -- ip addr show
 
 # Check routes
-kubectl exec -n 5g <pod> -- ip route
+sudo k3s kubectl exec -n 5g <pod> -- ip route
 
 # Check ARP
-kubectl exec -n 5g <pod> -- arp -n
+sudo k3s kubectl exec -n 5g <pod> -- arp -n
 ```
 
 ---
@@ -174,8 +174,8 @@ kubectl exec -n 5g <pod> -- arp -n
 
 **Diagnosis**:
 ```bash
-kubectl logs -n 5g deploy/<nf-name> --previous
-kubectl describe pod -n 5g -l app=<nf-name>
+sudo k3s kubectl logs -n 5g deploy/<nf-name> --previous
+sudo k3s kubectl describe pod -n 5g -l app=<nf-name>
 ```
 
 **Common causes**:
@@ -190,10 +190,10 @@ kubectl describe pod -n 5g -l app=<nf-name>
 **Diagnosis**:
 ```bash
 # Check SCTP port
-kubectl exec -n 5g deploy/amf -- ss -Slnp | grep 38412
+sudo k3s kubectl exec -n 5g deploy/amf -- ss -Slnp | grep 38412
 
 # Check AMF logs
-kubectl logs -n 5g deploy/amf -c amf | grep -i error
+sudo k3s kubectl logs -n 5g deploy/amf -c amf | grep -i error
 ```
 
 **Solutions**:
@@ -211,14 +211,14 @@ sudo modprobe sctp
 **Diagnosis**:
 ```bash
 # Check PFCP ports
-kubectl exec -n 5g deploy/smf -- ss -ulnp | grep 8805
-kubectl exec -n 5g deploy/upf-cloud -- ss -ulnp | grep 8805
+sudo k3s kubectl exec -n 5g deploy/smf -- ss -ulnp | grep 8805
+sudo k3s kubectl exec -n 5g deploy/upf-cloud -- ss -ulnp | grep 8805
 
 # Check SMF logs
-kubectl logs -n 5g deploy/smf -c smf | grep -i pfcp
+sudo k3s kubectl logs -n 5g deploy/smf -c smf | grep -i pfcp
 
 # Check connectivity
-kubectl exec -n 5g deploy/smf -- ping -c 3 10.204.0.102
+sudo k3s kubectl exec -n 5g deploy/smf -- ping -c 3 10.204.0.102
 ```
 
 ### PDU Session Setup Rejected (Cause 34 / Duplicated Session ID)
@@ -232,10 +232,10 @@ kubectl exec -n 5g deploy/smf -- ping -c 3 10.204.0.102
 **Diagnosis**:
 ```bash
 # AMF failure signature
-kubectl -n 5g logs deploy/amf -c amf --tail=300 | grep -E "PDUSessionResourceSetupResponse|DUPLICATED_PDU_SESSION_ID"
+sudo k3s kubectl -n 5g logs deploy/amf -c amf --tail=300 | grep -E "PDUSessionResourceSetupResponse|DUPLICATED_PDU_SESSION_ID"
 
 # SMF failure signature
-kubectl -n 5g logs deploy/smf -c smf --tail=300 | grep -E "Cause\\[Group:1 Cause:34\\]|DNN|IPv4\\["
+sudo k3s kubectl -n 5g logs deploy/smf -c smf --tail=300 | grep -E "Cause\\[Group:1 Cause:34\\]|DNN|IPv4\\["
 
 # Verify N3 gateway ownership on worker
 vagrant ssh worker -c 'ip -o -4 addr show br-n3'
@@ -263,7 +263,7 @@ vagrant ssh edge
 sudo journalctl -u edgecore -f
 
 # Check CloudCore
-kubectl logs -n kubeedge deploy/cloudcore --tail=50
+sudo k3s kubectl logs -n kubeedge deploy/cloudcore --tail=50
 ```
 
 **Solutions**:
@@ -287,7 +287,7 @@ vagrant ssh edge
 curl -sk https://192.168.56.10:6443/api
 
 # Check discovery token
-kubectl get configmap discovery-token -n 5g
+sudo k3s kubectl get configmap discovery-token -n 5g
 ```
 
 **Solutions**:
@@ -313,7 +313,7 @@ vagrant ssh edge
 sudo find /var/log/pods -path '*gnb*' -name '*.log' -exec tail -20 {} \;
 
 # Verify AMF is running
-kubectl get pod -n 5g -l app=amf
+sudo k3s kubectl get pod -n 5g -l app=amf
 ```
 
 ### UE Registration Failed
@@ -323,10 +323,10 @@ kubectl get pod -n 5g -l app=amf
 **Diagnosis**:
 ```bash
 # Check AMF logs
-kubectl logs -n 5g deploy/amf -c amf | grep -i "registration\|reject"
+sudo k3s kubectl logs -n 5g deploy/amf -c amf | grep -i "registration\|reject"
 
 # Check subscriber exists
-kubectl exec -n 5g deploy/mongodb -- mongosh open5gs --eval "db.subscribers.find()"
+sudo k3s kubectl exec -n 5g deploy/mongodb -- mongosh open5gs --eval "db.subscribers.find()"
 ```
 
 **Solutions**:
@@ -341,28 +341,28 @@ kubectl exec -n 5g deploy/mongodb -- mongosh open5gs --eval "db.subscribers.find
 ### Logs
 ```bash
 # Follow NF logs
-kubectl logs -n 5g deploy/amf -c amf -f
+sudo k3s kubectl logs -n 5g deploy/amf -c amf -f
 
 # All containers in pod
-kubectl logs -n 5g <pod> --all-containers
+sudo k3s kubectl logs -n 5g <pod> --all-containers
 
 # Previous crashed container
-kubectl logs -n 5g <pod> --previous
+sudo k3s kubectl logs -n 5g <pod> --previous
 ```
 
 ### Exec
 ```bash
 # Shell into pod
-kubectl exec -it -n 5g deploy/amf -- bash
+sudo k3s kubectl exec -it -n 5g deploy/amf -- bash
 
 # Run command
-kubectl exec -n 5g deploy/amf -- ip addr
+sudo k3s kubectl exec -n 5g deploy/amf -- ip addr
 ```
 
 ### Network Debug
 ```bash
 # Deploy debug pod
-kubectl run netshoot --rm -it --image=nicolaka/netshoot -n 5g -- bash
+sudo k3s kubectl run netshoot --rm -it --image=nicolaka/netshoot -n 5g -- bash
 
 # From inside:
 ping 10.202.0.100

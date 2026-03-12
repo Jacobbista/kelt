@@ -63,6 +63,7 @@
     definition: "{{ lookup('template', 'ue-statefulset.yaml.j2') }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
+  when: ueransim_enabled | default(true) | bool
 
 - name: Wait for UE pods running (per cell)
   kubernetes.core.k8s_info:
@@ -82,3 +83,4 @@
     label: "cell-{{ item.id }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
+  when: ueransim_enabled | default(true) | bool

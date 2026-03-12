@@ -145,6 +145,38 @@
   loop_control:
     label: "{{ item }}"
 
+- name: Get existing ConfigMaps for subscriber import cleanup
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ConfigMap
+    namespace: 5g
+    label_selectors: ["app.kubernetes.io/name=subscriber-import"]
+    kubeconfig: "/home/vagrant/kubeconfig"
+  register: existing_sub_cms
+
+- name: Build stale subscriber ConfigMap list
+  set_fact:
+    stale_sub_cms: >-
+      {{
+        existing_sub_cms.resources
+        | map(attribute='metadata.name')
+        | reject('equalto', 'subscribers-json-' ~ subs_checksum)
+        | reject('equalto', 'subscriber-importer-script-' ~ subs_checksum)
+        | list
+      }}
+
+- name: Delete stale subscriber ConfigMaps
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: ConfigMap
+    name: "{{ item }}"
+    namespace: 5g
+    state: absent
+    kubeconfig: "/home/vagrant/kubeconfig"
+  loop: "{{ stale_sub_cms }}"
+  loop_control:
+    label: "{{ item }}"
+
 - name: Create Job to import subscribers into MongoDB (Python + pymongo)
   kubernetes.core.k8s:
     api_version: batch/v1

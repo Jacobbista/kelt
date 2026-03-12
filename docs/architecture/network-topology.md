@@ -1,73 +1,249 @@
 # Network Topology
 
-## Overview
+This document explains the 5G overlay networking stack from first principles: why it exists, how each technology fits together, and what the actual bridge/tunnel topology looks like. Read [Virtualization Layers](virtualization-layers.md) first for context on why a secondary CNI is needed.
 
-The testbed uses multiple isolated overlay networks to simulate 5G reference points. Each network is implemented as an OVS bridge with VXLAN tunnels connecting worker and edge nodes.
+---
 
-## Physical Network
+## The Problem: 5G Needs Multiple Isolated Interfaces
 
+Standard Kubernetes gives every pod one network interface (`eth0`) via the primary CNI (Flannel in this cluster). That is sufficient for web services. It is not sufficient for 5G NFs.
+
+A real 5G AMF must have:
+
+- an **N1** interface (NAS signalling to UEs)
+- an **N2** interface (NGAP control plane to gNBs)
+- an **SBI** interface (Service-Based Interface to other NFs)
+
+A UPF must have N3 (GTP-U from gNBs), N4 (PFCP from SMF), and N6 (towards the data network) — all on different subnets, all expected to be isolated from each other.
+
+Putting everything on one Flannel interface is not acceptable: it breaks the 3GPP reference point architecture, mixes traffic from different planes on the same IP, and prevents per-interface traffic policies.
+
+---
+
+## The Solution Stack
+
+```mermaid
+graph TB
+    APP["5G NF Pod  (e.g. AMF)
+    eth0 = Flannel  ·  n1 = N1 net  ·  n2 = N2 net"]
+
+    subgraph CNI["CNI Layer"]
+        MULTUS["Multus  (meta-CNI)
+        reads k8s.v1.cni.cncf.io/networks annotation
+        delegates to primary + secondary CNIs"]
+        FLANNEL["Flannel CNI
+        → eth0  (cluster traffic, K8s services)"]
+        OVSCNI["OVS CNI plugin
+        → nX  (one interface per N-reference-point)"]
+    end
+
+    subgraph IPAM["IP Management"]
+        WA["Whereabouts
+        cluster-wide IPAM
+        allocation stored in K8s CRDs"]
+    end
+
+    subgraph Dataplane["Data Plane"]
+        OVS["Open vSwitch bridge
+        br-n1 · br-n2 · br-n3 · br-n4 · br-n6e · br-n6c"]
+        VXLAN["VXLAN tunnel
+        UDP 4789 · per-bridge VNI key"]
+    end
+
+    APP --> MULTUS
+    MULTUS --> FLANNEL
+    MULTUS --> OVSCNI
+    OVSCNI --> WA
+    OVSCNI --> OVS
+    OVS --> VXLAN
 ```
-+------------------+     +------------------+     +------------------+
-|   MASTER NODE    |     |   WORKER NODE    |     |    EDGE NODE     |
-|  192.168.56.10   |     |  192.168.56.11   |     |  192.168.56.12   |
-+--------+---------+     +--------+---------+     +--------+---------+
-         |                        |                        |
-         +------------------------+------------------------+
-                          |
-                   Management Network
-                   192.168.56.0/24
+
+### Multus (meta-CNI)
+
+Multus is not a CNI itself — it is a shim that delegates to other CNIs. When a pod is created, Multus reads the `k8s.v1.cni.cncf.io/networks` annotation, calls the primary CNI first (Flannel → `eth0`), then calls each secondary CNI listed in the annotation (OVS → `n1`, `n2`, etc.).
+
+```yaml
+# Example pod annotation
+metadata:
+  annotations:
+    k8s.v1.cni.cncf.io/networks: |
+      [
+        {"name": "n2-net", "interface": "n2"},
+        {"name": "n3-net", "interface": "n3"}
+      ]
 ```
 
-## Overlay Networks
+Secondary interfaces are defined by **NetworkAttachmentDefinitions (NADs)** — Kubernetes CRDs that specify the CNI plugin and IPAM configuration for each network.
 
-Each 5G interface has its own isolated overlay network:
+### OVS CNI plugin
 
+The OVS CNI plugin connects a pod's network namespace to a named OVS bridge by creating a veth pair: one end in the pod netns (the `n2` interface), the other end plugged into the OVS bridge as a port. The pod can then send frames that traverse the OVS bridge and reach any other port on that bridge — including the VXLAN tunnel port to the peer node.
+
+### Whereabouts IPAM
+
+`host-local` IPAM (the Kubernetes default) allocates IPs from a per-node pool. Two pods on different nodes can get the same IP — fine for Flannel, catastrophic for the 5G overlays where AMF on worker and gNB on edge must reach each other by IP.
+
+Whereabouts stores IP allocations in Kubernetes CRDs (`IPAllocation` objects), so it has cluster-wide visibility and ensures uniqueness across nodes. Static IP reservations (for NFs like AMF that need a predictable IP) are excluded from the dynamic pool in the NAD configuration.
+
+### Open vSwitch
+
+OVS is a programmable software switch. Unlike Linux bridge, it supports OpenFlow, QoS, traffic statistics, and per-flow rules. In this testbed it serves as the data plane for the 5G overlays:
+
+- One OVS bridge per 5G interface (6 bridges total per node)
+- VXLAN tunnel ports connect the worker and edge bridges for each network
+- Optional patch ports bridge the physical RAN subnet into the N2/N3 bridges
+
+---
+
+## OVS Bridge Topology
+
+### Six bridges per node
+
+```mermaid
+graph LR
+    subgraph W["Worker  192.168.56.11"]
+        direction TB
+
+        BN1W["br-n1
+        VNI 101
+        10.201.0.0/24
+        N1 · NAS"]
+
+        BN2W["br-n2
+        VNI 102
+        10.202.0.0/24
+        N2 · NGAP"]
+
+        BN3W["br-n3
+        VNI 103
+        10.203.0.0/24
+        N3 · GTP-U"]
+
+        BN4W["br-n4
+        VNI 104
+        10.204.0.0/24
+        N4 · PFCP"]
+
+        BN6EW["br-n6e
+        VNI 106
+        10.206.0.0/24
+        N6 edge · MEC"]
+
+        BN6CW["br-n6c
+        VNI 107
+        10.207.0.0/24
+        N6 cloud · DN"]
+    end
+
+    subgraph E["Edge  192.168.56.12"]
+        direction TB
+
+        BN1E["br-n1
+        VNI 101"]
+
+        BN2E["br-n2
+        VNI 102"]
+
+        BN3E["br-n3
+        VNI 103"]
+
+        BN4E["br-n4
+        VNI 104"]
+
+        BN6EE["br-n6e
+        VNI 106"]
+
+        BN6CE["br-n6c
+        VNI 107"]
+    end
+
+    BN1W <-->|"VXLAN
+    UDP 4789"| BN1E
+
+    BN2W <-->|"VXLAN
+    UDP 4789"| BN2E
+
+    BN3W <-->|"VXLAN
+    UDP 4789"| BN3E
+
+    BN4W <-->|"VXLAN
+    UDP 4789"| BN4E
+
+    BN6EW <-->|"VXLAN
+    UDP 4789"| BN6EE
+
+    BN6CW <-->|"VXLAN
+    UDP 4789"| BN6CE
 ```
-+------------------+                              +------------------+
-|   WORKER NODE    |                              |    EDGE NODE     |
-|                  |                              |                  |
-|  +------------+  |         VXLAN VNI 102        |  +------------+  |
-|  |   br-n2    |  |<---------------------------->|  |   br-n2    |  |
-|  | 10.202.x.x |  |                              |  | 10.202.x.x |  |
-|  +------------+  |                              |  +------------+  |
-|                  |                              |                  |
-|  +------------+  |         VXLAN VNI 103        |  +------------+  |
-|  |   br-n3    |  |<---------------------------->|  |   br-n3    |  |
-|  | 10.203.x.x |  |                              |  | 10.203.x.x |  |
-|  +------------+  |                              |  +------------+  |
-|                  |                              |                  |
-|  +------------+  |         VXLAN VNI 104        |  +------------+  |
-|  |   br-n4    |  |<---------------------------->|  |   br-n4    |  |
-|  | 10.204.x.x |  |                              |  | 10.204.x.x |  |
-|  +------------+  |                              |  +------------+  |
-+------------------+                              +------------------+
+
+### Bridge reference table
+
+| Bridge | VNI | Subnet        | Gateway    | Purpose                          |
+| ------ | --- | ------------- | ---------- | -------------------------------- |
+| br-n1  | 101 | 10.201.0.0/24 | 10.201.0.1 | N1 — NAS UE↔AMF                  |
+| br-n2  | 102 | 10.202.0.0/24 | 10.202.0.1 | N2 — NGAP gNB↔AMF                |
+| br-n3  | 103 | 10.203.0.0/24 | 10.203.0.1 | N3 — GTP-U gNB↔UPF               |
+| br-n4  | 104 | 10.204.0.0/24 | 10.204.0.1 | N4 — PFCP SMF↔UPF                |
+| br-n6e | 106 | 10.206.0.0/24 | 10.206.0.1 | N6 edge — MEC local breakout     |
+| br-n6c | 107 | 10.207.0.0/24 | 10.207.0.1 | N6 cloud — internet data network |
+
+### VXLAN tunnel configuration
+
+Each VXLAN tunnel uses a dedicated VNI key so that frames from different 5G interfaces cannot cross-contaminate:
+
+```bash
+# Example: VXLAN port on br-n2 (worker side)
+ovs-vsctl add-port br-n2 vxlan-n2 -- \
+  set interface vxlan-n2 type=vxlan \
+  options:key=102 \
+  options:remote_ip=192.168.56.12 \
+  options:local_ip=192.168.56.11
 ```
 
-## OVS Bridge Configuration
+The VXLAN tunnel runs over the management NIC (`eth1`, 192.168.56.0/24) between worker and edge. All six bridge tunnels share this single physical link.
 
-### Bridges per Node
+---
 
-| Bridge | VNI | Subnet | Purpose |
-|--------|-----|--------|---------|
-| br-n1 | 101 | 10.201.0.0/24 | N1 (NAS signaling) |
-| br-n2 | 102 | 10.202.0.0/24 | N2 (NGAP control) |
-| br-n3 | 103 | 10.203.0.0/24 | N3 (GTP-U data) |
-| br-n4 | 104 | 10.204.0.0/24 | N4 (PFCP control) |
-| br-n6e | 106 | 10.206.0.0/24 | N6 edge (MEC) |
-| br-n6c | 106 | 10.207.0.0/24 | N6 cloud (DN) |
+## Multus Deployment Details
 
-### Per-Cell Networks
+### Why two DaemonSets
 
-For multi-cell deployments, additional bridges are created:
+K3s and standalone containerd use different host paths for CNI configuration. A single DaemonSet cannot conditionally mount different paths on different nodes. Two DaemonSets solve this:
 
-| Bridge | VNI | Subnet | Purpose |
-|--------|-----|--------|---------|
-| br-n2-cell-1 | 1021 | 10.202.1.0/24 | Cell 1 N2 |
-| br-n3-cell-1 | 1031 | 10.203.1.0/24 | Cell 1 N3 |
+```mermaid
+graph TD
+    DS_W["DaemonSet: multus-worker
+    nodeSelector: kubernetes.io/hostname=worker
+    CNI config dir: /var/lib/rancher/k3s/agent/etc/cni/net.d
+    mode: auto (reads k3s primary conflist)"]
 
-## Multus CNI Configuration
+    DS_E["DaemonSet: multus-edge
+    nodeSelector: kubernetes.io/hostname=edge
+    CNI config dir: /etc/cni/net.d
+    mode: static conflist + external kubeconfig"]
 
-Pods attach to overlay networks via NetworkAttachmentDefinitions (NADs):
+    W["worker node"]
+    E["edge node"]
+
+    DS_W --> W
+    DS_E --> E
+```
+
+The same split applies to the **OVS DaemonSets** (one per node, same reason).
+
+### Edge Multus: static conflist
+
+On the edge node, Multus cannot use auto-mode because KubeEdge injects empty `KUBERNETES_SERVICE_HOST` and `KUBERNETES_SERVICE_PORT` environment variables. When Multus auto-generates its conflist, it reads these env vars to build the K8s API URL — empty values cause Multus to crash.
+
+Solution: install a pre-written static conflist that hard-codes the API server URL and points to an external kubeconfig at `/var/lib/multus/multus.kubeconfig`.
+
+See [known-issues/kubeedge-multus-env-injection.md](../known-issues/kubeedge-multus-env-injection.md) for the full root cause analysis.
+
+---
+
+## NetworkAttachmentDefinitions (NADs)
+
+Each N-interface is defined as a NAD in the `5g` namespace. The NAD specifies the OVS bridge to attach to and the Whereabouts IPAM configuration:
 
 ```yaml
 apiVersion: k8s.cni.cncf.io/v1
@@ -85,75 +261,105 @@ spec:
         "type": "whereabouts",
         "range": "10.202.0.0/24",
         "range_start": "10.202.0.10",
-        "range_end": "10.202.0.250"
+        "range_end": "10.202.0.250",
+        "exclude": ["10.202.0.100/32"]
       }
     }
 ```
 
-### Pod Network Annotation
+The `exclude` list prevents Whereabouts from assigning static NF IPs (like AMF's `10.202.0.100`) dynamically to other pods. NFs then request their exact static IP via pod annotations.
 
-```yaml
-metadata:
-  annotations:
-    k8s.v1.cni.cncf.io/networks: |
-      [
-        {"name": "n2-net", "interface": "n2"},
-        {"name": "n3-net", "interface": "n3"}
-      ]
+---
+
+## Per-Cell Network Scaling
+
+The default deployment creates one shared N2 and N3 bridge for all cells. For multi-cell scenarios (multiple gNBs), each cell gets its own dedicated N2/N3 bridge and VXLAN tunnel:
+
+```mermaid
+graph LR
+    subgraph Default["Default (1 cell)"]
+        BN2["br-n2
+        10.202.0.0/24
+        shared"]
+
+        BN3["br-n3
+        10.203.0.0/24
+        shared"]
+    end
+
+    subgraph MultiCell["Multi-cell (N cells)"]
+        BN2C1["br-n2-cell-1
+        10.202.1.0/24
+        VNI 1021"]
+
+        BN3C1["br-n3-cell-1
+        10.203.1.0/24
+        VNI 1031"]
+
+        BN2CN["br-n2-cell-N
+        10.202.N.0/24
+        VNI 102N"]
+
+        BN3CN["br-n3-cell-N
+        10.203.N.0/24
+        VNI 103N"]
+    end
 ```
 
-## VXLAN Tunnel Details
+The per-cell bridges are created by the `cell_network_setup` role in Phase 4. The number of cells and their IDs are configured in `ansible/phases/06-ueransim-mec/vars/topology.yml`.
 
-### Tunnel Endpoints
-
-| Source | Destination | Transport |
-|--------|-------------|-----------|
-| Worker (192.168.56.11) | Edge (192.168.56.12) | UDP 4789 |
-
-### Tunnel Configuration
-
-```bash
-# On worker node
-ovs-vsctl add-port br-n2 vxlan-n2 -- \
-  set interface vxlan-n2 type=vxlan \
-  options:key=102 \
-  options:remote_ip=192.168.56.12 \
-  options:local_ip=192.168.56.11
-```
+---
 
 ## Physical RAN Integration
 
-For connecting physical femtocells, a dedicated RAN network is available:
+When a physical gNB (femtocell) is connected, the worker creates an additional OVS bridge (`br-ran`) and links it into `br-n2` and `br-n3` via patch port pairs:
 
-```
-+------------------+                    +------------------+
-|   WORKER NODE    |                    |    FEMTOCELL     |
-|                  |                    |                  |
-|  +------------+  |   192.168.57.0/24  |  +------------+  |
-|  |   br-ran   |  |<------------------>|  |    gNB     |  |
-|  |   (OVS)    |  |                    |  |            |  |
-|  +-----+------+  |                    |  +------------+  |
-|        |         |                    +------------------+
-|  +-----+------+  |
-|  |   br-n2    |  |  (patch ports)
-|  +------------+  |
-|  |   br-n3    |  |
-|  +------------+  |
-+------------------+
+```mermaid
+graph LR
+    GNB["Physical gNB
+    192.168.6.0/24"]
+
+    BRAN["br-ran
+    192.168.6.1/24
+    worker OVS bridge"]
+
+    BN2["br-n2
+    10.202.0.0/24"]
+
+    BN3["br-n3
+    10.203.0.0/24"]
+
+    AMF["AMF pod
+    10.202.0.100"]
+
+    UPF["UPF-Cloud pod
+    10.203.0.101"]
+
+    GNB -->|"L2 bridged NIC"| BRAN
+    BRAN -->|"patch-ran-n2 ↔ patch-n2-ran"| BN2
+    BRAN -->|"patch-ran-n3 ↔ patch-n3-ran"| BN3
+    BN2 --> AMF
+    BN3 --> UPF
 ```
 
-See [Physical RAN Integration](../deployment/physical-ran.md) for setup instructions.
+The worker performs L3 routing between the physical RAN subnet (192.168.6.x) and the overlay subnets (10.20x.x.x). Patch ports provide L2 connectivity within the worker OVS instance; the subnet boundary is crossed by IP routing. N4, N6, and N1 bridges remain completely isolated.
+
+See [Physical RAN Integration](../deployment/physical-ran.md) for the step-by-step setup guide.
+
+---
 
 ## Verification Commands
 
-### Check OVS Bridges
+> **Context**: OVS commands run on `worker` or `edge` (via `vagrant ssh worker`). kubectl commands run from `master` using `sudo k3s kubectl`.
+
+### Check OVS bridges
 
 ```bash
-vagrant ssh worker
+vagrant ssh worker   # or edge
 sudo ovs-vsctl show
 ```
 
-### Check VXLAN Tunnels
+### Check VXLAN tunnels
 
 ```bash
 sudo ovs-vsctl list interface | grep -A5 vxlan
@@ -162,32 +368,72 @@ sudo ovs-vsctl list interface | grep -A5 vxlan
 ### Check NADs
 
 ```bash
-kubectl get net-attach-def -A
+sudo k3s kubectl get net-attach-def -A
 ```
 
-### Check Pod Network Status
+### Check pod network interfaces
 
 ```bash
-kubectl get pod <pod-name> -n 5g -o jsonpath='{.metadata.annotations.k8s\.v1\.cni\.cncf\.io/network-status}' | jq .
+# Verify AMF has n1 and n2 interfaces
+sudo k3s kubectl -n 5g exec deploy/amf -- ip -o -4 addr
+
+# Check Multus network-status annotation
+sudo k3s kubectl -n 5g get pod -l app=amf -o json \
+  | jq -r '.items[0].metadata.annotations["k8s.v1.cni.cncf.io/network-status"]' | jq .
 ```
+
+### Check Whereabouts IP pools
+
+```bash
+sudo k3s kubectl get ippools.whereabouts.cni.cncf.io -A
+```
+
+---
 
 ## Troubleshooting
 
-### VXLAN Connectivity Issues
+### VXLAN connectivity issues
 
 ```bash
-# Test VXLAN port
+# Test VXLAN UDP port reachability from worker to edge
 nc -vzu 192.168.56.12 4789
 
-# Check bridge ports
+# Check OVS bridge ports
 sudo ovs-vsctl list-ports br-n2
+
+# Check VXLAN tunnel state
+sudo ovs-vsctl list interface vxlan-n2
 ```
 
-### IP Assignment Issues
+### IP assignment issues
 
 ```bash
-# Check Whereabouts IP pool
-kubectl get ippools.whereabouts.cni.cncf.io -A
+# Check Whereabouts IP pool status
+sudo k3s kubectl get ippools.whereabouts.cni.cncf.io -A -o yaml
+
+# Verify pod got expected IPs
+sudo k3s kubectl -n 5g get pod <pod> \
+  -o jsonpath='{.metadata.annotations.k8s\.v1\.cni\.cncf\.io/network-status}' | jq .
 ```
 
-See [OVS VXLAN Health Runbook](../runbooks/ovs-vxlan-health.md) for detailed diagnostics.
+### Pod stuck in ContainerCreating
+
+Usually a Multus or IPAM issue. Check:
+
+```bash
+sudo k3s kubectl -n 5g describe pod <pod>   # look at Events section
+sudo k3s kubectl -n kube-system logs -l app=multus --tail=50
+```
+
+See [runbooks/multus-nad-ipam.md](../runbooks/multus-nad-ipam.md) and [runbooks/ovs-vxlan-health.md](../runbooks/ovs-vxlan-health.md) for detailed diagnostics.
+
+---
+
+## Related Documentation
+
+- [Virtualization Layers](virtualization-layers.md) — why this networking layer exists
+- [5G Interfaces](5g-interfaces.md) — per-interface subnets, protocols, and static IPs
+- [Physical RAN Integration](../deployment/physical-ran.md) — bridging a real femtocell
+- [Runbook: OVS VXLAN Health](../runbooks/ovs-vxlan-health.md)
+- [Runbook: Multus NAD IPAM](../runbooks/multus-nad-ipam.md)
+- [Known Issues: KubeEdge Multus Env Injection](../known-issues/kubeedge-multus-env-injection.md)

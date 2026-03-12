@@ -9,6 +9,8 @@ This guide will get you from zero to a running 5G testbed in under 30 minutes.
 - **Host resources**: 16GB RAM, 4+ CPU cores recommended
 - **OS**: Linux, macOS, or Windows with virtualization enabled
 
+For a full list of tools and versions (including 5G UE Probe requirements for physical dongle experiments), see [Requirements](requirements.md).
+
 ## Quick Start
 
 ### Deploy 5G Core Only (Default)
@@ -24,6 +26,8 @@ This deploys:
 - KubeEdge (CloudCore + EdgeCore)
 - OVS overlay networks with VXLAN tunnels
 - Open5GS 5G Core (AMF, SMF, UPF, NRF, etc.)
+- Observability stack (Prometheus, Loki, Grafana)
+- Dashboard control plane (out-of-band on ansible VM)
 
 ### Deploy Full Stack (with UERANSIM)
 
@@ -33,21 +37,43 @@ DEPLOY_MODE=full vagrant up
 
 Adds UERANSIM simulator (gNB + UEs) for end-to-end testing.
 
+## Startup Flags
+
+Use this flag with `vagrant up`:
+
+| Flag | Values | Default | Behavior |
+|------|--------|---------|----------|
+| `DEPLOY_MODE` | `core_only`, `full` | `core_only` | `full` includes Phase 6 (UERANSIM + MEC) |
+
+Recommended command combinations:
+
+```bash
+# Default: core only
+vagrant up
+
+# Add UERANSIM
+DEPLOY_MODE=full vagrant up
+```
+
 ## What Gets Deployed
 
-```
-+------------------+     +------------------+     +------------------+
-|   MASTER NODE    |     |   WORKER NODE    |     |    EDGE NODE     |
-|  192.168.56.10   |     |  192.168.56.11   |     |  192.168.56.12   |
-|                  |     |                  |     |                  |
-|  - K3s Server    |     |  - K3s Agent     |     |  - K3s Agent     |
-|  - CloudCore     |     |  - 5G Core NFs   |     |  - EdgeCore      |
-|                  |     |  - MongoDB       |     |  - gNB (UERANSIM)|
-|                  |     |  - UPF-Cloud     |     |  - UEs (UERANSIM)|
-+------------------+     +------------------+     +------------------+
-                               |                        |
-                               +--- VXLAN Tunnels ------+
-                                   (N2, N3, N4, N6)
+```mermaid
+graph LR
+    subgraph Master["Master  192.168.56.10"]
+        M1["K3s Server"]
+    end
+    subgraph Worker["Worker  192.168.56.11"]
+        W1["K3s Agent"]
+        W2["CloudCore (KubeEdge)"]
+        W3["5G Core NFs"]
+        W4["MongoDB · UPF-Cloud"]
+    end
+    subgraph Edge["Edge  192.168.56.12"]
+        E1["EdgeCore (KubeEdge)"]
+        E2["gNB + UEs (UERANSIM)"]
+    end
+    Worker <-->|"VXLAN N2/N3/N4/N6"| Edge
+    Master --- Worker
 ```
 
 ## Verify Deployment
@@ -56,7 +82,7 @@ Adds UERANSIM simulator (gNB + UEs) for end-to-end testing.
 
 ```bash
 vagrant ssh master
-kubectl get nodes
+sudo k3s kubectl get nodes
 ```
 
 Expected output:
@@ -67,10 +93,12 @@ worker   Ready    <none>                 8m    v1.30.6+k3s1
 edge     Ready    agent,edge             6m    v1.30.6+k3s1
 ```
 
+> **kubectl on K3s VMs**: K3s does not create a standalone `kubectl` binary — the cluster is managed via `sudo k3s kubectl`. All in-VM kubectl commands throughout these docs use this form.
+
 ### Check 5G Core
 
 ```bash
-kubectl get pods -n 5g
+sudo k3s kubectl get pods -n 5g
 ```
 
 All pods should be `Running`.
@@ -78,8 +106,8 @@ All pods should be `Running`.
 ### Check UERANSIM (if deployed with full mode)
 
 ```bash
-kubectl get pods -n 5g -l app=gnb-1
-kubectl get pods -n 5g -l app=ue
+sudo k3s kubectl get pods -n 5g -l app=gnb-1
+sudo k3s kubectl get pods -n 5g -l app=ue
 ```
 
 ## Access the Cluster
@@ -95,10 +123,11 @@ kubectl get nodes
 
 ### From Ansible VM
 
+The ansible VM does not have `kubectl` installed. To run kubectl commands, SSH into master:
+
 ```bash
-vagrant ssh ansible
-cd ~/ansible-ro
-kubectl --kubeconfig=/home/vagrant/kubeconfig get nodes
+vagrant ssh master
+sudo k3s kubectl get nodes
 ```
 
 ## Deploy UERANSIM Manually
@@ -110,6 +139,32 @@ vagrant ssh ansible
 cd ~/ansible-ro
 ansible-playbook phases/06-ueransim-mec/playbook.yml -i inventory.ini
 ```
+
+## Access the Dashboard
+
+The dashboard is deployed automatically in Phase 8. Open it in your browser once provisioning completes:
+
+| Service | URL |
+|---------|-----|
+| Dashboard UI | http://192.168.56.13:31573 |
+| Dashboard API docs | http://192.168.56.13:31880/docs |
+| Grafana | http://192.168.56.11:30300 (admin / admin5g) |
+
+See [Dashboard Overview](dashboard/overview.md) for full documentation.
+
+## Optional: 5G UE Probe (Physical UE Dongle)
+
+If you have a physical 5G UE dongle (USB modem) and want to run experiments on your Linux host, use the `5g-probe` web app. It isolates the dongle into a Linux network namespace and lets you benchmark throughput and latency with a live chart UI.
+
+```bash
+cd 5g-probe
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+sudo $(which python3) app.py
+# Open http://localhost:5000
+```
+
+See [docs/tools/5g-probe.md](tools/5g-probe.md) for the full guide including host requirements and API reference.
 
 ## Next Steps
 

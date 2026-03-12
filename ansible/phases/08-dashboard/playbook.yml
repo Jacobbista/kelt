@@ -1,0 +1,6 @@
+---
+- name: Phase 08 - Dashboard Setup
+  hosts: control
+  gather_facts: true
+  roles:
+    - role: dashboard_setup

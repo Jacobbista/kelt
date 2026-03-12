@@ -31,10 +31,28 @@ sysctl -w net.ipv4.ip_forward=1
 for i in all n3 n6; do sysctl -w net.ipv4.conf.$i.rp_filter=0; done
 
 # Configure policy routing (idempotent)
-ip rule show | grep -q "iif n3 lookup 100" || ip rule add iif n3 lookup 100
-ip route show table 100 | grep -q "default via 10.203.0.1 dev n3" || ip route add default via 10.203.0.1 dev n3 table 100
-ip rule show | grep -q "iif n6 lookup 200" || ip rule add iif n6 lookup 200
-ip route show table 200 | grep -q "default via 10.207.0.1 dev n6" || ip route add default via 10.207.0.1 dev n6 table 200
+# Keep N3 symmetric policy routing for GTP-U return traffic.
+ip rule show | grep -q "iif n3 lookup 100" || ip rule add iif n3 lookup 100 pref 30
+ip route replace default via 10.203.0.1 dev n3 table 100
+
+# Remove legacy rule that can misroute UE-destined return packets into N6.
+ip rule del iif n6 lookup 200 2>/dev/null || true
+ip route replace default via 10.207.0.1 dev n6 table 200
+
+# Physical RAN return route: when a physical gNB is on a separate subnet,
+# the UPF must route GTP-U downlink back through the worker (10.203.0.254)
+# which acts as the L3 gateway between the overlay N3 and the RAN transport.
+if [ -n "${PHYSICAL_RAN_SUBNET:-}" ]; then
+  echo "[UPF][init] Adding return route for physical RAN subnet: ${PHYSICAL_RAN_SUBNET}"
+  ip route show | grep -q "${PHYSICAL_RAN_SUBNET}" || \
+    ip route add "${PHYSICAL_RAN_SUBNET}" via 10.203.0.254 dev n3
+fi
+
+# --- Redirect decapsulated (ogstun) traffic to the Data Network (N6) ---
+# Overrides the K3s (eth0) default gateway to prevent leaks onto the management network
+echo "[UPF][init] Redirecting default route to N6 Data Network interface..."
+ip route replace default via 10.207.0.1 dev n6
+# --------------------------------------------------------------------------------
 
 echo "[UPF][init] Starting UPF daemon..."
 exec /open5gs/install/bin/open5gs-upfd -c ${UPF_CONFIG:-/etc/open5gs/upf.yaml}

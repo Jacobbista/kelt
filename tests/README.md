@@ -39,6 +39,11 @@ The test runner automatically:
 | `resilience` | Failure recovery tests | ⏸️ Disabled* | `make resilience` |
 | `ran` | Physical RAN integration tests | ✅ Enabled | `make ran` |
 
+Recent E2E additions:
+- RAN mode primitives validation (resource labels for dashboard control)
+- RAN overlay labeling validation (`managed-by: ansible|dashboard`)
+- Edge placement semantics validation (gNB/UE on edge nodes)
+
 \* See [Disabled Suites](#disabled-suites) for requirements
 
 ## Directory Structure

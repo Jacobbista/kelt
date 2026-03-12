@@ -6,7 +6,7 @@
 
 ```bash
 # One-liner: Check OVS and VXLAN status
-kubectl -n kube-system get ds | grep -E "ds-net-setup|kube-multus-ds" && echo "DaemonSets OK" || echo "DaemonSets FAIL"; sudo ovs-vsctl show | grep -c "Bridge br-n" && echo "Bridges found"
+sudo k3s kubectl -n kube-system get ds | grep -E "ds-net-setup|kube-multus-ds" && echo "DaemonSets OK" || echo "DaemonSets FAIL"; sudo ovs-vsctl show | grep -c "Bridge br-n" && echo "Bridges found"
 ```
 
 ## Step-by-Step Diagnostics
@@ -15,7 +15,7 @@ kubectl -n kube-system get ds | grep -E "ds-net-setup|kube-multus-ds" && echo "D
 
 ```bash
 # Check OVS DaemonSets
-kubectl -n kube-system get ds | grep -E "ds-net-setup|kube-multus-ds"
+sudo k3s kubectl -n kube-system get ds | grep -E "ds-net-setup|kube-multus-ds"
 
 # Expected output:
 # ds-net-setup-edge    2/2     2            2           2d
@@ -23,28 +23,28 @@ kubectl -n kube-system get ds | grep -E "ds-net-setup|kube-multus-ds"
 # kube-multus-ds       2/2     2            2           2d
 
 # Check DaemonSet details
-kubectl -n kube-system describe ds ds-net-setup-worker
-kubectl -n kube-system describe ds ds-net-setup-edge
+sudo k3s kubectl -n kube-system describe ds ds-net-setup-worker
+sudo k3s kubectl -n kube-system describe ds ds-net-setup-edge
 
 # Check DaemonSet pods
-kubectl -n kube-system get pods -l app=ds-net-setup-worker
-kubectl -n kube-system get pods -l app=ds-net-setup-edge
+sudo k3s kubectl -n kube-system get pods -l app=ds-net-setup-worker
+sudo k3s kubectl -n kube-system get pods -l app=ds-net-setup-edge
 ```
 
 ### 2. OVS DaemonSet Logs
 
 ```bash
 # Check OVS DaemonSet logs
-kubectl -n kube-system logs -l app=ds-net-setup-worker --tail=200
-kubectl -n kube-system logs -l app=ds-net-setup-edge --tail=200
+sudo k3s kubectl -n kube-system logs -l app=ds-net-setup-worker --tail=200
+sudo k3s kubectl -n kube-system logs -l app=ds-net-setup-edge --tail=200
 
 # Check OVS DaemonSet logs with timestamps
-kubectl -n kube-system logs -l app=ds-net-setup-worker --tail=200 --timestamps
-kubectl -n kube-system logs -l app=ds-net-setup-edge --tail=200 --timestamps
+sudo k3s kubectl -n kube-system logs -l app=ds-net-setup-worker --tail=200 --timestamps
+sudo k3s kubectl -n kube-system logs -l app=ds-net-setup-edge --tail=200 --timestamps
 
 # Follow OVS DaemonSet logs in real-time
-kubectl -n kube-system logs -l app=ds-net-setup-worker -f
-kubectl -n kube-system logs -l app=ds-net-setup-edge -f
+sudo k3s kubectl -n kube-system logs -l app=ds-net-setup-worker -f
+sudo k3s kubectl -n kube-system logs -l app=ds-net-setup-edge -f
 ```
 
 ### 3. OVS Bridge Configuration
@@ -150,16 +150,16 @@ sudo ovs-ofctl dump-flows br-n3 --counters
 
 ```bash
 # Check DaemonSet status
-kubectl -n kube-system get ds ds-net-setup-worker
-kubectl -n kube-system get ds ds-net-setup-edge
+sudo k3s kubectl -n kube-system get ds ds-net-setup-worker
+sudo k3s kubectl -n kube-system get ds ds-net-setup-edge
 
 # Check pod logs
-kubectl -n kube-system logs -l app=ds-net-setup-worker --tail=100
-kubectl -n kube-system logs -l app=ds-net-setup-edge --tail=100
+sudo k3s kubectl -n kube-system logs -l app=ds-net-setup-worker --tail=100
+sudo k3s kubectl -n kube-system logs -l app=ds-net-setup-edge --tail=100
 
 # Check node resources
-kubectl describe node worker
-kubectl describe node edge
+sudo k3s kubectl describe node worker
+sudo k3s kubectl describe node edge
 ```
 
 **Solution:**
@@ -182,7 +182,7 @@ kubectl describe node edge
 sudo ovs-vsctl list-br
 
 # Check OVS DaemonSet logs
-kubectl -n kube-system logs -l app=ds-net-setup-worker --tail=200
+sudo k3s kubectl -n kube-system logs -l app=ds-net-setup-worker --tail=200
 
 # Check OVS service status
 sudo systemctl status openvswitch-switch
@@ -211,7 +211,7 @@ ip -d link show | grep vxlan
 sudo ovs-vsctl list interface | grep vxlan
 
 # Check OVS DaemonSet logs
-kubectl -n kube-system logs -l app=ds-net-setup-worker --tail=200
+sudo k3s kubectl -n kube-system logs -l app=ds-net-setup-worker --tail=200
 ```
 
 **Solution:**
@@ -311,8 +311,8 @@ sudo ovs-ofctl dump-flows br-n3 | grep vxlan
 
 ```bash
 # Restart OVS DaemonSet
-kubectl -n kube-system rollout restart ds ds-net-setup-worker
-kubectl -n kube-system rollout restart ds ds-net-setup-edge
+sudo k3s kubectl -n kube-system rollout restart ds ds-net-setup-worker
+sudo k3s kubectl -n kube-system rollout restart ds ds-net-setup-edge
 
 # Restart OVS service
 sudo systemctl restart openvswitch-switch
@@ -340,8 +340,8 @@ sudo ovs-vsctl list port vxlan-n3
 
 ```bash
 # OVS DaemonSet logs with timestamps
-kubectl -n kube-system logs -l app=ds-net-setup-worker --tail=200 --timestamps
-kubectl -n kube-system logs -l app=ds-net-setup-edge --tail=200 --timestamps
+sudo k3s kubectl -n kube-system logs -l app=ds-net-setup-worker --tail=200 --timestamps
+sudo k3s kubectl -n kube-system logs -l app=ds-net-setup-edge --tail=200 --timestamps
 
 # OVS service logs
 sudo journalctl -u openvswitch-switch --tail=100
@@ -370,13 +370,13 @@ The testbed includes automated OVS garbage collection to clean up stale ports:
 
 ```bash
 # Check OVS GC DaemonSet
-kubectl -n kube-system get ds ds-ovs-gc
+sudo k3s kubectl -n kube-system get ds ds-ovs-gc
 
 # Check OVS GC logs
-kubectl -n kube-system logs -l app=ds-ovs-gc --tail=100
+sudo k3s kubectl -n kube-system logs -l app=ds-ovs-gc --tail=100
 
 # Check OVS GC configuration
-kubectl -n kube-system get configmap ovs-scripts -o yaml
+sudo k3s kubectl -n kube-system get configmap ovs-scripts -o yaml
 ```
 
 ## Performance Tuning

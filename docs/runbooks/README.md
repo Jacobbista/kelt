@@ -19,6 +19,8 @@ This directory contains focused diagnostic and troubleshooting procedures for th
 | [`multus-nad-ipam.md`](multus-nad-ipam.md)   | Multus/Whereabouts | Multiple network interfaces per pod |
 | [`ovs-vxlan-health.md`](ovs-vxlan-health.md) | OVS/VXLAN          | Overlay network infrastructure      |
 
+> **kubectl**: All commands run from master (`vagrant ssh master`) using `sudo k3s kubectl`.
+
 ## Usage
 
 Each runbook follows a consistent structure:
@@ -34,23 +36,23 @@ Each runbook follows a consistent structure:
 
 ```bash
 # PFCP (N4) - SMF ↔ UPF
-kubectl -n 5g exec deploy/smf -- bash -lc 'ss -unap | grep 8805 && echo "SMF listening" || echo "SMF not listening"'
+sudo k3s kubectl -n 5g exec deploy/smf -- bash -lc 'ss -unap | grep 8805 && echo "SMF listening" || echo "SMF not listening"'
 
 # NGAP (N2) - gNB ↔ AMF
-kubectl -n 5g exec deploy/amf -- bash -lc 'ss -S -na | grep 38412 && echo "AMF SCTP listening" || echo "AMF SCTP not listening"'
+sudo k3s kubectl -n 5g exec deploy/amf -- bash -lc 'ss -S -na | grep 38412 && echo "AMF SCTP listening" || echo "AMF SCTP not listening"'
 
 # GTP-U (N3) - gNB/UE ↔ UPF
-kubectl -n 5g exec deploy/upf-edge -- bash -lc 'ss -unap | grep 2152 && echo "UPF-edge GTP-U listening" || echo "UPF-edge GTP-U not listening"'
+sudo k3s kubectl -n 5g exec deploy/upf-edge -- bash -lc 'ss -unap | grep 2152 && echo "UPF-edge GTP-U listening" || echo "UPF-edge GTP-U not listening"'
 ```
 
 ### Check Infrastructure
 
 ```bash
 # Multus and NADs
-kubectl -n kube-system get ds kube-multus-ds && echo "Multus OK" || echo "Multus FAIL"
+sudo k3s kubectl -n kube-system get ds kube-multus-ds && echo "Multus OK" || echo "Multus FAIL"
 
 # OVS and VXLAN
-kubectl -n kube-system get ds | grep -E "ds-net-setup|kube-multus-ds" && echo "DaemonSets OK" || echo "DaemonSets FAIL"
+sudo k3s kubectl -n kube-system get ds | grep -E "ds-net-setup|kube-multus-ds" && echo "DaemonSets OK" || echo "DaemonSets FAIL"
 ```
 
 ## Troubleshooting Flow
@@ -83,34 +85,34 @@ When adding new runbooks:
 
 ```bash
 # AMF logs with NGAP context
-kubectl -n 5g logs deploy/amf -c amf -f | grep -i ngap
+sudo k3s kubectl -n 5g logs deploy/amf -c amf -f | grep -i ngap
 
 # SMF logs with PFCP context
-kubectl -n 5g logs deploy/smf -c smf -f | grep -i pfcp
+sudo k3s kubectl -n 5g logs deploy/smf -c smf -f | grep -i pfcp
 
 # UPF logs with GTP-U context
-kubectl -n 5g logs deploy/upf-edge -c upf -f | grep -i gtpu
+sudo k3s kubectl -n 5g logs deploy/upf-edge -c upf -f | grep -i gtpu
 ```
 
 ### Network Interface Verification
 
 ```bash
 # Check all interfaces on AMF
-kubectl -n 5g exec deploy/amf -- ip addr show
+sudo k3s kubectl -n 5g exec deploy/amf -- ip addr show
 
 # Check specific interface
-kubectl -n 5g exec deploy/amf -- ip -o -4 addr show dev n2
+sudo k3s kubectl -n 5g exec deploy/amf -- ip -o -4 addr show dev n2
 
 # Check network status annotation
-kubectl -n 5g get pod -l app=amf -o json | jq -r '.items[0].metadata.annotations["k8s.v1.cni.cncf.io/network-status"]' | jq '.'
+sudo k3s kubectl -n 5g get pod -l app=amf -o json | jq -r '.items[0].metadata.annotations["k8s.v1.cni.cncf.io/network-status"]' | jq '.'
 ```
 
 ### Performance Testing
 
 ```bash
 # Test VXLAN tunnel performance
-kubectl -n 5g exec deploy/gnb -- iperf3 -c 10.203.0.100 -t 30
+sudo k3s kubectl -n 5g exec deploy/gnb -- iperf3 -c 10.203.0.100 -t 30
 
 # Test PFCP message exchange
-kubectl -n 5g exec deploy/smf -- bash -c 'for i in {1..10}; do nc -zuvw1 10.204.0.101 8805 && echo "Success $i" || echo "Failed $i"; sleep 1; done'
+sudo k3s kubectl -n 5g exec deploy/smf -- bash -c 'for i in {1..10}; do nc -zuvw1 10.204.0.101 8805 && echo "Success $i" || echo "Failed $i"; sleep 1; done'
 ```

@@ -91,8 +91,8 @@ data:
             namespaces:
               names: ['5g']
         relabel_configs:
-          # Keep only 5G Core NFs (skip jobs like gnb-endpoints-sync, etc.)
-          - source_labels: [__meta_kubernetes_pod_name]
+          # Keep only 5G Core NFs by app label (pod names have hash suffixes)
+          - source_labels: [__meta_kubernetes_pod_label_app]
             regex: '^(amf|smf|upf-cloud|upf-edge|nrf|ausf|udm|udr|pcf|bsf|nssf)$'
             action: keep
 

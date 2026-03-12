@@ -20,8 +20,9 @@ This testbed provides a complete 5G network infrastructure for:
 |   MASTER NODE    |     |   WORKER NODE    |     |    EDGE NODE     |
 |                  |     |                  |     |                  |
 |  K3s Server      |     |  5G Core         |     |  EdgeCore        |
-|  CloudCore       |     |  (Open5GS)       |     |  gNB + UEs       |
-|                  |     |  MongoDB         |     |  (UERANSIM)      |
+|                  |     |  (Open5GS)       |     |  gNB + UEs       |
+|                  |     |  CloudCore       |     |  (UERANSIM)      |
+|                  |     |  MongoDB         |     |                  |
 +------------------+     +------------------+     +------------------+
                                |                        |
                                +--- VXLAN Tunnels ------+
@@ -42,10 +43,28 @@ This testbed provides a complete 5G network infrastructure for:
 git clone https://github.com/Jacobbista/5g-k3s-kubedge-testbed.git
 cd 5g-k3s-kubedge-testbed
 
-# Deploy 5G Core only (default)
+# Deploy default stack: core + observability + dashboard
 vagrant up
 
 # Deploy full stack with UERANSIM
+DEPLOY_MODE=full vagrant up
+```
+
+### Startup Flags (authoritative)
+
+Use only this flag with `vagrant up`:
+
+| Flag | Values | Default | Effect |
+|------|--------|---------|--------|
+| `DEPLOY_MODE` | `core_only`, `full` | `core_only` | `full` adds Phase 6 (UERANSIM + MEC) |
+
+Examples:
+
+```bash
+# Default (phases 1-5 + phase 7 + phase 8)
+vagrant up
+
+# Core + UERANSIM (phase 6)
 DEPLOY_MODE=full vagrant up
 ```
 
@@ -81,10 +100,12 @@ kubectl get pods -n 5g
 
 | Topic | Link |
 |-------|------|
+| Requirements | [docs/requirements.md](docs/requirements.md) |
 | Getting Started | [docs/getting-started.md](docs/getting-started.md) |
 | Architecture | [docs/architecture/overview.md](docs/architecture/overview.md) |
 | Network Topology | [docs/architecture/network-topology.md](docs/architecture/network-topology.md) |
 | Deployment Phases | [docs/deployment/phases.md](docs/deployment/phases.md) |
+| Dashboard | [docs/dashboard/overview.md](docs/dashboard/overview.md) |
 | Physical RAN | [docs/deployment/physical-ran.md](docs/deployment/physical-ran.md) |
 | Troubleshooting | [docs/operations/troubleshooting.md](docs/operations/troubleshooting.md) |
 | Testing | [docs/development/testing.md](docs/development/testing.md) |

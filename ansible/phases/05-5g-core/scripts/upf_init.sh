@@ -36,5 +36,8 @@ ip route show table 100 | grep -q "default via 10.203.0.1 dev n3" || ip route ad
 ip rule show | grep -q "iif n6 lookup 200" || ip rule add iif n6 lookup 200
 ip route show table 200 | grep -q "default via 10.207.0.1 dev n6" || ip route add default via 10.207.0.1 dev n6 table 200
 
+echo "[UPF][init] Redirecting default route to N6 interface..."
+ip route replace default via 10.207.0.1 dev n6
+
 echo "[UPF][init] Starting UPF daemon..."
 exec /open5gs/install/bin/open5gs-upfd -c ${UPF_CONFIG:-/etc/open5gs/upf.yaml}

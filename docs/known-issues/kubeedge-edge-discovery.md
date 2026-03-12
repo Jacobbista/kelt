@@ -48,7 +48,7 @@ serviceaccount.go:112] query meta "default"/"5g"/[]string(nil)/3607/v1.BoundObje
 
 ```bash
 # Generate 1-year token
-kubectl create token edge-discovery -n 5g --duration=8760h
+sudo k3s kubectl create token edge-discovery -n 5g --duration=8760h
 ```
 
 ### 4. No Default Route in Containers

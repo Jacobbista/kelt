@@ -1,0 +1,37 @@
+[Unit]
+Description=5G Dashboard Backend (FastAPI)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ dashboard_service_user }}
+WorkingDirectory={{ dashboard_backend_dir }}
+Environment=PATH={{ dashboard_backend_venv }}/bin:/usr/local/bin:/usr/bin:/bin
+Environment=DASHBOARD_APP_ENV=prod
+Environment=DASHBOARD_MODE={{ dashboard_mode }}
+Environment=DASHBOARD_RUNTIME_SOURCE={{ dashboard_runtime_dir }}
+Environment=DASHBOARD_HOST=0.0.0.0
+Environment=DASHBOARD_PORT={{ dashboard_backend_port }}
+Environment=DASHBOARD_KUBECONFIG_PATH={{ kubeconfig_path | default('/vagrant/tests/kubeconfig') }}
+Environment=DASHBOARD_WORKER_SSH_HOST=worker
+Environment=DASHBOARD_ALLOW_CONFIGMAP_WRITE=false
+Environment=DASHBOARD_PROMETHEUS_URL=http://{{ worker_ip | default('192.168.56.11') }}:30090
+Environment=DASHBOARD_MONGODB_URL=mongodb://{{ worker_ip | default('192.168.56.11') }}:30017/open5gs
+Environment=DASHBOARD_CORS_ORIGIN=http://{{ dashboard_bind_host }}:{{ dashboard_frontend_port }}
+{% if dashboard_mode == 'dev' %}
+Environment=WATCHFILES_FORCE_POLLING=1
+{% endif %}
+EnvironmentFile=-{{ dashboard_backend_dir }}/.env.runtime
+{% if dashboard_mode == 'dev' %}
+ExecStart={{ dashboard_backend_venv }}/bin/uvicorn app.main:app --host 0.0.0.0 --port {{ dashboard_backend_port }} --reload
+{% else %}
+ExecStart={{ dashboard_backend_venv }}/bin/uvicorn app.main:app --host 0.0.0.0 --port {{ dashboard_backend_port }}
+{% endif %}
+TimeoutStopSec=5
+KillMode=mixed
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

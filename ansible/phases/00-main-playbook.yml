@@ -64,7 +64,9 @@
           3️⃣  KubeEdge Integration
           4️⃣  Overlay Network (OVS + Multus)
           5️⃣  5G Core Network Functions
-          6️⃣  UERANSIM & MEC
+          6️⃣  UERANSIM & MEC (optional via DEPLOY_MODE=full)
+          7️⃣  Observability
+          8️⃣  Dashboard Control Plane
 
           To run a single phase:
           ansible-playbook phases/0X-phase-name/playbook.yml
@@ -471,9 +473,7 @@
           }}s
       when: phase6_t0 is defined
 
-# Phase 7 is optional - run separately with:
-# ansible-playbook phases/07-observability/playbook.yml
-- name: "PHASE 7: Observability Stack (Optional)"
+- name: "PHASE 7: Observability Stack"
   import_playbook: 07-observability/playbook.yml
   vars:
     phase_name: "Observability Stack"
@@ -482,7 +482,16 @@
     - phase7
     - observability
     - monitoring
-    - never  # Skip by default, run with --tags phase7
+
+- name: "PHASE 8: Dashboard Control Plane"
+  import_playbook: 08-dashboard/playbook.yml
+  vars:
+    phase_name: "Dashboard Control Plane"
+    phase_number: 8
+  tags:
+    - phase8
+    - dashboard
+    - ui
 
 - name: "🎉 DEPLOYMENT COMPLETED SUCCESSFULLY"
   hosts: localhost
@@ -506,8 +515,7 @@
           ✅ KubeEdge Integration
           ✅ Overlay Network (OVS + Multus)
           ✅ 5G Core Network Functions
-          ✅ UERANSIM & MEC
-
-          Optional phases:
-          ℹ️  Observability Stack (run: ansible-playbook phases/07-observability/playbook.yml)
+          ✅ Observability Stack
+          ✅ Dashboard Control Plane
+          ℹ️  UERANSIM & MEC optional (run with DEPLOY_MODE=full)
       when: deployment_t0 is defined and deployment_t1 is defined

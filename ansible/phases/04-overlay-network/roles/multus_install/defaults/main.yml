@@ -28,6 +28,7 @@ overlay_networks:
       start: "10.201.0.100",
       end: "10.201.0.250",
       gw: "10.201.0.1",
+      exclude: ["{{ amf_n1_ip }}/32"],
     }
   - {
       name: "n2-net",
@@ -37,6 +38,7 @@ overlay_networks:
       start: "10.202.0.100",
       end: "10.202.0.250",
       gw: "10.202.0.1",
+      exclude: ["{{ amf_n2_ip }}/32"],
     }
   - {
       name: "n3-net",
@@ -46,6 +48,7 @@ overlay_networks:
       start: "10.203.0.100",
       end: "10.203.0.250",
       gw: "10.203.0.1",
+      exclude: ["{{ upf_cloud_n3_ip }}/32", "{{ upf_edge_n3_ip }}/32"],
     }
   - {
       name: "n4-net",

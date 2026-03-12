@@ -2,13 +2,15 @@
 
 This is the canonical, exhaustive documentation for the testbed. It reflects the code under `ansible/phases/*` and the Vagrant topology.
 
+> **kubectl**: K3s does not install a standalone `kubectl` binary. All commands in this handbook run from master (`vagrant ssh master`) using **`sudo k3s kubectl`**.
+
 ## 1. Architecture & Topology
 
 - Nodes (Vagrant):
   - master: k3s server (control-plane)
-  - worker: k3s agent; KubeEdge CloudCore; OVS bridges; Multus
-  - edge: k3s agent; KubeEdge EdgeCore; OVS bridges; Multus
-  - ansible: orchestration node
+  - worker: k3s agent; KubeEdge CloudCore; Open5GS 5G Core; OVS bridges; Multus
+  - edge: KubeEdge EdgeCore (no k3s-agent); OVS bridges; Multus; gNB + UEs (UERANSIM)
+  - ansible: orchestration node; Dashboard (FastAPI + React)
 - Overlay (worker↔edge): OVS bridges per 5G interface, VXLAN tunnels with fixed VNI keys
 - Primary CNI: Flannel; Multus is secondary
 
@@ -24,19 +26,20 @@ For each interface: purpose, plan, bridge, VXLAN key, NAD, validation. Static IP
 - **Subnet**: 10.201.0.0/24; Gateway: 10.201.0.1; Range: 10.201.0.100-250
 - **OVS bridge**: br-n1; **VXLAN key**: 1; **NAD**: 5g/n1-net
 - **Static IP**: AMF = 10.201.0.100 (from `amf_n1_ip`)
+- **IPAM reservation**: `n1-net` excludes `amf_n1_ip/32` in Whereabouts to prevent dynamic reuse of the AMF static IP
 - **Protocol**: NAS over SCTP
 - **Validation**:
 
   ```bash
   # Check NAD exists
-  kubectl -n 5g get net-attach-def n1-net
+  sudo k3s kubectl -n 5g get net-attach-def n1-net
 
   # Check AMF has N1 interface with correct IP
-  kubectl -n 5g exec deploy/amf -- ip -o -4 addr show dev n1 | awk '{print $4}' | cut -d/ -f1
+  sudo k3s kubectl -n 5g exec deploy/amf -- ip -o -4 addr show dev n1 | awk '{print $4}' | cut -d/ -f1
   # Expected: 10.201.0.100
 
   # Check network status annotation
-  kubectl -n 5g get pod -l app=amf -o json | jq -r '.items[0].metadata.annotations["k8s.v1.cni.cncf.io/network-status"]' | jq '.'
+  sudo k3s kubectl -n 5g get pod -l app=amf -o json | jq -r '.items[0].metadata.annotations["k8s.v1.cni.cncf.io/network-status"]' | jq '.'
   ```
 
 ### N2 — gNB ↔ AMF (NGAP, SCTP 38412)
@@ -45,22 +48,23 @@ For each interface: purpose, plan, bridge, VXLAN key, NAD, validation. Static IP
 - **Subnet**: 10.202.0.0/24; Gateway: 10.202.0.1; Range: 10.202.0.100-250
 - **OVS bridge**: br-n2; **VXLAN key**: 2; **NAD**: 5g/n2-net
 - **Static IP**: AMF = 10.202.0.100 (from `amf_n2_ip`)
+- **IPAM reservation**: `n2-net` excludes `amf_n2_ip/32` in Whereabouts to prevent dynamic reuse of the AMF static IP
 - **Protocol**: NGAP over SCTP port 38412
 - **Validation**:
 
   ```bash
   # Check NAD exists
-  kubectl -n 5g get net-attach-def n2-net
+  sudo k3s kubectl -n 5g get net-attach-def n2-net
 
   # Check AMF SCTP port 38412
-  kubectl -n 5g exec deploy/amf -- bash -lc 'ss -S -na | grep 38412 || echo no-sctp'
+  sudo k3s kubectl -n 5g exec deploy/amf -- bash -lc 'ss -S -na | grep 38412 || echo no-sctp'
 
   # Check AMF has N2 interface with correct IP
-  kubectl -n 5g exec deploy/amf -- ip -o -4 addr show dev n2 | awk '{print $4}' | cut -d/ -f1
+  sudo k3s kubectl -n 5g exec deploy/amf -- ip -o -4 addr show dev n2 | awk '{print $4}' | cut -d/ -f1
   # Expected: 10.202.0.100
 
   # Check AMF logs for NGAP activity
-  kubectl -n 5g logs deploy/amf -c amf --tail=200 | grep -i ngap
+  sudo k3s kubectl -n 5g logs deploy/amf -c amf --tail=200 | grep -i ngap
   ```
 
 ### N3 — gNB/UE ↔ UPF (GTP-U, UDP 2152)
@@ -71,24 +75,25 @@ For each interface: purpose, plan, bridge, VXLAN key, NAD, validation. Static IP
 - **Static IPs**:
   - UPF-edge = 10.203.0.100 (from `upf_edge_n3_ip`)
   - UPF-cloud = 10.203.0.101 (from `upf_cloud_n3_ip`)
+- **IPAM reservation**: `n3-net` excludes `upf_edge_n3_ip/32` and `upf_cloud_n3_ip/32` in Whereabouts
 - **Protocol**: GTP-U over UDP port 2152
 - **Validation**:
 
   ```bash
   # Check NAD exists
-  kubectl -n 5g get net-attach-def n3-net
+  sudo k3s kubectl -n 5g get net-attach-def n3-net
 
   # Check UPF-edge GTP-U port 2152
-  kubectl -n 5g exec deploy/upf-edge -- bash -lc 'ss -unap | grep 2152'
+  sudo k3s kubectl -n 5g exec deploy/upf-edge -- bash -lc 'ss -unap | grep 2152'
 
   # Check UPF-cloud GTP-U port 2152
-  kubectl -n 5g exec deploy/upf-cloud -- bash -lc 'ss -unap | grep 2152'
+  sudo k3s kubectl -n 5g exec deploy/upf-cloud -- bash -lc 'ss -unap | grep 2152'
 
   # Check N3 interface IPs
-  kubectl -n 5g exec deploy/upf-edge -- ip -o -4 addr show dev n3 | awk '{print $4}' | cut -d/ -f1
+  sudo k3s kubectl -n 5g exec deploy/upf-edge -- ip -o -4 addr show dev n3 | awk '{print $4}' | cut -d/ -f1
   # Expected: 10.203.0.100
 
-  kubectl -n 5g exec deploy/upf-cloud -- ip -o -4 addr show dev n3 | awk '{print $4}' | cut -d/ -f1
+  sudo k3s kubectl -n 5g exec deploy/upf-cloud -- ip -o -4 addr show dev n3 | awk '{print $4}' | cut -d/ -f1
   # Expected: 10.203.0.101
   ```
 
@@ -106,23 +111,23 @@ For each interface: purpose, plan, bridge, VXLAN key, NAD, validation. Static IP
 
   ```bash
   # Check NAD exists
-  kubectl -n 5g get net-attach-def n4-net
+  sudo k3s kubectl -n 5g get net-attach-def n4-net
 
   # Check SMF PFCP port 8805
-  kubectl -n 5g exec deploy/smf -- bash -lc 'ss -unap | grep 8805 || echo no-pfcp'
+  sudo k3s kubectl -n 5g exec deploy/smf -- bash -lc 'ss -unap | grep 8805 || echo no-pfcp'
 
   # Check SMF can reach UPF-edge on N4
-  kubectl -n 5g exec deploy/smf -- bash -lc 'nc -zuvw1 10.204.0.101 8805 || echo pfcp-fail'
+  sudo k3s kubectl -n 5g exec deploy/smf -- bash -lc 'nc -zuvw1 10.204.0.101 8805 || echo pfcp-fail'
 
   # Check SMF can reach UPF-cloud on N4
-  kubectl -n 5g exec deploy/smf -- bash -lc 'nc -zuvw1 10.204.0.102 8805 || echo pfcp-fail'
+  sudo k3s kubectl -n 5g exec deploy/smf -- bash -lc 'nc -zuvw1 10.204.0.102 8805 || echo pfcp-fail'
 
   # Check N4 interface IPs
-  kubectl -n 5g exec deploy/smf -- ip -o -4 addr show dev n4 | awk '{print $4}' | cut -d/ -f1
+  sudo k3s kubectl -n 5g exec deploy/smf -- ip -o -4 addr show dev n4 | awk '{print $4}' | cut -d/ -f1
   # Expected: 10.204.0.100
 
   # Check SMF logs for PFCP activity
-  kubectl -n 5g logs deploy/smf -c smf --tail=200 | grep -i pfcp
+  sudo k3s kubectl -n 5g logs deploy/smf -c smf --tail=200 | grep -i pfcp
   ```
 
 ### N6e — UPF-edge ↔ MEC
@@ -136,13 +141,13 @@ For each interface: purpose, plan, bridge, VXLAN key, NAD, validation. Static IP
 
   ```bash
   # Check NAD exists in mec namespace
-  kubectl -n mec get net-attach-def n6-mec-net
+  sudo k3s kubectl -n mec get net-attach-def n6-mec-net
 
   # Check UPF-edge has N6 interface
-  kubectl -n 5g exec deploy/upf-edge -- ip -o -4 addr show dev n6 | awk '{print $4}' | cut -d/ -f1
+  sudo k3s kubectl -n 5g exec deploy/upf-edge -- ip -o -4 addr show dev n6 | awk '{print $4}' | cut -d/ -f1
 
   # Check MEC pod has N6 interface (if deployed)
-  kubectl -n mec get pod -l app=mec -o json | jq -r '.items[0].metadata.annotations["k8s.v1.cni.cncf.io/network-status"]' | jq '.'
+  sudo k3s kubectl -n mec get pod -l app=mec -o json | jq -r '.items[0].metadata.annotations["k8s.v1.cni.cncf.io/network-status"]' | jq '.'
   ```
 
 ### N6c — UPF-cloud ↔ DN
@@ -156,11 +161,20 @@ For each interface: purpose, plan, bridge, VXLAN key, NAD, validation. Static IP
 
   ```bash
   # Check NAD exists
-  kubectl -n 5g get net-attach-def n6-cld-net
+  sudo k3s kubectl -n 5g get net-attach-def n6-cld-net
 
   # Check UPF-cloud has N6 interface
-  kubectl -n 5g exec deploy/upf-cloud -- ip -o -4 addr show dev n6 | awk '{print $4}' | cut -d/ -f1
+  sudo k3s kubectl -n 5g exec deploy/upf-cloud -- ip -o -4 addr show dev n6 | awk '{print $4}' | cut -d/ -f1
   ```
+
+**Outbound Internet access (N6c)**:
+To allow traffic from `10.207.0.0/24` to reach external networks, the worker VM must have IP forwarding enabled and an outbound NAT rule. This repo's `Vagrantfile` applies these settings on the **worker** at boot/reload (iptables rules are not persistent by default).
+
+```bash
+# On the worker VM
+ssh worker "sysctl net.ipv4.ip_forward"
+ssh worker "sudo iptables -t nat -S POSTROUTING | grep 10.207.0.0/24 || true"
+```
 
 ### Future Interfaces (Placeholder)
 
@@ -262,7 +276,7 @@ ansible-playbook phases/02-kubernetes/playbook.yml -i inventory.ini
 
 ```bash
 # Check cluster nodes
-kubectl get nodes -o wide
+sudo k3s kubectl get nodes -o wide
 
 # Check k3s services
 ssh master "systemctl status k3s"
@@ -270,7 +284,7 @@ ssh worker "systemctl status k3s-agent"
 ssh edge "systemctl status k3s-agent"
 
 # Check Flannel is working
-kubectl get pods -n kube-system -l app=flannel
+sudo k3s kubectl get pods -n kube-system -l app=flannel
 ```
 
 ### Phase 3: KubeEdge Integration
@@ -292,13 +306,13 @@ ansible-playbook phases/03-kubeedge/playbook.yml -i inventory.ini
 
 ```bash
 # Check KubeEdge pods
-kubectl -n kubeedge get pods
+sudo k3s kubectl -n kubeedge get pods
 
 # Check edge node is registered
-kubectl get nodes -l node-type=edge
+sudo k3s kubectl get nodes -l node-type=edge
 
 # Check CloudCore logs
-kubectl -n kubeedge logs -l app=cloudcore --tail=100
+sudo k3s kubectl -n kubeedge logs -l app=cloudcore --tail=100
 
 # Check EdgeCore logs
 ssh edge "journalctl -u edgecore --tail=100"
@@ -330,10 +344,10 @@ sudo ovs-vsctl show
 ip -d link show | grep vxlan
 
 # Check Multus DaemonSet
-kubectl -n kube-system get ds kube-multus-ds
+sudo k3s kubectl -n kube-system get ds kube-multus-ds
 
 # Check NetworkAttachmentDefinitions
-kubectl get net-attach-def -A
+sudo k3s kubectl get net-attach-def -A
 ```
 
 ### Phase 5: 5G Core Network Functions
@@ -355,15 +369,15 @@ ansible-playbook phases/05-5g-core/playbook.yml -i inventory.ini
 
 ```bash
 # Check 5G Core deployments
-kubectl -n 5g get deploy,svc
+sudo k3s kubectl -n 5g get deploy,svc
 
 # Check all pods are running
-kubectl -n 5g get pods
+sudo k3s kubectl -n 5g get pods
 
 # Check static IPs are assigned
-kubectl -n 5g exec deploy/amf -- ip addr show dev n1
-kubectl -n 5g exec deploy/amf -- ip addr show dev n2
-kubectl -n 5g exec deploy/smf -- ip addr show dev n4
+sudo k3s kubectl -n 5g exec deploy/amf -- ip addr show dev n1
+sudo k3s kubectl -n 5g exec deploy/amf -- ip addr show dev n2
+sudo k3s kubectl -n 5g exec deploy/smf -- ip addr show dev n4
 ```
 
 ### Phase 6: UERANSIM & MEC
@@ -384,17 +398,17 @@ ansible-playbook phases/06-ueransim-mec/playbook.yml -i inventory.ini
 
 ```bash
 # Check UERANSIM pods
-kubectl -n 5g get pods -l app=gnb
-kubectl -n 5g get pods -l app=ue
+sudo k3s kubectl -n 5g get pods -l app=gnb
+sudo k3s kubectl -n 5g get pods -l app=ue
 
 # Check MEC pods
-kubectl -n mec get pods
+sudo k3s kubectl -n mec get pods
 
 # Check gNB logs
-kubectl -n 5g logs -l app=gnb --tail=100
+sudo k3s kubectl -n 5g logs -l app=gnb --tail=100
 
 # Check UE logs
-kubectl -n 5g logs -l app=ue --tail=100
+sudo k3s kubectl -n 5g logs -l app=ue --tail=100
 ```
 
 ## 5. Operations
@@ -431,29 +445,29 @@ To migrate UPF/MEC between cloud and edge:
 
 ```bash
 # Check current placement
-kubectl -n 5g get pods -o wide
+sudo k3s kubectl -n 5g get pods -o wide
 
 # Migrate UPF-edge to worker (cloud)
-kubectl -n 5g patch deployment upf-edge -p '{"spec":{"template":{"spec":{"nodeSelector":{"kubernetes.io/hostname":"worker"}}}}}'
+sudo k3s kubectl -n 5g patch deployment upf-edge -p '{"spec":{"template":{"spec":{"nodeSelector":{"kubernetes.io/hostname":"worker"}}}}}'
 
 # Migrate UPF-cloud to edge
-kubectl -n 5g patch deployment upf-cloud -p '{"spec":{"template":{"spec":{"nodeSelector":{"kubernetes.io/hostname":"edge"}}}}}'
+sudo k3s kubectl -n 5g patch deployment upf-cloud -p '{"spec":{"template":{"spec":{"nodeSelector":{"kubernetes.io/hostname":"edge"}}}}}'
 
 # Verify migration
-kubectl -n 5g get pods -o wide
+sudo k3s kubectl -n 5g get pods -o wide
 ```
 
 ### Restart Services
 
 ```bash
 # Restart specific deployment
-kubectl -n 5g rollout restart deployment/amf
+sudo k3s kubectl -n 5g rollout restart deployment/amf
 
 # Restart all 5G Core
-kubectl -n 5g rollout restart deployment/
+sudo k3s kubectl -n 5g rollout restart deployment/
 
 # Check rollout status
-kubectl -n 5g rollout status deployment/amf
+sudo k3s kubectl -n 5g rollout status deployment/amf
 ```
 
 ## 6. Troubleshooting
@@ -471,13 +485,13 @@ kubectl -n 5g rollout status deployment/amf
 
 ```bash
 # Check pod annotations
-kubectl -n 5g get pod <pod-name> -o json | jq '.metadata.annotations'
+sudo k3s kubectl -n 5g get pod <pod-name> -o json | jq '.metadata.annotations'
 
 # Check Multus DaemonSet
-kubectl -n kube-system get ds kube-multus-ds
+sudo k3s kubectl -n kube-system get ds kube-multus-ds
 
 # Check Multus logs
-kubectl -n kube-system logs -l app=multus --tail=100
+sudo k3s kubectl -n kube-system logs -l app=multus --tail=100
 ```
 
 **Solution:**
@@ -503,7 +517,7 @@ sudo ovs-vsctl show
 ip -d link show | grep vxlan
 
 # Check OVS DaemonSet logs
-kubectl -n kube-system logs -l app=ds-net-setup-worker --tail=100
+sudo k3s kubectl -n kube-system logs -l app=ds-net-setup-worker --tail=100
 ```
 
 **Solution:**
@@ -523,13 +537,13 @@ kubectl -n kube-system logs -l app=ds-net-setup-worker --tail=100
 
 ```bash
 # Check pod status
-kubectl -n 5g get pods
+sudo k3s kubectl -n 5g get pods
 
 # Check pod logs
-kubectl -n 5g logs <pod-name> --tail=100
+sudo k3s kubectl -n 5g logs <pod-name> --tail=100
 
 # Check pod events
-kubectl -n 5g describe pod <pod-name>
+sudo k3s kubectl -n 5g describe pod <pod-name>
 ```
 
 **Solution:**
@@ -549,13 +563,13 @@ kubectl -n 5g describe pod <pod-name>
 
 ```bash
 # Check edge node status
-kubectl get nodes -l node-type=edge
+sudo k3s kubectl get nodes -l node-type=edge
 
 # Check EdgeCore logs
 ssh edge "journalctl -u edgecore --tail=100"
 
 # Check CloudCore logs
-kubectl -n kubeedge logs -l app=cloudcore --tail=100
+sudo k3s kubectl -n kubeedge logs -l app=cloudcore --tail=100
 ```
 
 **Solution:**
@@ -570,16 +584,16 @@ kubectl -n kubeedge logs -l app=cloudcore --tail=100
 
 ```bash
 # Check all network interfaces
-kubectl -n 5g exec <pod-name> -- ip addr show
+sudo k3s kubectl -n 5g exec <pod-name> -- ip addr show
 
 # Check routing table
-kubectl -n 5g exec <pod-name> -- ip route show
+sudo k3s kubectl -n 5g exec <pod-name> -- ip route show
 
 # Test connectivity
-kubectl -n 5g exec <pod-name> -- ping -c 3 <target-ip>
+sudo k3s kubectl -n 5g exec <pod-name> -- ping -c 3 <target-ip>
 
 # Check port connectivity
-kubectl -n 5g exec <pod-name> -- nc -zv <target-ip> <port>
+sudo k3s kubectl -n 5g exec <pod-name> -- nc -zv <target-ip> <port>
 ```
 
 #### OVS Diagnostics
@@ -602,16 +616,16 @@ sudo ovs-ofctl dump-flows br-n3
 
 ```bash
 # Check node resources
-kubectl describe node <node-name>
+sudo k3s kubectl describe node <node-name>
 
 # Check pod events
-kubectl get events --sort-by=.metadata.creationTimestamp
+sudo k3s kubectl get events --sort-by=.metadata.creationTimestamp
 
 # Check service endpoints
-kubectl -n 5g get endpoints
+sudo k3s kubectl -n 5g get endpoints
 
 # Check network policies
-kubectl get networkpolicy -A
+sudo k3s kubectl get networkpolicy -A
 ```
 
 ## 7. Future Enhancements
@@ -650,16 +664,16 @@ kubectl get networkpolicy -A
 
 ```bash
 # Check cluster status
-kubectl get nodes -o wide
-kubectl get pods -A
+sudo k3s kubectl get nodes -o wide
+sudo k3s kubectl get pods -A
 
 # Check 5G Core
-kubectl -n 5g get deploy,svc
-kubectl -n 5g get pods
+sudo k3s kubectl -n 5g get deploy,svc
+sudo k3s kubectl -n 5g get pods
 
 # Check network interfaces
-kubectl -n 5g exec deploy/amf -- ip addr show
-kubectl -n 5g exec deploy/smf -- ip addr show
+sudo k3s kubectl -n 5g exec deploy/amf -- ip addr show
+sudo k3s kubectl -n 5g exec deploy/smf -- ip addr show
 
 # Check OVS bridges
 sudo ovs-vsctl show
@@ -668,7 +682,7 @@ sudo ovs-vsctl show
 ip -d link show | grep vxlan
 
 # Check Multus NADs
-kubectl get net-attach-def -A
+sudo k3s kubectl get net-attach-def -A
 ```
 
 ### Log Locations
@@ -679,16 +693,16 @@ journalctl -u k3s -f
 journalctl -u k3s-agent -f
 
 # KubeEdge logs
-kubectl -n kubeedge logs -l app=cloudcore -f
+sudo k3s kubectl -n kubeedge logs -l app=cloudcore -f
 ssh edge "journalctl -u edgecore -f"
 
 # 5G Core logs
-kubectl -n 5g logs deploy/amf -f
-kubectl -n 5g logs deploy/smf -f
-kubectl -n 5g logs deploy/upf-edge -f
+sudo k3s kubectl -n 5g logs deploy/amf -f
+sudo k3s kubectl -n 5g logs deploy/smf -f
+sudo k3s kubectl -n 5g logs deploy/upf-edge -f
 
 # OVS logs
-kubectl -n kube-system logs -l app=ds-net-setup-worker -f
+sudo k3s kubectl -n kube-system logs -l app=ds-net-setup-worker -f
 ```
 
 ### Configuration Files
@@ -741,8 +755,8 @@ ansible-playbook phases/02-kubernetes/playbook.yml
 Validate:
 
 ```bash
-kubectl get nodes -o wide
-kubectl get pods -n kube-system
+sudo k3s kubectl get nodes -o wide
+sudo k3s kubectl get pods -n kube-system
 journalctl -u k3s --no-pager | tail -200
 journalctl -u k3s-agent --no-pager | tail -200
 ```
@@ -758,9 +772,9 @@ ansible-playbook phases/03-kubeedge/playbook.yml
 Validate:
 
 ```bash
-kubectl -n kubeedge get pods -o wide
-kubectl get nodes -o wide | grep edge
-kubectl -n kubeedge logs -l app=cloudcore --tail=200
+sudo k3s kubectl -n kubeedge get pods -o wide
+sudo k3s kubectl get nodes -o wide | grep edge
+sudo k3s kubectl -n kubeedge logs -l app=cloudcore --tail=200
 ```
 
 ### Phase 4 — Overlay (OVS + Multus)
@@ -774,11 +788,11 @@ ansible-playbook phases/04-overlay-network/playbook.yml
 Validate:
 
 ```bash
-kubectl -n kube-system get ds | grep -E "ds-net-setup|kube-multus-ds"
-kubectl get network-attachment-definitions -A
-kubectl -n kube-system logs ds/kube-multus-ds --tail=200 || true
-kubectl -n kube-system logs -l app=ds-net-setup-worker --tail=200 || true
-kubectl -n kube-system logs -l app=ds-net-setup-edge --tail=200 || true
+sudo k3s kubectl -n kube-system get ds | grep -E "ds-net-setup|kube-multus-ds"
+sudo k3s kubectl get network-attachment-definitions -A
+sudo k3s kubectl -n kube-system logs ds/kube-multus-ds --tail=200 || true
+sudo k3s kubectl -n kube-system logs -l app=ds-net-setup-worker --tail=200 || true
+sudo k3s kubectl -n kube-system logs -l app=ds-net-setup-edge --tail=200 || true
 ```
 
 Node-level checks (on worker/edge):
@@ -799,26 +813,26 @@ ansible-playbook phases/05-5g-core/playbook.yml
 Validate deployments:
 
 ```bash
-kubectl -n 5g get deploy,svc
+sudo k3s kubectl -n 5g get deploy,svc
 for d in mongodb nrf amf smf upf-edge upf-cloud udm udr pcf bsf nssf ausf; do
-  kubectl -n 5g rollout status deploy/$d --timeout=60s || true
+  sudo k3s kubectl -n 5g rollout status deploy/$d --timeout=60s || true
 done
 ```
 
 Targeted logs:
 
 ```bash
-kubectl -n 5g logs deploy/smf -c smf --tail=200 | head
-kubectl -n 5g logs deploy/amf -c amf --tail=200 | head
-kubectl -n 5g logs deploy/upf-edge -c upf --tail=200 | head
+sudo k3s kubectl -n 5g logs deploy/smf -c smf --tail=200 | head
+sudo k3s kubectl -n 5g logs deploy/amf -c amf --tail=200 | head
+sudo k3s kubectl -n 5g logs deploy/upf-edge -c upf --tail=200 | head
 ```
 
 PFCP/NGAP/GTP-U quick checks:
 
 ```bash
-kubectl -n 5g exec deploy/smf -- bash -lc 'nc -zuvw1 10.204.0.101 8805 || ss -unap | grep 8805 || echo pfcp-fail'
-kubectl -n 5g exec deploy/amf -- bash -lc 'ss -S -na | grep 38412 || echo no-sctp'
-kubectl -n 5g exec deploy/upf-edge -- bash -lc 'ss -unap | grep 2152 || echo no-gtpu'
+sudo k3s kubectl -n 5g exec deploy/smf -- bash -lc 'nc -zuvw1 10.204.0.101 8805 || ss -unap | grep 8805 || echo pfcp-fail'
+sudo k3s kubectl -n 5g exec deploy/amf -- bash -lc 'ss -S -na | grep 38412 || echo no-sctp'
+sudo k3s kubectl -n 5g exec deploy/upf-edge -- bash -lc 'ss -unap | grep 2152 || echo no-gtpu'
 ```
 
 ### Phase 6 — UERANSIM & MEC
@@ -832,9 +846,9 @@ ansible-playbook phases/06-ueransim-mec/playbook.yml
 Validate:
 
 ```bash
-kubectl -n 5g get pods -l app=gnb
-kubectl -n 5g get pods -l app=ue
-kubectl -n 5g logs deploy/ue -c ue -f
+sudo k3s kubectl -n 5g get pods -l app=gnb
+sudo k3s kubectl -n 5g get pods -l app=ue
+sudo k3s kubectl -n 5g logs deploy/ue -c ue -f
 ```
 
 ## 4. Operations
@@ -843,17 +857,17 @@ kubectl -n 5g logs deploy/ue -c ue -f
 
 ```bash
 # Move UPF-edge (example) to master or back to edge
-kubectl patch deployment upf-edge -n 5g --type='json' -p='[
+sudo k3s kubectl patch deployment upf-edge -n 5g --type='json' -p='[
   {"op":"add","path":"/spec/template/spec/nodeSelector","value":{"kubernetes.io/hostname":"edge"}}
 ]'
-kubectl -n 5g rollout status deploy/upf-edge --timeout=120s
+sudo k3s kubectl -n 5g rollout status deploy/upf-edge --timeout=120s
 ```
 
 ### Safe restarts and rollouts
 
 ```bash
-kubectl -n 5g rollout restart deploy/smf
-kubectl -n 5g rollout status deploy/smf --timeout=120s
+sudo k3s kubectl -n 5g rollout restart deploy/smf
+sudo k3s kubectl -n 5g rollout status deploy/smf --timeout=120s
 ```
 
 ## 5. Troubleshooting Catalog
@@ -861,31 +875,31 @@ kubectl -n 5g rollout status deploy/smf --timeout=120s
 ### Multus interface missing on pod
 
 ```bash
-kubectl -n 5g get pod <pod> -o json | jq -r '.metadata.annotations["k8s.v1.cni.cncf.io/network-status"]' | jq '.'
-kubectl -n 5g exec <pod> -- ip link show
-kubectl -n kube-system logs ds/kube-multus-ds --tail=300
+sudo k3s kubectl -n 5g get pod <pod> -o json | jq -r '.metadata.annotations["k8s.v1.cni.cncf.io/network-status"]' | jq '.'
+sudo k3s kubectl -n 5g exec <pod> -- ip link show
+sudo k3s kubectl -n kube-system logs ds/kube-multus-ds --tail=300
 ```
 
 ### PFCP not established (SMF↔UPF)
 
 ```bash
-kubectl -n 5g exec deploy/smf -- bash -lc 'nc -zuvw1 10.204.0.101 8805 || ss -unap | grep 8805 || echo pfcp-fail'
-kubectl -n 5g logs deploy/smf -c smf --tail=300
-kubectl -n 5g logs deploy/upf-edge -c upf --tail=300
+sudo k3s kubectl -n 5g exec deploy/smf -- bash -lc 'nc -zuvw1 10.204.0.101 8805 || ss -unap | grep 8805 || echo pfcp-fail'
+sudo k3s kubectl -n 5g logs deploy/smf -c smf --tail=300
+sudo k3s kubectl -n 5g logs deploy/upf-edge -c upf --tail=300
 ```
 
 ### NGAP not established (gNB↔AMF)
 
 ```bash
-kubectl -n 5g exec deploy/amf -- bash -lc 'ss -S -na | grep 38412 || echo no-sctp'
-kubectl -n 5g logs deploy/amf -c amf --tail=300
+sudo k3s kubectl -n 5g exec deploy/amf -- bash -lc 'ss -S -na | grep 38412 || echo no-sctp'
+sudo k3s kubectl -n 5g logs deploy/amf -c amf --tail=300
 ```
 
 ### VXLAN/OVS anomalies
 
 ```bash
-kubectl -n kube-system logs -l app=ds-net-setup-worker --tail=200
-kubectl -n kube-system logs -l app=ds-net-setup-edge --tail=200
+sudo k3s kubectl -n kube-system logs -l app=ds-net-setup-worker --tail=200
+sudo k3s kubectl -n kube-system logs -l app=ds-net-setup-edge --tail=200
 sudo ovs-vsctl show
 ip -d link show | grep -A2 vxlan-
 ```
@@ -1061,23 +1075,23 @@ n9_interface_regex: ^(n9|net[0-9]+)$
 
 ```bash
 # Test VXLAN tunnel performance
-kubectl -n 5g exec deploy/gnb -- iperf3 -c 10.203.0.100 -t 30
+sudo k3s kubectl -n 5g exec deploy/gnb -- iperf3 -c 10.203.0.100 -t 30
 
 # Test with different packet sizes
-kubectl -n 5g exec deploy/gnb -- ping -c 100 -s 1472 -I n3 10.203.0.100
+sudo k3s kubectl -n 5g exec deploy/gnb -- ping -c 100 -s 1472 -I n3 10.203.0.100
 
 # Test UDP throughput
-kubectl -n 5g exec deploy/gnb -- iperf3 -u -c 10.203.0.100 -b 100M -t 30
+sudo k3s kubectl -n 5g exec deploy/gnb -- iperf3 -u -c 10.203.0.100 -b 100M -t 30
 ```
 
 #### 5G Core Performance
 
 ```bash
 # Test PFCP message exchange
-kubectl -n 5g exec deploy/smf -- bash -c 'for i in {1..100}; do nc -zuvw1 10.204.0.101 8805 && echo "Success $i" || echo "Failed $i"; sleep 0.1; done'
+sudo k3s kubectl -n 5g exec deploy/smf -- bash -c 'for i in {1..100}; do nc -zuvw1 10.204.0.101 8805 && echo "Success $i" || echo "Failed $i"; sleep 0.1; done'
 
 # Test NGAP message exchange
-kubectl -n 5g exec deploy/gnb -- bash -c 'for i in {1..100}; do nc -zuvw1 10.202.0.100 38412 && echo "Success $i" || echo "Failed $i"; sleep 0.1; done'
+sudo k3s kubectl -n 5g exec deploy/gnb -- bash -c 'for i in {1..100}; do nc -zuvw1 10.202.0.100 38412 && echo "Success $i" || echo "Failed $i"; sleep 0.1; done'
 ```
 
 ### Monitoring & Observability
@@ -1086,26 +1100,26 @@ kubectl -n 5g exec deploy/gnb -- bash -c 'for i in {1..100}; do nc -zuvw1 10.202
 
 ```bash
 # Monitor pod resource usage
-kubectl top pods -n 5g
+sudo k3s kubectl top pods -n 5g
 
 # Monitor node resource usage
-kubectl top nodes
+sudo k3s kubectl top nodes
 
 # Monitor network interfaces
-watch -n 1 'kubectl -n 5g exec deploy/amf -- ip addr show | grep -E "n1|n2"'
+watch -n 1 'sudo k3s kubectl -n 5g exec deploy/amf -- ip addr show | grep -E "n1|n2"'
 ```
 
 #### Log Analysis
 
 ```bash
 # Real-time log monitoring
-kubectl -n 5g logs deploy/amf -c amf -f | grep -E "ERROR|WARN|PFCP|NGAP"
+sudo k3s kubectl -n 5g logs deploy/amf -c amf -f | grep -E "ERROR|WARN|PFCP|NGAP"
 
 # Log aggregation
-kubectl -n 5g logs deploy/smf -c smf --tail=1000 | grep -i pfcp | tail -20
+sudo k3s kubectl -n 5g logs deploy/smf -c smf --tail=1000 | grep -i pfcp | tail -20
 
 # Error pattern analysis
-kubectl -n 5g logs deploy/upf-edge -c upf --tail=1000 | grep -E "error|fail|timeout" | sort | uniq -c
+sudo k3s kubectl -n 5g logs deploy/upf-edge -c upf --tail=1000 | grep -E "error|fail|timeout" | sort | uniq -c
 ```
 
 ## 9. Advanced Configuration
@@ -1171,10 +1185,10 @@ sudo tcpdump -i br-n3 -n port 8805
 
 ```bash
 # Check pod security context
-kubectl -n 5g get pod -l app=amf -o json | jq '.spec.securityContext'
+sudo k3s kubectl -n 5g get pod -l app=amf -o json | jq '.spec.securityContext'
 
 # Check container capabilities
-kubectl -n 5g get pod -l app=amf -o json | jq '.spec.containers[0].securityContext.capabilities'
+sudo k3s kubectl -n 5g get pod -l app=amf -o json | jq '.spec.containers[0].securityContext.capabilities'
 ```
 
 ### Backup & Recovery
@@ -1186,7 +1200,7 @@ kubectl -n 5g get pod -l app=amf -o json | jq '.spec.containers[0].securityConte
 tar -czf ansible-config-backup.tar.gz ansible/
 
 # Backup Kubernetes manifests
-kubectl get all -A -o yaml > k8s-manifests-backup.yaml
+sudo k3s kubectl get all -A -o yaml > k8s-manifests-backup.yaml
 
 # Backup OVS configuration
 sudo ovs-vsctl show > ovs-config-backup.txt
@@ -1199,7 +1213,7 @@ sudo ovs-vsctl show > ovs-config-backup.txt
 tar -xzf ansible-config-backup.tar.gz
 
 # Restore Kubernetes state
-kubectl apply -f k8s-manifests-backup.yaml
+sudo k3s kubectl apply -f k8s-manifests-backup.yaml
 
 # Restore OVS configuration
 # (Manual process based on ovs-config-backup.txt)

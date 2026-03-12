@@ -1,0 +1,215 @@
+---
+- name: Validate dashboard mode
+  ansible.builtin.assert:
+    that:
+      - dashboard_mode in ['prod', 'dev']
+    fail_msg: "Invalid dashboard_mode='{{ dashboard_mode }}'. Allowed values: prod, dev."
+
+- name: Ensure system prerequisites
+  become: true
+  ansible.builtin.apt:
+    name:
+      - rsync
+      - python3-venv
+      - python3-pip
+      - curl
+      - ca-certificates
+      - gnupg
+    state: present
+    update_cache: true
+
+- name: Add NodeSource 20.x repository
+  become: true
+  ansible.builtin.shell: |
+    set -euo pipefail
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+  args:
+    executable: /bin/bash
+    creates: /etc/apt/sources.list.d/nodesource.list
+
+- name: Install Node.js 20
+  become: true
+  ansible.builtin.apt:
+    name: nodejs
+    state: present
+    update_cache: true
+
+- name: Fetch kubeconfig from master for dashboard backend
+  ansible.builtin.slurp:
+    src: "{{ kubeconfig_path }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  register: _dashboard_kubeconfig
+
+- name: Write kubeconfig on ansible VM (rewrite server to master IP)
+  ansible.builtin.copy:
+    dest: "{{ kubeconfig_path }}"
+    mode: "0600"
+    content: "{{ _dashboard_kubeconfig.content | b64decode | regex_replace('https://127\\.0\\.0\\.1:6443', 'https://' + hostvars[groups['masters'][0]]['ansible_host'] + ':6443') }}"
+
+- name: Stop dashboard services before redeployment
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+  loop:
+    - "{{ dashboard_backend_service_name }}"
+    - "{{ dashboard_frontend_service_name }}"
+  failed_when: false
+
+- name: Ensure dashboard work directory exists
+  ansible.builtin.file:
+    path: "{{ dashboard_work_dir }}"
+    state: directory
+    mode: "0755"
+  when: dashboard_mode == 'prod'
+
+- name: Sync dashboard sources from ansible-ro to writable workspace
+  ansible.builtin.command:
+    cmd: >-
+      rsync -a --delete
+      --exclude node_modules
+      --exclude venv
+      "{{ dashboard_source_dir }}/"
+      "{{ dashboard_work_dir }}/"
+  changed_when: true
+  when: dashboard_mode == 'prod'
+
+- name: Ensure dashboard launcher scripts are executable
+  ansible.builtin.file:
+    path: "{{ item }}"
+    mode: "0755"
+  loop:
+    - "{{ dashboard_work_dir }}/run-backend.sh"
+    - "{{ dashboard_work_dir }}/run-frontend.sh"
+  when: dashboard_mode == 'prod'
+
+- name: Ensure shared backend venv parent exists
+  ansible.builtin.file:
+    path: "{{ dashboard_backend_venv | dirname }}"
+    state: directory
+    mode: "0755"
+
+- name: Ensure backend Python venv exists
+  ansible.builtin.command:
+    cmd: "python3 -m venv {{ dashboard_backend_venv }}"
+    creates: "{{ dashboard_backend_venv }}/bin/activate"
+
+- name: Install backend dependencies
+  ansible.builtin.pip:
+    requirements: "{{ dashboard_backend_dir }}/requirements.txt"
+    virtualenv: "{{ dashboard_backend_venv }}"
+
+- name: Create backend runtime environment file
+  ansible.builtin.copy:
+    dest: "{{ dashboard_backend_dir }}/.env.runtime"
+    mode: "0600"
+    content: |
+      DASHBOARD_ADMIN_TOKEN={{ dashboard_admin_token }}
+      DASHBOARD_BACKEND_SERVICE_NAME={{ dashboard_backend_service_name }}
+      DASHBOARD_ALLOW_CONFIGMAP_WRITE={{ dashboard_allow_configmap_write | bool | lower }}
+      DASHBOARD_AUDIT_LOG_PATH={{ dashboard_backend_dir }}/logs/audit.log
+
+- name: Create frontend environment file
+  ansible.builtin.copy:
+    dest: "{{ dashboard_frontend_dir }}/.env"
+    mode: "0644"
+    content: |
+      VITE_API_BASE=http://{{ dashboard_bind_host }}:{{ dashboard_backend_port }}
+
+- name: Install frontend dependencies
+  ansible.builtin.command:
+    cmd: npm install
+    chdir: "{{ dashboard_frontend_dir }}"
+  changed_when: true
+
+- name: Build frontend bundle with backend URL (prod mode)
+  ansible.builtin.command:
+    cmd: npm run build
+    chdir: "{{ dashboard_frontend_dir }}"
+  environment:
+    VITE_API_BASE: "http://{{ dashboard_bind_host }}:{{ dashboard_backend_port }}"
+  changed_when: true
+  when: dashboard_mode == 'prod'
+
+- name: Install backend systemd service
+  become: true
+  ansible.builtin.template:
+    src: dashboard-backend.service.j2
+    dest: "/etc/systemd/system/{{ dashboard_backend_service_name }}.service"
+    mode: "0644"
+  register: backend_service_unit
+
+- name: Install frontend systemd service
+  become: true
+  ansible.builtin.template:
+    src: dashboard-frontend.service.j2
+    dest: "/etc/systemd/system/{{ dashboard_frontend_service_name }}.service"
+    mode: "0644"
+  register: frontend_service_unit
+
+- name: Reload systemd after unit changes
+  become: true
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: backend_service_unit.changed or frontend_service_unit.changed
+
+- name: Allow dashboard user to restart backend via systemctl (for in-app recovery)
+  become: true
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/dashboard-backend-restart"
+    mode: "0440"
+    content: |
+      {{ dashboard_service_user }} ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart {{ dashboard_backend_service_name }}
+
+- name: Enable and start dashboard backend service
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ dashboard_backend_service_name }}"
+    enabled: true
+    state: started
+
+- name: Enable and start dashboard frontend service
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ dashboard_frontend_service_name }}"
+    enabled: true
+    state: started
+
+- name: Ensure dashboard services are healthy
+  ansible.builtin.command:
+    cmd: "systemctl is-active {{ item }}"
+  become: true
+  register: dashboard_service_status
+  changed_when: false
+  failed_when: false
+  until: dashboard_service_status.stdout | trim == "active"
+  retries: 20
+  delay: 2
+  loop:
+    - "{{ dashboard_backend_service_name }}"
+    - "{{ dashboard_frontend_service_name }}"
+
+- name: Fail with explicit service status if not active
+  ansible.builtin.fail:
+    msg: >-
+      Service {{ item.item }} is not active after startup wait.
+      state={{ item.stdout | trim }}
+  when: (item.stdout | trim) != "active"
+  loop: "{{ dashboard_service_status.results }}"
+
+- name: Dashboard setup summary
+  ansible.builtin.debug:
+    msg: "Dashboard phase prepared and started successfully. mode={{ dashboard_mode }} source={{ dashboard_runtime_dir }}"
+
+- name: Dashboard endpoints
+  ansible.builtin.debug:
+    msg:
+      - "UI: http://{{ dashboard_bind_host }}:{{ dashboard_frontend_port }}"
+      - "API: http://{{ dashboard_bind_host }}:{{ dashboard_backend_port }}"
+      - "API docs: http://{{ dashboard_bind_host }}:{{ dashboard_backend_port }}/docs"
+
+- name: Dashboard service commands
+  ansible.builtin.debug:
+    msg:
+      - "sudo systemctl status {{ dashboard_backend_service_name }}"
+      - "sudo systemctl status {{ dashboard_frontend_service_name }}"

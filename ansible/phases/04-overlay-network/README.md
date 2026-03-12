@@ -111,6 +111,8 @@ Creates 6 NADs for 5G interfaces:
 - `mec/n6e-net` (edge MEC)
 
 Each NAD specifies OVS bridge, Whereabouts IPAM range, and MTU.
+For AMF-facing networks (`n1-net`, `n2-net`), the AMF static IPs are also added to
+Whereabouts `exclude` so dynamic allocation cannot claim the same addresses.
 
 #### 6. Per-Cell NADs (Phase 4 Extension)
 

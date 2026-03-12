@@ -23,6 +23,14 @@ gc_once() {
         continue
       fi
 
+      # Skip OVS patch ports (internal cross-bridge links, no kernel iface)
+      local ptype
+      ptype=$(ovs-vsctl get interface "$p" type 2>/dev/null || echo "")
+      if [[ "$ptype" == "patch" ]]; then
+        echo "    ✅ Skipping patch port $p"
+        continue
+      fi
+
       # Check if the port still exists in the kernel
       if ip link show "$p" >/dev/null 2>&1; then
         echo "    ✅ Port $p exists in kernel, keeping"
@@ -42,6 +50,12 @@ gc_once() {
       $1=="error" && $3!="[]" {gsub(/\"/,"",n); print n}
     ' | while read -r ifn; do
       if [ -n "$ifn" ]; then
+        local etype
+        etype=$(ovs-vsctl get interface "$ifn" type 2>/dev/null || echo "")
+        if [[ "$etype" == "patch" ]]; then
+          echo "    ⏭️  Skipping patch interface $ifn (transient error)"
+          continue
+        fi
         echo "    🗑️ Removing interface $ifn with error state"
         ovs-vsctl --if-exists del-port "$ifn" || true
         echo "    ✅ Removed $ifn"

@@ -92,7 +92,7 @@ cd 5g-k3s-kubedge-testbed
 vagrant up
 
 # Verify
-vagrant ssh master -c "kubectl get nodes"
+vagrant ssh master -c "sudo k3s kubectl get nodes"
 ```
 
 ### 2. Make Changes

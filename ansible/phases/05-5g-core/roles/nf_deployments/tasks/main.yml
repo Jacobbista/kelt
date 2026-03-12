@@ -71,6 +71,33 @@
   when: physical_ran_enabled | default(false) | bool
   run_once: true
 
+# Pass PHYSICAL_RAN_SUBNET to UPF-Cloud so its init script can add a
+# return route to the gNB subnet through the worker's br-n3 gateway.
+- name: Init UPF physical RAN env list
+  set_fact:
+    network_functions_with_upf_ran: []
+  when: physical_ran_enabled | default(false) | bool
+  run_once: true
+
+- name: Add PHYSICAL_RAN_SUBNET env to UPF-Cloud
+  set_fact:
+    network_functions_with_upf_ran: >-
+      {{ network_functions_with_upf_ran +
+         [item | combine({'extra_env': item.extra_env + [{'name': 'PHYSICAL_RAN_SUBNET', 'value': physical_ran_subnet}]})]
+         if item.name == 'upf-cloud'
+         else network_functions_with_upf_ran + [item] }}
+  loop: "{{ network_functions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: physical_ran_enabled | default(false) | bool
+  run_once: true
+
+- name: Replace network_functions with UPF RAN version
+  set_fact:
+    network_functions: "{{ network_functions_with_upf_ran }}"
+  when: physical_ran_enabled | default(false) | bool
+  run_once: true
+
 - name: Deploy MongoDB
   kubernetes.core.k8s:
     state: present
