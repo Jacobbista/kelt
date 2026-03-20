@@ -34,8 +34,8 @@
     network_functions: "{{ network_functions_updated }}"
   run_once: true
 
-# Same guard as multus_install / dashboard: do not attach n2-physical to AMF without br-ran.
-- name: Physical RAN preflight — br-ran must exist on worker
+# Same guard as multus_install / dashboard: only attach n2-physical when br-ran exists.
+- name: Physical RAN preflight — detect br-ran on worker
   ansible.builtin.include_tasks: "{{ playbook_dir }}/../04-overlay-network/tasks/physical_ran_br_preflight.yml"
   when:
     - physical_ran_enabled | default(false) | bool
@@ -51,13 +51,17 @@
       - name: "n2-physical"
         interface: "n2phy"
         ips: ["{{ amf_physical_ran_ip }}/24"]
-  when: physical_ran_enabled | default(false) | bool
+  when:
+    - physical_ran_enabled | default(false) | bool
+    - (physical_ran_skip_bridge_check | default(false) | bool) or (physical_ran_bridge_available | default(false) | bool)
   run_once: true
 
 - name: Update network_functions with AMF physical RAN interface
   set_fact:
     network_functions_with_physical: []
-  when: physical_ran_enabled | default(false) | bool
+  when:
+    - physical_ran_enabled | default(false) | bool
+    - (physical_ran_skip_bridge_check | default(false) | bool) or (physical_ran_bridge_available | default(false) | bool)
   run_once: true
 
 - name: Add physical RAN interface to AMF networks
@@ -70,13 +74,17 @@
   loop: "{{ network_functions }}"
   loop_control:
     label: "{{ item.name }}"
-  when: physical_ran_enabled | default(false) | bool
+  when:
+    - physical_ran_enabled | default(false) | bool
+    - (physical_ran_skip_bridge_check | default(false) | bool) or (physical_ran_bridge_available | default(false) | bool)
   run_once: true
 
 - name: Replace network_functions with physical RAN version
   set_fact:
     network_functions: "{{ network_functions_with_physical }}"
-  when: physical_ran_enabled | default(false) | bool
+  when:
+    - physical_ran_enabled | default(false) | bool
+    - (physical_ran_skip_bridge_check | default(false) | bool) or (physical_ran_bridge_available | default(false) | bool)
   run_once: true
 
 # Pass PHYSICAL_RAN_SUBNET to UPF-Cloud so its init script can add a
@@ -84,7 +92,9 @@
 - name: Init UPF physical RAN env list
   set_fact:
     network_functions_with_upf_ran: []
-  when: physical_ran_enabled | default(false) | bool
+  when:
+    - physical_ran_enabled | default(false) | bool
+    - (physical_ran_skip_bridge_check | default(false) | bool) or (physical_ran_bridge_available | default(false) | bool)
   run_once: true
 
 - name: Add PHYSICAL_RAN_SUBNET env to UPF-Cloud
@@ -97,13 +107,17 @@
   loop: "{{ network_functions }}"
   loop_control:
     label: "{{ item.name }}"
-  when: physical_ran_enabled | default(false) | bool
+  when:
+    - physical_ran_enabled | default(false) | bool
+    - (physical_ran_skip_bridge_check | default(false) | bool) or (physical_ran_bridge_available | default(false) | bool)
   run_once: true
 
 - name: Replace network_functions with UPF RAN version
   set_fact:
     network_functions: "{{ network_functions_with_upf_ran }}"
-  when: physical_ran_enabled | default(false) | bool
+  when:
+    - physical_ran_enabled | default(false) | bool
+    - (physical_ran_skip_bridge_check | default(false) | bool) or (physical_ran_bridge_available | default(false) | bool)
   run_once: true
 
 - name: Deploy MongoDB

@@ -738,7 +738,7 @@
 # Preflight matches dashboard RanService.enable(): require br-ran before NAD creation.
 # ==============================================================
 
-- name: Physical RAN preflight — br-ran must exist on worker
+- name: Physical RAN preflight — detect br-ran on worker
   ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/physical_ran_br_preflight.yml"
   when:
     - physical_ran_enabled | default(false) | bool
@@ -758,9 +758,11 @@
         config: "{{ {'cniVersion': '0.3.1', 'type': (use_ovs_cni | ternary('ovs','bridge')), 'bridge': 'br-ran', 'ipam': {'type': 'static'}} | to_json }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
-  when: physical_ran_enabled | default(false) | bool
+  when:
+    - physical_ran_enabled | default(false) | bool
+    - (physical_ran_skip_bridge_check | default(false) | bool) or (physical_ran_bridge_available | default(false) | bool)
 
-- name: Delete Physical RAN NAD (n2-physical) when disabling
+- name: Delete Physical RAN NAD (n2-physical) when disabling or bridge is unavailable
   kubernetes.core.k8s:
     state: absent
     name: n2-physical
@@ -770,4 +772,12 @@
     kubeconfig: "/home/vagrant/kubeconfig"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
-  when: not (physical_ran_enabled | default(false) | bool)
+  when: >-
+    not (physical_ran_enabled | default(false) | bool)
+    or (
+      (physical_ran_enabled | default(false) | bool)
+      and not (
+        (physical_ran_skip_bridge_check | default(false) | bool)
+        or (physical_ran_bridge_available | default(false) | bool)
+      )
+    )

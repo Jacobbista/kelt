@@ -133,6 +133,8 @@ Setting `server` automatically disables edge. Setting `laptop` automatically ena
 
 `ran <nic>` selects a host NIC to bridge into the testbed for physical gNB connectivity. In interactive mode, available NICs are listed for selection. `ran disable` turns it off.
 
+When `PHYSICAL_RAN_ENABLED=true` and `PHYSICAL_RAN_BRIDGE` differs from the NIC currently applied to the worker VM, `testbed-config provision` reloads the worker before running Ansible so the bridged adapter is actually attached.
+
 ---
 
 ## Configuration File

@@ -5,6 +5,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${SCRIPT_DIR}/.testbed.env"
+APPLIED_RAN_FILE="${SCRIPT_DIR}/.physical_ran_bridge_applied"
 
 # ─── Defaults ──────────────────────────────────────────────────────────
 DEFAULT_PROFILE="laptop"
@@ -48,6 +49,21 @@ PHYSICAL_RAN_BRIDGE=${PHYSICAL_RAN_BRIDGE}
 DASHBOARD_MODE=${DASHBOARD_MODE}
 EOF
   echo "Configuration saved to .testbed.env"
+}
+
+read_applied_ran_bridge() {
+  if [[ -f "$APPLIED_RAN_FILE" ]]; then
+    tr -d '\n' < "$APPLIED_RAN_FILE"
+  fi
+}
+
+worker_needs_ran_reload() {
+  [[ "$PHYSICAL_RAN_ENABLED" == "true" ]] || return 1
+  [[ -n "${PHYSICAL_RAN_BRIDGE}" ]] || return 1
+
+  local applied
+  applied="$(read_applied_ran_bridge)"
+  [[ "$applied" != "$PHYSICAL_RAN_BRIDGE" ]]
 }
 
 # ─── Hardware detection ────────────────────────────────────────────────
@@ -244,6 +260,10 @@ do_provision() {
   (
     export TESTBED_PROFILE EDGE_ENABLED DEPLOY_MODE PHYSICAL_RAN_ENABLED PHYSICAL_RAN_BRIDGE DASHBOARD_MODE
     cd "$SCRIPT_DIR"
+    if worker_needs_ran_reload; then
+      echo "Applying PHYSICAL_RAN_BRIDGE=${PHYSICAL_RAN_BRIDGE} to worker via vagrant reload..."
+      vagrant reload worker
+    fi
     vagrant provision ansible --provision-with playbook
   )
 }
