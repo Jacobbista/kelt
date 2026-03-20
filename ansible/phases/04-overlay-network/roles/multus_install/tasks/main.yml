@@ -735,7 +735,14 @@
 # Creates a dedicated interface on br-ran for AMF to receive NGAP/SCTP from physical gNB.
 # Uses the same OVS CNI type as other NADs — the physical interface is already
 # enslaved to br-ran by the OVS setup, so macvlan on it would fail.
+# Preflight matches dashboard RanService.enable(): require br-ran before NAD creation.
 # ==============================================================
+
+- name: Physical RAN preflight — br-ran must exist on worker
+  ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/physical_ran_br_preflight.yml"
+  when:
+    - physical_ran_enabled | default(false) | bool
+    - not (physical_ran_skip_bridge_check | default(false) | bool)
 
 - name: Create Physical RAN NAD (n2-physical)
   kubernetes.core.k8s:

@@ -34,6 +34,14 @@
     network_functions: "{{ network_functions_updated }}"
   run_once: true
 
+# Same guard as multus_install / dashboard: do not attach n2-physical to AMF without br-ran.
+- name: Physical RAN preflight — br-ran must exist on worker
+  ansible.builtin.include_tasks: "{{ playbook_dir }}/../04-overlay-network/tasks/physical_ran_br_preflight.yml"
+  when:
+    - physical_ran_enabled | default(false) | bool
+    - not (physical_ran_skip_bridge_check | default(false) | bool)
+  run_once: true
+
 # Add physical RAN interface to AMF (for femtocell/small cell connectivity)
 # This gives AMF a dedicated macvlan interface on the physical RAN network
 # so physical gNBs can connect via NGAP/SCTP

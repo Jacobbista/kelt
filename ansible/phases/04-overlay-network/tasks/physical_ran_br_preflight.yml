@@ -1,0 +1,28 @@
+---
+# Shared preflight: same guard as dashboard RanService.enable() — do not create
+# n2-physical / AMF attachment if br-ran does not exist on the worker.
+# See docs/deployment/physical-ran.md
+
+- name: Check OVS br-ran exists on worker node
+  ansible.builtin.command: ovs-vsctl br-exists br-ran
+  delegate_to: "{{ groups['workers'][0] }}"
+  become: true
+  register: physical_ran_br_check
+  failed_when: false
+  changed_when: false
+  run_once: true
+
+- name: Fail when physical RAN is enabled but br-ran is missing on worker
+  ansible.builtin.fail:
+    msg: |
+      physical_ran_enabled is true but OVS bridge "br-ran" was not found on the worker.
+      The n2-physical NetworkAttachmentDefinition attaches pods to br-ran; without it, AMF fails with Multus errors (e.g. failed to find bridge br-ran).
+
+      Fix one of:
+        1) Attach a RAN-facing NIC to the worker VM, then re-run the overlay phase so the OVS DaemonSet can create br-ran.
+           Example: PHYSICAL_RAN_ENABLED=true PHYSICAL_RAN_BRIDGE=<host_nic> vagrant reload worker
+           (see docs/deployment/physical-ran.md)
+        2) Deploy with physical_ran_enabled=false and enable physical RAN later from the dashboard (after the worker has the NIC).
+        3) Advanced only: -e physical_ran_skip_bridge_check=true (you will get broken pods until br-ran exists).
+  when: physical_ran_br_check.rc != 0
+  run_once: true

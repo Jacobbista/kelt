@@ -114,6 +114,8 @@ n6m_interface_regex: "^(n6m|net[0-9]+)$"
 # amf_physical_ran_ip: IP for AMF on the RAN network (gNB connects here)
 #
 physical_ran_enabled: false
+# Skip worker br-ran check before creating n2-physical / patching AMF (not recommended).
+physical_ran_skip_bridge_check: false
 physical_ran_interface: ""
 physical_ran_subnet: "192.168.6.0/24"
 # AMF's IP on the physical RAN network (gNB connects here)
