@@ -72,26 +72,30 @@
         (
           (ds_all.resources | selectattr('metadata.name','equalto','ds-net-setup-worker') | list | length) >= 1
           and (
-            (ds_all.resources
-            | selectattr('metadata.name','equalto','ds-net-setup-worker')
-            | map(attribute='status.numberReady')
-            | map('default', 0)
-            | map('int')
-            | first
-          ) >= 1
+            (
+              ds_all.resources
+              | selectattr('metadata.name','equalto','ds-net-setup-worker')
+              | map(attribute='status.numberReady')
+              | map('default', 0)
+              | map('int')
+              | first
+            ) >= 1
+          )
         )
         and (
           not (edge_enabled | default(false) | bool)
           or (
             (ds_all.resources | selectattr('metadata.name','equalto','ds-net-setup-edge') | list | length) >= 1
             and (
-              (ds_all.resources
-              | selectattr('metadata.name','equalto','ds-net-setup-edge')
-              | map(attribute='status.numberReady')
-              | map('default', 0)
-              | map('int')
-              | first
-            ) >= 1
+              (
+                ds_all.resources
+                | selectattr('metadata.name','equalto','ds-net-setup-edge')
+                | map(attribute='status.numberReady')
+                | map('default', 0)
+                | map('int')
+                | first
+              ) >= 1
+            )
           )
         )
       retries: 12
