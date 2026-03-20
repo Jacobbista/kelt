@@ -58,7 +58,9 @@
       until: (multus_edge_info.resources|length)>0 and (multus_edge_info.resources.0.status.numberReady|int) >= 1
       retries: 24
       delay: 5
+      when: edge_enabled | default(false) | bool
 
+    # Worker OVS DS always; edge DS only when edge_enabled (matches ovs_network_setup role)
     - name: OVS DS present and ready (setup script may take ~60-90s after boot)
       kubernetes.core.k8s_info:
         api_version: apps/v1
@@ -67,8 +69,31 @@
         kubeconfig: "/home/vagrant/kubeconfig"
       register: ds_all
       until: >-
-        (ds_all.resources | selectattr('metadata.name','match','^ds-net-setup-(worker|edge)$') | list | length) == 2
-        and (ds_all.resources | selectattr('metadata.name','match','^ds-net-setup-(worker|edge)$') | map(attribute='status.numberReady') | map('default', 0) | map('int') | sum) == 2
+        (
+          (ds_all.resources | selectattr('metadata.name','equalto','ds-net-setup-worker') | list | length) >= 1
+          and (
+            (ds_all.resources
+            | selectattr('metadata.name','equalto','ds-net-setup-worker')
+            | map(attribute='status.numberReady')
+            | map('default', 0)
+            | map('int')
+            | first
+          ) >= 1
+        )
+        and (
+          not (edge_enabled | default(false) | bool)
+          or (
+            (ds_all.resources | selectattr('metadata.name','equalto','ds-net-setup-edge') | list | length) >= 1
+            and (
+              (ds_all.resources
+              | selectattr('metadata.name','equalto','ds-net-setup-edge')
+              | map(attribute='status.numberReady')
+              | map('default', 0)
+              | map('int')
+              | first
+            ) >= 1
+          )
+        )
       retries: 12
       delay: 10
 
