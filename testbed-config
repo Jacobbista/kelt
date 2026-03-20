@@ -244,7 +244,7 @@ do_provision() {
   (
     export TESTBED_PROFILE EDGE_ENABLED DEPLOY_MODE PHYSICAL_RAN_ENABLED PHYSICAL_RAN_BRIDGE DASHBOARD_MODE
     cd "$SCRIPT_DIR"
-    vagrant provision ansible
+    vagrant provision ansible --provision-with playbook
   )
 }
 
@@ -343,7 +343,7 @@ main() {
       echo "  edge <on|off>             Enable/disable edge VM"
       echo "  ran <nic|disable>         Configure physical RAN bridge"
       echo "  up                        Run vagrant up with current config"
-      echo "  provision                 Run vagrant provision ansible"
+      echo "  provision                 Run vagrant provision ansible (full playbook)"
       echo "  env                       Print export commands for current config"
       echo "  help                      Show this help"
       ;;
