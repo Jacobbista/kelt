@@ -12,12 +12,27 @@ For `vagrant up`, Ansible provisioning, and the K3s cluster:
 |-----------------|----------------|-------|
 | Vagrant | >= 2.3.0 | VM orchestration |
 | VirtualBox | >= 6.1.0 | Hypervisor |
-| Host RAM | 16 GB recommended | 4 VMs (master, worker, edge, ansible) |
-| Host CPU | 4+ cores recommended | |
+| gum (optional) | >= 0.13 | Interactive TUI for [`testbed-config`](tools/testbed-config.md). Without it, the tool falls back to basic prompts |
+| Host RAM | 16 GB recommended | `laptop` profile: 4 VMs (17 GB); `server` profile: 3 VMs (14 GB). See [Server Setup](deployment/server-setup.md) for NUC/server deployments |
+| Host CPU | 4+ cores recommended | 8+ threads for laptop profile; 4c/8t sufficient for server profile |
 | OS | Linux, macOS, Windows | Virtualization must be enabled in BIOS/UEFI |
 | Python (optional) | 3.8+ | Only for running tests locally (`tests/`) |
 
 The Ansible VM is provisioned with Python, Ansible, and Kubernetes collections; no host-side Ansible is required for deployment.
+
+### Install gum (Recommended)
+
+[gum](https://github.com/charmbracelet/gum) provides the interactive TUI for [`testbed-config`](tools/testbed-config.md). Without it, the tool still works but uses basic terminal prompts.
+
+```bash
+# Debian/Ubuntu
+sudo mkdir -p /etc/apt/keyrings
+curl -fsSL https://repo.charm.sh/apt/gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/charm.gpg
+echo "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" | sudo tee /etc/apt/sources.list.d/charm.list
+sudo apt update && sudo apt install gum
+```
+
+See [testbed-config docs](tools/testbed-config.md) for the full CLI reference.
 
 ---
 

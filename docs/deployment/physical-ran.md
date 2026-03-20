@@ -6,7 +6,7 @@ Connect a physical femtocell or small-cell gNB (e.g. nCELL-F2240) instead of, or
 
 | Layer                | Name                     | Where            | Example           | Purpose                                                                                                                      |
 | -------------------- | ------------------------ | ---------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| **Host interface**   | `PHYSICAL_RAN_BRIDGE`    | Your laptop/PC   | `enx00e04c6817b7` | NIC connected to the RAN (USB dongle, hub, etc.). Vagrant bridges this into the worker VM.                                   |
+| **Host interface**   | `PHYSICAL_RAN_BRIDGE`    | Your laptop/NUC  | `enx00e04c6817b7` | Host NIC on the same L2 network as the gNB. Can be a built-in Ethernet port, a USB-to-Ethernet adapter, or any NIC — Vagrant bridges it into the worker VM. |
 | **Worker interface** | `physical_ran_interface` | Inside worker VM | `enp0s9`          | Virtual NIC created by VirtualBox. Linux names it (e.g. `enp0s9`). Leave empty in `group_vars` for auto-detect by subnet IP. |
 | **Bridge**           | `br-ran`                 | Worker VM (OVS)  | `br-ran`          | OVS bridge. The worker interface is added to it; `br-ran` gets the gateway IP (192.168.6.1).                                 |
 
@@ -179,20 +179,35 @@ For **commercial femtocells**, configure these in the device's web UI (typically
 
 ## 3. Physical Connection
 
-### With VirtualBox (development)
+### With VirtualBox
 
-The gNB must be on the same L2 segment as the worker VM's RAN interface.
+The gNB must be on the same L2 segment as the host NIC specified in `PHYSICAL_RAN_BRIDGE`. Vagrant bridges that NIC into the worker VM.
 
-**USB Ethernet Adapter** (recommended):
+**NUC / Server** — the gNB is connected via a router or switch to one of the NUC's built-in Ethernet ports:
 
 ```
-[Host PC]
-    └── USB Ethernet (192.168.6.2) ─── [Switch] ─── gNB (192.168.6.100)
+[NUC]
+    └── enp2s0 ─── [Router / Switch] ─── gNB (192.168.6.100)
+                          │
+    [VirtualBox]          │
+        └── Worker VM (enp0s9) ────┘
+            bridged to enp2s0
+```
+
+`./testbed-config ran enp2s0` — use the NIC name that is on the gNB's network.
+
+**Laptop** — USB-to-Ethernet adapter bridged to the same switch:
+
+```
+[Laptop]
+    └── USB Ethernet (enx00e04c...) ─── [Switch] ─── gNB (192.168.6.100)
                                             │
     [VirtualBox]                            │
         └── Worker VM (enp0s9) ─────────────┘
-            bridged to same network
+            bridged to USB adapter
 ```
+
+`./testbed-config ran enx00e04c6817b7` — use the adapter's interface name.
 
 ### Bare Metal (production)
 

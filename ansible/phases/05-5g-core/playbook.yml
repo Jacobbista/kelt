@@ -38,7 +38,7 @@
       run_once: true
 
 - name: "PHASE 5 | Infrastructure Setup"
-  hosts: masters,workers,edges
+  hosts: "masters,workers{{ ',edges' if (edge_enabled | default(false) | bool) else '' }}"
   become: yes
   tags:
     - phase5

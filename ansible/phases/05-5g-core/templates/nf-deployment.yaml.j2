@@ -8,7 +8,9 @@ spec:
   replicas: {{ nf.replicas | default(1) }}
 {% if has_static_secondary_ips %}
   # Static Multus IPs cannot be safely rolled with overlapping old/new pods.
+  # rollingUpdate: null removes it when patching from RollingUpdate (forbidden with Recreate)
   strategy:
+    rollingUpdate: null
     type: Recreate
 {% endif %}
   selector:
@@ -26,6 +28,7 @@ spec:
           {{ nf.networks | to_json }}
 {% endif %}
     spec:
+      terminationGracePeriodSeconds: 15
       nodeSelector:
         kubernetes.io/hostname: {{ nf.node | default('worker') }}
 {% if nf.enable_rp_filter_fix | default(false) %}

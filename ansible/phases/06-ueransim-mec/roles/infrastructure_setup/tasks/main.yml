@@ -108,6 +108,7 @@
   delegate_to: "{{ groups['edges'][0] }}"
   run_once: true
   changed_when: false
+  when: edge_enabled | default(false) | bool
 
 - name: Pre-pull UERANSIM image on worker
   shell: crictl pull {{ ueransim_image }} || true
@@ -120,9 +121,11 @@
   delegate_to: "{{ groups['edges'][0] }}"
   run_once: true
   changed_when: false
+  when: edge_enabled | default(false) | bool
 
 - name: Pre-pull MEC image on edge
   shell: crictl pull {{ mec_image }} || true
   delegate_to: "{{ groups['edges'][0] }}"
   run_once: true
   changed_when: false
+  when: edge_enabled | default(false) | bool

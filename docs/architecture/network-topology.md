@@ -45,7 +45,7 @@ graph TB
 
     subgraph Dataplane["Data Plane"]
         OVS["Open vSwitch bridge
-        br-n1 · br-n2 · br-n3 · br-n4 · br-n6e · br-n6c"]
+        br-n1 · br-n2 · br-n3 · br-n4 · br-n6e · br-n6c · br-n6m"]
         VXLAN["VXLAN tunnel
         UDP 4789 · per-bridge VNI key"]
     end
@@ -133,6 +133,11 @@ graph LR
         VNI 107
         10.207.0.0/24
         N6 cloud · DN"]
+
+        BN6MW["br-n6m
+        VNI 108
+        10.208.0.0/24
+        N6 MEC · services"]
     end
 
     subgraph E["Edge  192.168.56.12"]
@@ -186,6 +191,7 @@ graph LR
 | br-n4  | 104 | 10.204.0.0/24 | 10.204.0.1 | N4 — PFCP SMF↔UPF                |
 | br-n6e | 106 | 10.206.0.0/24 | 10.206.0.1 | N6 edge — MEC local breakout     |
 | br-n6c | 107 | 10.207.0.0/24 | 10.207.0.1 | N6 cloud — internet data network |
+| br-n6m | 108 | 10.208.0.0/24 | 10.208.0.1 | N6 MEC — UPF-Cloud ↔ MEC service pods |
 
 ### VXLAN tunnel configuration
 

@@ -9,7 +9,7 @@ This is the canonical, exhaustive documentation for the testbed. It reflects the
 - Nodes (Vagrant):
   - master: k3s server (control-plane)
   - worker: k3s agent; KubeEdge CloudCore; Open5GS 5G Core; OVS bridges; Multus
-  - edge: KubeEdge EdgeCore (no k3s-agent); OVS bridges; Multus; gNB + UEs (UERANSIM)
+  - edge (optional): KubeEdge EdgeCore (no k3s-agent); OVS bridges; Multus; gNB + UEs (UERANSIM). Disabled by default in `server` profile — see [Server Setup](../deployment/server-setup.md)
   - ansible: orchestration node; Dashboard (FastAPI + React)
 - Overlay (worker↔edge): OVS bridges per 5G interface, VXLAN tunnels with fixed VNI keys
 - Primary CNI: Flannel; Multus is secondary
@@ -176,6 +176,34 @@ ssh worker "sysctl net.ipv4.ip_forward"
 ssh worker "sudo iptables -t nat -S POSTROUTING | grep 10.207.0.0/24 || true"
 ```
 
+### N6m — UPF-Cloud ↔ MEC Services
+
+- **Purpose**: Data plane between UPF-Cloud and MEC application pods (via DNN "mec")
+- **Subnet**: 10.208.0.0/24; Gateway: 10.208.0.1; Range: 10.208.0.100-250
+- **OVS bridge**: br-n6m; **VXLAN key**: 108; **NAD**: mec/n6m-net
+- **UPF-Cloud routing**: UE traffic on DNN "mec" enters `ogstun2` (10.46.0.0/16), policy routing table 300 forwards it via `10.208.0.1` on the `n6m` interface to MEC pods
+- **Protocol**: IP routing
+- **Validation**:
+
+  ```bash
+  # Check NAD exists in mec namespace
+  sudo k3s kubectl -n mec get net-attach-def n6m-net
+
+  # Check UPF-Cloud has N6m interface
+  sudo k3s kubectl -n 5g exec deploy/upf-cloud -- ip -o -4 addr show dev n6m | awk '{print $4}' | cut -d/ -f1
+
+  # Check ogstun2 TUN interface exists in UPF-Cloud
+  sudo k3s kubectl -n 5g exec deploy/upf-cloud -- ip link show ogstun2
+
+  # Check policy routing table 300
+  sudo k3s kubectl -n 5g exec deploy/upf-cloud -- ip rule show | grep "lookup 300"
+  sudo k3s kubectl -n 5g exec deploy/upf-cloud -- ip route show table 300
+  # Expected: default via 10.208.0.1 dev n6m
+
+  # Check MEC pod has N6m interface (if deployed)
+  sudo k3s kubectl -n mec get pod -o json | jq -r '.items[0].metadata.annotations["k8s.v1.cni.cncf.io/network-status"]' | jq '.'
+  ```
+
 ### Future Interfaces (Placeholder)
 
 The following interfaces are planned for future implementation:
@@ -199,6 +227,7 @@ The overlay network uses VXLAN tunnels between worker and edge nodes with the fo
 | N4        | 4         | br-n4  | SMF ↔ UPF (PFCP)     |
 | N6e       | 6         | br-n6e | UPF-edge ↔ MEC       |
 | N6c       | 7         | br-n6c | UPF-cloud ↔ DN       |
+| N6m       | 108       | br-n6m | UPF-cloud ↔ MEC      |
 
 **VXLAN Configuration:**
 

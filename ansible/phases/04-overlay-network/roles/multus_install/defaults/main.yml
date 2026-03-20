@@ -78,6 +78,16 @@ overlay_networks:
       end: "10.207.0.250",
       gw: "10.207.0.1",
     }
+  # N6 MEC data network (UPF-Cloud → MEC services)
+  - {
+      name: "n6m-net",
+      ns: "mec",
+      bridge: "br-n6m",
+      cidr: "10.208.0.0/24",
+      start: "10.208.0.100",
+      end: "10.208.0.250",
+      gw: "10.208.0.1",
+    }
 
-# Expected Multus DS readiness (workers + edge)
+# Expected Multus DS readiness (workers + edge if enabled)
 expected_multus_ready: 2

@@ -6,20 +6,49 @@ This guide will get you from zero to a running 5G testbed in under 30 minutes.
 
 - **Vagrant** >= 2.3.0
 - **VirtualBox** >= 6.1.0
-- **Host resources**: 16GB RAM, 4+ CPU cores recommended
+- **gum** (optional, recommended) — interactive TUI for [`testbed-config`](tools/testbed-config.md)
+- **Host resources**: 16 GB RAM, 4+ CPU cores recommended
 - **OS**: Linux, macOS, or Windows with virtualization enabled
 
-For a full list of tools and versions (including 5G UE Probe requirements for physical dongle experiments), see [Requirements](requirements.md).
+```bash
+# Install Vagrant and VirtualBox (see docs/requirements.md for details)
+# Install gum for interactive configuration (optional but recommended):
+sudo mkdir -p /etc/apt/keyrings
+curl -fsSL https://repo.charm.sh/apt/gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/charm.gpg
+echo "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" | sudo tee /etc/apt/sources.list.d/charm.list
+sudo apt update && sudo apt install gum
+```
+
+For the full list of tools and versions (including 5G UE Probe requirements for physical dongle experiments), see [Requirements](requirements.md).
 
 ## Quick Start
 
-### Deploy 5G Core Only (Default)
+### Deploy 5G Core Only (Default — Laptop)
 
 ```bash
 git clone https://github.com/Jacobbista/5g-k3s-kubedge-testbed.git
 cd 5g-k3s-kubedge-testbed
+
+# (Optional) Configure the testbed interactively
+./testbed-config
+
+# Deploy
 vagrant up
 ```
+
+Running `./testbed-config` opens an interactive menu where you can select the deployment profile, toggle the edge VM, configure physical RAN, and more. Without it, the default `laptop` profile is used (4 VMs, edge included). See [`testbed-config`](tools/testbed-config.md) for the full reference.
+
+### Server / NUC Deployment
+
+For headless servers or Intel NUCs with limited CPU, use the `server` profile:
+
+```bash
+./testbed-config set-profile server   # 3 VMs, no edge, optimized resources
+vagrant up
+vagrant provision ansible
+```
+
+See [Server / NUC Deployment](deployment/server-setup.md) for hardware requirements, remote access setup, and reverse proxy configuration.
 
 This deploys:
 - K3s cluster (master, worker, edge nodes)
@@ -44,6 +73,8 @@ Use this flag with `vagrant up`:
 | Flag | Values | Default | Behavior |
 |------|--------|---------|----------|
 | `DEPLOY_MODE` | `core_only`, `full` | `core_only` | `full` includes Phase 6 (UERANSIM + MEC) |
+| `TESTBED_PROFILE` | `laptop`, `server` | `laptop` | `server` creates 3 VMs (no edge) with optimized resources. See [Server Setup](deployment/server-setup.md) |
+| `EDGE_ENABLED` | `true`, `false` | `true` (laptop) / `false` (server) | Controls edge VM creation and KubeEdge EdgeCore deployment |
 
 Recommended command combinations:
 

@@ -15,6 +15,10 @@ upf:
       gateway: 10.45.0.1
       dnn: internet
       dev: ogstun
+    - subnet: 10.46.0.0/16
+      gateway: 10.46.0.1
+      dnn: mec
+      dev: ogstun2
   metrics:
     server:
       - address: {{ upf_cloud_n4_ip }}

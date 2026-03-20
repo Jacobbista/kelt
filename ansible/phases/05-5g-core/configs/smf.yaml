@@ -20,7 +20,7 @@ smf:
     client:
       upf:
         - address: {{ upf_cloud_n4_ip }}  # N4 upf-cloud
-          dnn: internet
+          dnn: [internet, mec]
   gtpc:
     server:
       - address: {{ smf_n4_ip }}
@@ -31,6 +31,9 @@ smf:
     - subnet: 10.45.0.0/16
       gateway: 10.45.0.1
       dnn: internet
+    - subnet: 10.46.0.0/16
+      gateway: 10.46.0.1
+      dnn: mec
   dns:
     - 8.8.8.8
     - 8.8.4.4

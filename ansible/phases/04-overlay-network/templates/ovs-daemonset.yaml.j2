@@ -47,7 +47,9 @@ spec:
         - name: WORKER_IP
           value: "{{ hostvars[groups['workers'][0]]['ansible_host'] }}"
         - name: EDGE_IP
-          value: "{{ hostvars[groups['edges'][0]]['ansible_host'] }}"
+          value: "{{ hostvars[groups['edges'][0]]['ansible_host'] if (groups.get('edges', []) | length > 0) else '' }}"
+        - name: EDGE_ENABLED
+          value: "{{ edge_enabled | default(false) | bool | lower }}"
         - name: CELL_COUNT
           value: "{{ cell_count | default('0') }}"
         # Physical RAN bridging (for femtocell integration)

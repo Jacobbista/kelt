@@ -40,17 +40,24 @@
   vars: { node_type: edge }
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
+  when: edge_enabled | default(false) | bool
 
-- name: Apply OVS DS manifests
+- name: Apply OVS DS manifest (worker)
   kubernetes.core.k8s:
     state: present
-    src: "{{ item }}"
+    src: /tmp/ovs-network-setup-worker.yaml
     kubeconfig: "/home/vagrant/kubeconfig"
-  loop:
-    - /tmp/ovs-network-setup-worker.yaml
-    - /tmp/ovs-network-setup-edge.yaml
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
+
+- name: Apply OVS DS manifest (edge)
+  kubernetes.core.k8s:
+    state: present
+    src: /tmp/ovs-network-setup-edge.yaml
+    kubeconfig: "/home/vagrant/kubeconfig"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: edge_enabled | default(false) | bool
 
 - name: Wait for OVS DS pods Running
   kubernetes.core.k8s_info:
@@ -61,7 +68,7 @@
       - "app in (ds-net-setup-worker,ds-net-setup-edge)"
     kubeconfig: "/home/vagrant/kubeconfig"
   register: ovs_pods
-  until: (ovs_pods.resources | selectattr('status.phase','equalto','Running') | list | length) >= 2
+  until: (ovs_pods.resources | selectattr('status.phase','equalto','Running') | list | length) >= (2 if (edge_enabled | default(false) | bool) else 1)
   retries: 30
   delay: 4
   delegate_to: "{{ groups['masters'][0] }}"

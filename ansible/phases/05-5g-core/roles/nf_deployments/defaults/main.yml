@@ -85,6 +85,7 @@ network_functions:
       - { name: "n3-net", interface: "n3", ips: ["{{ upf_cloud_n3_ip }}/24"] }
       - { name: "n4-net", interface: "n4", ips: ["{{ upf_cloud_n4_ip }}/24"] }
       - { name: "n6c-net", interface: "n6" }
+      - { name: "n6m-net", namespace: "mec", interface: "n6m" }
     extra_env:
       - { name: "UPF_CONFIG", value: "/etc/open5gs/upf_cloud.yaml" }
 

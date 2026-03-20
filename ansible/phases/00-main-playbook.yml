@@ -101,7 +101,7 @@
       wait_for_connection:
         timeout: 60
       delegate_to: "{{ item }}"
-      loop: "{{ groups['all'] | difference(['ansible']) }}"
+      loop: "{{ groups['all'] | difference(['ansible']) | difference([] if (edge_enabled | default(false) | bool) else groups.get('edges', [])) }}"
       register: connectivity_check
       failed_when: connectivity_check.failed | default(false)
 
@@ -224,11 +224,13 @@
         kubeconfig: "/home/vagrant/kubeconfig"
       register: all_nodes_info
 
-    - name: "Validation | Assert 3 nodes total (master + worker + edge)"
+    - name: "Validation | Assert expected node count (master + worker + edge if enabled)"
+      vars:
+        expected_min: "{{ 3 if (edge_enabled | default(false) | bool) else 2 }}"
       assert:
         that:
-          - (all_nodes_info.resources | length) >= 3
-          - (all_nodes_info.resources | selectattr('status', 'defined') | list | length) >= 3
+          - (all_nodes_info.resources | length) >= (expected_min | int)
+          - (all_nodes_info.resources | selectattr('status', 'defined') | list | length) >= (expected_min | int)
 
     - debug:
         msg: "✅ PHASE 3: KubeEdge Integration completed successfully ({{ all_nodes_info.resources | length }} nodes total)"
@@ -288,16 +290,17 @@
       register: ovs_daemonsets_info
 
     - name: "Validation | Assert OVS DaemonSets ready"
+      vars:
+        expected_ds_count: "{{ 2 if (edge_enabled | default(false) | bool) else 1 }}"
       assert:
         that:
-          # We expect one Ready pod for each DS (worker and edge) → sum == 2
           - (
             ovs_daemonsets_info.resources
             | selectattr('metadata.name', 'match', 'ds-net-setup.*')
             | map(attribute='status.numberReady')
             | map('int')
             | sum
-            ) == 2
+            ) >= (expected_ds_count | int)
 
     - debug:
         msg: "✅ PHASE 4: Overlay Network Setup completed successfully"

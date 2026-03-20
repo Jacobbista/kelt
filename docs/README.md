@@ -27,6 +27,7 @@ Read these in order — each document builds on the previous.
 | Document | Description |
 |----------|-------------|
 | [Deployment Phases](deployment/phases.md) | What each of the 8 phases does and how to run them individually |
+| [Server / NUC Deployment](deployment/server-setup.md) | Deploy on a headless server with optimized profiles and remote access |
 | [Physical RAN Integration](deployment/physical-ran.md) | Connect a real femtocell instead of, or alongside, UERANSIM |
 | [RAN Mode Switching](deployment/ran-modes-dashboard.md) | Switch between physical and simulated RAN using the dashboard |
 
@@ -68,6 +69,7 @@ Detailed step-by-step diagnostics for specific subsystems:
 | Document | Description |
 |----------|-------------|
 | [5G UE Probe](tools/5g-probe.md) | Host-side tool for managing and benchmarking physical UE dongles |
+| [testbed-config](tools/testbed-config.md) | Interactive CLI for deployment profiles, edge toggle, and RAN configuration |
 
 ---
 

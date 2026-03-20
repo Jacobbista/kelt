@@ -3,7 +3,7 @@
 # Deploy simulated RAN (gNB + UE) and optional MEC application
 
 - name: "PHASE 6 | Infrastructure Setup"
-  hosts: masters,workers,edges
+  hosts: "masters,workers{{ ',edges' if (edge_enabled | default(false) | bool) else '' }}"
   become: yes
   tags:
     - phase6

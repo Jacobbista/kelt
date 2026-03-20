@@ -10,12 +10,13 @@ echo "🔧 Environment:"
 echo "  NODE_NAME=${NODE_NAME:-}"
 echo "  WORKER_IP=${WORKER_IP:-}"
 echo "  EDGE_IP=${EDGE_IP:-}"
+echo "  EDGE_ENABLED=${EDGE_ENABLED:-false}"
 echo "  CELL_COUNT=${CELL_COUNT:-0}"
 echo "  RAN_INTERFACE=${RAN_INTERFACE:-}"
 echo "  RAN_BRIDGE_MODE=${RAN_BRIDGE_MODE:-disabled}"
 echo "  RAN_SUBNET=${RAN_SUBNET:-}"
 
-BRIDGES=(br-n1 br-n2 br-n3 br-n4 br-n6e br-n6c)
+BRIDGES=(br-n1 br-n2 br-n3 br-n4 br-n6e br-n6c br-n6m)
 
 create_br() {
   local br="$1"
@@ -55,37 +56,55 @@ create_vx() { # $1=bridge  $2=ifname  $3=vni  $4=remote_ip  $5=local_ip
       options:df_default=false
 }
 
-# Decide VXLAN peer endpoint
-if [[ "${NODE_NAME:-}" == "edge" ]]; then
-  : "${WORKER_IP:?WORKER_IP required when NODE_NAME=edge}"
-  PEER="$WORKER_IP"
-elif [[ "${NODE_NAME:-}" == "worker" ]]; then
-  : "${EDGE_IP:?EDGE_IP required when NODE_NAME=worker}"
-  PEER="$EDGE_IP"
+# Decide VXLAN peer endpoint (only needed when edge is enabled)
+PEER=""
+LOCAL_TUN_IP=""
+if [[ "${EDGE_ENABLED:-false}" == "true" ]]; then
+  if [[ "${NODE_NAME:-}" == "edge" ]]; then
+    : "${WORKER_IP:?WORKER_IP required when NODE_NAME=edge}"
+    PEER="$WORKER_IP"
+  elif [[ "${NODE_NAME:-}" == "worker" ]]; then
+    : "${EDGE_IP:?EDGE_IP required when NODE_NAME=worker}"
+    PEER="$EDGE_IP"
+  else
+    echo "❌ NODE_NAME must be 'edge' or 'worker'"; exit 1
+  fi
+
+  LOCAL_TUN_IP="$(calc_local_ip "$PEER")"
+  if [[ -z "${LOCAL_TUN_IP:-}" ]]; then
+    echo "❌ Cannot determine LOCAL_TUN_IP toward $PEER"; exit 1
+  fi
+  echo "🔧 LOCAL_TUN_IP=$LOCAL_TUN_IP  PEER=$PEER"
+elif [[ "${NODE_NAME:-}" != "worker" ]]; then
+  echo "❌ NODE_NAME must be 'worker' when edge is disabled"; exit 1
 else
-  echo "❌ NODE_NAME must be 'edge' or 'worker'"; exit 1
+  echo "ℹ️  Edge disabled: creating local bridges without VXLAN tunnels"
 fi
 
-LOCAL_TUN_IP="$(calc_local_ip "$PEER")"
-if [[ -z "${LOCAL_TUN_IP:-}" ]]; then
-  echo "❌ Cannot determine LOCAL_TUN_IP toward $PEER"; exit 1
-fi
-echo "🔧 LOCAL_TUN_IP=$LOCAL_TUN_IP  PEER=$PEER"
-
-# Create VXLAN ports for global interfaces
+# Create network bridges (with VXLAN tunnels if edge enabled, local-only otherwise)
 echo "🌐 Creating global network bridges..."
-if [[ "$NODE_NAME" == "edge" ]]; then
-  create_vx br-n1 vxlan-n1 101 "$PEER" "$LOCAL_TUN_IP"
-  create_vx br-n2 vxlan-n2 102 "$PEER" "$LOCAL_TUN_IP"
-  create_vx br-n3 vxlan-n3 103 "$PEER" "$LOCAL_TUN_IP"
-  create_vx br-n4 vxlan-n4 104 "$PEER" "$LOCAL_TUN_IP"
-  create_vx br-n6e vxlan-n6 106 "$PEER" "$LOCAL_TUN_IP"
+if [[ -n "$PEER" ]]; then
+  # Edge enabled: create bridges with VXLAN tunnels
+  if [[ "$NODE_NAME" == "edge" ]]; then
+    create_vx br-n1 vxlan-n1 101 "$PEER" "$LOCAL_TUN_IP"
+    create_vx br-n2 vxlan-n2 102 "$PEER" "$LOCAL_TUN_IP"
+    create_vx br-n3 vxlan-n3 103 "$PEER" "$LOCAL_TUN_IP"
+    create_vx br-n4 vxlan-n4 104 "$PEER" "$LOCAL_TUN_IP"
+    create_vx br-n6e vxlan-n6e 106 "$PEER" "$LOCAL_TUN_IP"
+    create_vx br-n6m vxlan-n6m 108 "$PEER" "$LOCAL_TUN_IP"
+  else
+    create_vx br-n1 vxlan-n1 101 "$PEER" "$LOCAL_TUN_IP"
+    create_vx br-n2 vxlan-n2 102 "$PEER" "$LOCAL_TUN_IP"
+    create_vx br-n3 vxlan-n3 103 "$PEER" "$LOCAL_TUN_IP"
+    create_vx br-n4 vxlan-n4 104 "$PEER" "$LOCAL_TUN_IP"
+    create_vx br-n6c vxlan-n6c 107 "$PEER" "$LOCAL_TUN_IP"
+    create_vx br-n6m vxlan-n6m 108 "$PEER" "$LOCAL_TUN_IP"
+  fi
 else
-  create_vx br-n1 vxlan-n1 101 "$PEER" "$LOCAL_TUN_IP"
-  create_vx br-n2 vxlan-n2 102 "$PEER" "$LOCAL_TUN_IP"
-  create_vx br-n3 vxlan-n3 103 "$PEER" "$LOCAL_TUN_IP"
-  create_vx br-n4 vxlan-n4 104 "$PEER" "$LOCAL_TUN_IP"
-  create_vx br-n6c vxlan-n6 106 "$PEER" "$LOCAL_TUN_IP"
+  # Edge disabled: create local bridges only (no VXLAN)
+  for br in br-n1 br-n2 br-n3 br-n4 br-n6c br-n6m; do
+    create_br "$br"
+  done
 fi
 
 # Assign gateway IPs expected by Whereabouts/IPAM.
@@ -96,6 +115,7 @@ if [[ "$NODE_NAME" == "worker" ]]; then
   ensure_bridge_ip br-n3 10.203.0.1/24
   ensure_bridge_ip br-n4 10.204.0.1/24
   ensure_bridge_ip br-n6c 10.207.0.1/24
+  ensure_bridge_ip br-n6m 10.208.0.1/24
 elif [[ "$NODE_NAME" == "edge" ]]; then
   # N6e local gateway on edge (MEC side)
   ensure_bridge_ip br-n6e 10.206.0.1/24

@@ -90,6 +90,19 @@ test_n4_enabled: false
 test_n6e_enabled: false
 test_n6c_enabled: false
 
+# Edge node toggle (set to true to deploy KubeEdge EdgeCore, edge OVS, edge Multus)
+# Passed from Vagrantfile via -e edge_enabled=true/false
+edge_enabled: false
+
+# N6 MEC data network (for MEC services reachable by UEs via UPF)
+n6m_subnet: "10.208.0.0/24"
+n6m_gateway: "10.208.0.1"
+n6m_vni: 108
+nad_n6m_namespace: mec
+nad_n6m_name: n6m-net
+n6m_interface_expected: n6m
+n6m_interface_regex: "^(n6m|net[0-9]+)$"
+
 # Physical RAN Integration (for femtocell/small cell connectivity)
 # See docs/deployment/physical-ran.md for details
 #

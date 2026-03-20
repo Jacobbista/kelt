@@ -11,9 +11,12 @@
   hosts: edges
   become: yes
   roles:
-    - roles/edge_containerd
-    - roles/kubeedge_common
-    - roles/kubeedge_edgecore
+    - role: roles/edge_containerd
+      when: edge_enabled | default(false) | bool
+    - role: roles/kubeedge_common
+      when: edge_enabled | default(false) | bool
+    - role: roles/kubeedge_edgecore
+      when: edge_enabled | default(false) | bool
 
 - name: "PHASE 3 | Verify"
   hosts: masters
@@ -49,9 +52,10 @@
         name: "{{ groups['edges'][0] }}"
         kubeconfig: "/home/vagrant/kubeconfig"
       register: edge_node
+      when: edge_enabled | default(false) | bool
 
     - name: Show KubeEdge status
       debug:
         msg:
-          - "Edge node: {{ edge_node.resources | length | ternary(edge_node.resources[0].metadata.name, 'not found') }}"
+          - "Edge node: {{ (edge_node.resources | length | ternary(edge_node.resources[0].metadata.name, 'not found')) if (edge_enabled | default(false) | bool) else 'disabled' }}"
           - "CloudCore pods (kubeedge): {{ ke_pods.resources | map(attribute='metadata.name') | list }}"

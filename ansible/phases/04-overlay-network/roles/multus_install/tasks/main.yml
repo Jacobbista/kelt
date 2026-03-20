@@ -204,7 +204,7 @@
   delegate_to: "{{ groups['workers'][0] }}"
   run_once: true
 
-# Whereabouts config on edge
+# Whereabouts config on edge (only when edge is enabled)
 - name: Ensure whereabouts.d exists on edge
   file:
     path: "{{ cni_conf_dir_edge }}/whereabouts.d"
@@ -212,6 +212,7 @@
     mode: "0755"
   delegate_to: "{{ groups['edges'][0] }}"
   run_once: true
+  when: edge_enabled | default(false) | bool
 
 # Create primary CNI config for edge (MUST exist before EdgeCore starts)
 - name: Create primary CNI config for edge
@@ -245,6 +246,7 @@
       }
   delegate_to: "{{ groups['edges'][0] }}"
   run_once: true
+  when: edge_enabled | default(false) | bool
 
 - name: Write Whereabouts kubeconfig (edge)
   copy:
@@ -253,6 +255,7 @@
     mode: "0644"
   delegate_to: "{{ groups['edges'][0] }}"
   run_once: true
+  when: edge_enabled | default(false) | bool
 
 - name: Write whereabouts.conf on edge
   copy:
@@ -262,6 +265,7 @@
       {"datastore":"kubernetes","kubernetes":{"kubeconfig":"{{ cni_conf_dir_edge }}/{{ whereabouts_kubeconfig_relpath }}"}}
   delegate_to: "{{ groups['edges'][0] }}"
   run_once: true
+  when: edge_enabled | default(false) | bool
 
 # ==============================================================
 # MULTUS TOKEN AND KUBECONFIG SETUP
@@ -318,6 +322,7 @@
     mode: "0755"
   delegate_to: "{{ groups['edges'][0] }}"
   run_once: true
+  when: edge_enabled | default(false) | bool
 
 # Re-read admin kubeconfig (self-contained, works with --start-at-task)
 - name: Read admin kubeconfig for Multus kubeconfig generation
@@ -397,6 +402,7 @@
     mode: "0755"
   delegate_to: "{{ groups['edges'][0] }}"
   run_once: true
+  when: edge_enabled | default(false) | bool
 
 - name: Create Multus kubeconfig on edge
   copy:
@@ -423,6 +429,7 @@
   delegate_to: "{{ groups['edges'][0] }}"
   run_once: true
   no_log: true
+  when: edge_enabled | default(false) | bool
 
 # Sanity check: verify server line is correct on edge
 - name: Sanity check kubeconfig server on edge
@@ -431,12 +438,14 @@
   changed_when: false
   delegate_to: "{{ groups['edges'][0] }}"
   run_once: true
+  when: edge_enabled | default(false) | bool
 
 - name: Ensure kubeconfig server is correct on edge
   assert:
     that: "_edge_server_check.stdout == _multus_k8s_server"
     fail_msg: "Edge kubeconfig server={{ _edge_server_check.stdout }} != expected={{ _multus_k8s_server }}"
   run_once: true
+  when: edge_enabled | default(false) | bool
 
 # ==============================================================
 # STATIC MULTUS CONFIG FOR EDGE (KubeEdge workaround)
@@ -450,6 +459,7 @@
     mode: "0644"
   delegate_to: "{{ groups['edges'][0] }}"
   run_once: true
+  when: edge_enabled | default(false) | bool
 
 # ==============================================================
 # DEPLOY MULTUS AS META-PLUGIN (NO PRIMARY CNI CONFLIST)
@@ -543,6 +553,7 @@
 # KubeEdge injects empty KUBERNETES_SERVICE_HOST/PORT which breaks kubeconfig generation
 # See: docs/known-issues/kubeedge-multus-env-injection.md
 - name: Deploy Multus DaemonSet for edge (static config mode - KubeEdge workaround)
+  when: edge_enabled | default(false) | bool
   kubernetes.core.k8s:
     state: present
     kubeconfig: "/home/vagrant/kubeconfig"
@@ -665,6 +676,7 @@
   delay: 5
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
+  when: edge_enabled | default(false) | bool
 
 # Verify the token works
 - name: Verify Multus token can list Pods in ns 5g

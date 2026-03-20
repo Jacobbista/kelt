@@ -66,6 +66,7 @@
       ExecStart=/usr/local/bin/edgecore --config /etc/kubeedge/config/edgecore.yaml
       Restart=always
       RestartSec=10
+      TimeoutStopSec=20
       [Install]
       WantedBy=multi-user.target
 

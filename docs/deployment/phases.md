@@ -24,6 +24,10 @@ The testbed is deployed in multiple sequential phases, each building on the prev
 | Flag          | Values              | Default     | Behavior                                                                        |
 | ------------- | ------------------- | ----------- | ------------------------------------------------------------------------------- |
 | `DEPLOY_MODE` | `core_only`, `full` | `core_only` | `core_only`: phases 1-5 + 7 + 8, `full`: also includes phase 6 (UERANSIM + MEC) |
+| `TESTBED_PROFILE` | `laptop`, `server` | `laptop` | `server` creates 3 VMs with optimized resources; `laptop` creates 4 VMs including edge |
+| `EDGE_ENABLED` | `true`, `false` | `true` (laptop) / `false` (server) | Controls edge VM creation and all edge-related Ansible tasks |
+
+These flags can be set via environment variables or managed with [`testbed-config`](../tools/testbed-config.md). See [Server / NUC Deployment](server-setup.md) for server-specific guidance.
 
 Examples:
 
@@ -118,10 +122,12 @@ sudo k3s kubectl get nodes
 
 **Location**: `ansible/phases/03-kubeedge/`
 
+> **Edge-conditional**: EdgeCore deployment and edge node verification are skipped when `edge_enabled=false` (server profile without edge). CloudCore on the worker is always deployed.
+
 ### What it does
 
 - Deploys CloudCore on worker node
-- Deploys EdgeCore on edge node
+- Deploys EdgeCore on edge node (when edge enabled)
 - Configures edge-cloud communication (WebSocket port 10000)
 - Labels edge node
 
@@ -143,13 +149,15 @@ sudo k3s kubectl get nodes
 
 **Location**: `ansible/phases/04-overlay-network/`
 
+> **Edge-conditional**: When `edge_enabled=false`, OVS bridges are created locally on the worker without VXLAN tunnels. Multus NADs and the OVS CNI still function for pods running on the worker. Edge-specific DaemonSets and Multus configuration are skipped.
+
 ### What it does
 
 - Installs CNI binaries
 - Deploys Multus CNI DaemonSets
-- Creates OVS bridges (br-n1, br-n2, br-n3, br-n4, br-n6)
-- Establishes VXLAN tunnels between worker and edge
-- Creates NetworkAttachmentDefinitions (NADs)
+- Creates OVS bridges (br-n1, br-n2, br-n3, br-n4, br-n6e, br-n6c, br-n6m)
+- Establishes VXLAN tunnels between worker and edge (when edge enabled)
+- Creates NetworkAttachmentDefinitions (NADs), including `n6m-net` in the `mec` namespace for MEC services
 - Creates per-cell networks
 
 ### Key files

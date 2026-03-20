@@ -3,9 +3,13 @@ set -e
 
 echo "[UPF][init] Starting UPF initialization..."
 
-# Wait for N3 and N6 interfaces
+# Wait for N3, N6, and N6m interfaces
 echo "[UPF][init] Waiting for N3 and N6 interfaces..."
 while ! ip addr show n3 | grep -q "inet" || ! ip addr show n6 | grep -q "inet"; do
+    sleep 1
+done
+echo "[UPF][init] Waiting for N6m (MEC) interface..."
+while ! ip addr show n6m 2>/dev/null | grep -q "inet"; do
     sleep 1
 done
 
@@ -23,12 +27,25 @@ ip link set ogstun up || true
 iptables -t nat -C POSTROUTING -s 10.45.0.1/16 ! -o ogstun -j MASQUERADE 2>/dev/null || \
   iptables -t nat -A POSTROUTING -s 10.45.0.1/16 ! -o ogstun -j MASQUERADE
 
-# Start iperf3 server
-iperf3 -B 10.45.0.1 -s -fm &
+# Configure TUN interface for MEC DNN (ogstun2 → 10.46.0.0/16)
+if ! ip link show ogstun2 >/dev/null 2>&1; then
+  ip tuntap add name ogstun2 mode tun
+fi
+if ! ip addr show dev ogstun2 | grep -q "10.46.0.1/16"; then
+  ip addr add 10.46.0.1/16 dev ogstun2 || true
+fi
+ip link set ogstun2 up || true
+
+# Route MEC UE traffic (10.46.0.0/16) to the N6m interface (MEC services network)
+ip rule show | grep -q "iif ogstun2 lookup 300" || ip rule add iif ogstun2 lookup 300 pref 20
+ip route replace default via 10.208.0.1 dev n6m table 300
+
+# Start iperf3 server (output to separate logfile to keep pod logs clean)
+iperf3 -B 10.45.0.1 -s -fm -i 0.1 --logfile /var/log/iperf3-server.log &
 
 # Configure sysctls
 sysctl -w net.ipv4.ip_forward=1
-for i in all n3 n6; do sysctl -w net.ipv4.conf.$i.rp_filter=0; done
+for i in all n3 n6 n6m; do sysctl -w net.ipv4.conf.$i.rp_filter=0; done
 
 # Configure policy routing (idempotent)
 # Keep N3 symmetric policy routing for GTP-U return traffic.

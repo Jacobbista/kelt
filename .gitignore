@@ -17,6 +17,7 @@ Thumbs.db
 # Vagrant
 .vagrant/
 .physical_ran_bridge_applied
+.testbed.env
 *.vmdk
 *.vdi
 *.vbox
@@ -51,6 +52,7 @@ node_modules/
 __pycache__/
 *.pyc
 .venv/
+venv/
 
 # Boxes
 *.box
