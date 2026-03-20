@@ -125,13 +125,18 @@ fi
 if [[ "${CELL_COUNT:-0}" -gt 0 ]]; then
   echo "📱 Creating per-cell network bridges (cells: 1-${CELL_COUNT})..."
   for cell_id in $(seq 1 "$CELL_COUNT"); do
-    # N2-cell-{id}: VNI 102{id} (e.g., cell-1 → VNI 1021)
-    vni_n2="102${cell_id}"
-    create_vx "br-n2-cell-${cell_id}" "vxlan-n2-cell-${cell_id}" "$vni_n2" "$PEER" "$LOCAL_TUN_IP"
-    
-    # N3-cell-{id}: VNI 103{id} (e.g., cell-1 → VNI 1031)
-    vni_n3="103${cell_id}"
-    create_vx "br-n3-cell-${cell_id}" "vxlan-n3-cell-${cell_id}" "$vni_n3" "$PEER" "$LOCAL_TUN_IP"
+    if [[ -n "$PEER" ]]; then
+      # Edge enabled: per-cell bridges use VXLAN between worker and edge.
+      vni_n2="102${cell_id}"
+      create_vx "br-n2-cell-${cell_id}" "vxlan-n2-cell-${cell_id}" "$vni_n2" "$PEER" "$LOCAL_TUN_IP"
+
+      vni_n3="103${cell_id}"
+      create_vx "br-n3-cell-${cell_id}" "vxlan-n3-cell-${cell_id}" "$vni_n3" "$PEER" "$LOCAL_TUN_IP"
+    else
+      # Edge disabled: keep per-cell bridges local-only, same as the global bridges above.
+      create_br "br-n2-cell-${cell_id}"
+      create_br "br-n3-cell-${cell_id}"
+    fi
   done
   echo "✅ Created ${CELL_COUNT} cells (N2 + N3 per cell)"
 else
