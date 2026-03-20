@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { describePod } from "../api";
+import { describePod, scaleDeployment } from "../api";
 
 const NF_LABELS = {
   amf: "AMF",
@@ -40,10 +40,13 @@ function timeSince(isoString) {
   return `${days}d ${hours % 24}h`;
 }
 
-export default function NfCard({ nf, onRestart, onOpenLogs, expanded, onToggle, isRestarting }) {
+export default function NfCard({ nf, onRestart, onOpenLogs, onOpenTerminal, onOpenIperf3Logs, expanded, onToggle, isRestarting }) {
   const [confirmRestart, setConfirmRestart] = useState(false);
   const [details, setDetails] = useState(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
+  const [showScale, setShowScale] = useState(false);
+  const [scaleTarget, setScaleTarget] = useState(nf.ready_replicas ?? 1);
+  const [scaling, setScaling] = useState(false);
   const label = NF_LABELS[nf.nf_type] || nf.nf_type.toUpperCase();
   const { dot, text } = phaseColor(nf.phase);
   const isTerminating = nf.phase === "Terminating";
@@ -75,11 +78,18 @@ export default function NfCard({ nf, onRestart, onOpenLogs, expanded, onToggle, 
         <span className="ml-auto flex items-center gap-3 text-xs text-slate-500">
           <span className="font-mono text-slate-400">{nf.pod_ip || "—"}</span>
           <span>{nf.node || ""}</span>
-          {nf.restarts > 0 && (
-            <span className="rounded bg-rose-900/40 px-1.5 py-0.5 text-rose-400">
-              {nf.restarts}x
-            </span>
-          )}
+          {nf.restarts > 0 && (() => {
+            const ageMs = nf.start_time ? Date.now() - new Date(nf.start_time).getTime() : Infinity;
+            const recent = ageMs < 3600_000; // pod started < 1h ago → restarts are recent
+            return (
+              <span
+                className={`rounded px-1.5 py-0.5 ${recent ? "bg-rose-900/40 text-rose-400" : "bg-slate-700/40 text-slate-400"}`}
+                title={`${nf.restarts} restarts — pod up since ${timeSince(nf.start_time)}`}
+              >
+                {nf.restarts}x
+              </span>
+            );
+          })()}
           <span className="tabular-nums">{timeSince(nf.start_time)}</span>
           <span className="text-slate-600">{expanded ? "\u25B2" : "\u25BC"}</span>
         </span>
@@ -151,8 +161,71 @@ export default function NfCard({ nf, onRestart, onOpenLogs, expanded, onToggle, 
                   onClick={(e) => { e.stopPropagation(); onOpenLogs?.(nf); }}
                   className="rounded bg-indigo-600/20 px-3 py-1.5 text-xs font-medium text-indigo-300 hover:bg-indigo-600/30 transition-colors"
                 >
-                  Stream Logs
+                  Logs
                 </button>
+
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); onOpenTerminal?.(nf); }}
+                  className="rounded bg-emerald-600/20 px-3 py-1.5 text-xs font-medium text-emerald-300 hover:bg-emerald-600/30 transition-colors"
+                >
+                  Terminal
+                </button>
+
+                {nf.nf_type === "upf" && (
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); onOpenIperf3Logs?.(nf); }}
+                    className="rounded bg-cyan-600/20 px-3 py-1.5 text-xs font-medium text-cyan-300 hover:bg-cyan-600/30 transition-colors"
+                  >
+                    iperf3 Server
+                  </button>
+                )}
+
+                {nf.deployment && (
+                  showScale ? (
+                    <div className="flex items-center gap-1.5 rounded border border-slate-700 bg-slate-800/50 px-2 py-1" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        type="button"
+                        onClick={() => setScaleTarget(Math.max(0, scaleTarget - 1))}
+                        className="rounded bg-slate-700 px-1.5 py-0.5 text-xs text-slate-300 hover:bg-slate-600"
+                      >−</button>
+                      <span className="min-w-[20px] text-center text-xs font-mono text-slate-200">{scaleTarget}</span>
+                      <button
+                        type="button"
+                        onClick={() => setScaleTarget(Math.min(10, scaleTarget + 1))}
+                        className="rounded bg-slate-700 px-1.5 py-0.5 text-xs text-slate-300 hover:bg-slate-600"
+                      >+</button>
+                      <button
+                        type="button"
+                        disabled={scaling}
+                        onClick={async () => {
+                          setScaling(true);
+                          try {
+                            await scaleDeployment(nf.deployment, scaleTarget);
+                          } catch {} finally {
+                            setScaling(false);
+                            setShowScale(false);
+                          }
+                        }}
+                        className="rounded bg-indigo-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-indigo-500 disabled:opacity-40"
+                      >{scaling ? "..." : "Apply"}</button>
+                      <button
+                        type="button"
+                        onClick={() => setShowScale(false)}
+                        className="text-xs text-slate-500 hover:text-slate-300"
+                      >✕</button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); setScaleTarget(nf.ready_replicas ?? 1); setShowScale(true); }}
+                      className="rounded bg-slate-700/60 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-700 transition-colors"
+                    >
+                      Scale
+                    </button>
+                  )
+                )}
 
                 <button
                   type="button"

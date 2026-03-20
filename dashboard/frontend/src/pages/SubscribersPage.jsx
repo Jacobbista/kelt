@@ -11,7 +11,18 @@ import Loader from "../components/Loader";
 
 const EMPTY_SUB = {
   imsi: "",
-  security: { k: "", amf: "8000", op: "", opc: null },
+  security: {
+    k: "",
+    amf: "8000",
+    op: "11111111111111111111111111111111",
+    opc: null,
+  },
+  subscribed_rau_tau_timer: 12,
+  network_access_mode: 0,
+  subscriber_status: 0,
+  access_restriction_data: 32,
+  msisdn: [],
+  __v: 0,
   slice: [
     {
       sst: 1,
@@ -301,13 +312,38 @@ function SubscriberForm({ data, isNew, onSave, onCancel }) {
     });
   }
 
+  function setOp(value) {
+    const v = (value ?? "").trim();
+    setForm((prev) => ({
+      ...prev,
+      security: {
+        ...(prev.security || {}),
+        op: v === "" ? null : v,
+        opc: null,
+      },
+    }));
+  }
+
+  function setOpc(value) {
+    const v = (value ?? "").trim();
+    setForm((prev) => ({
+      ...prev,
+      security: {
+        ...(prev.security || {}),
+        opc: v === "" ? null : v,
+        op: null,
+      },
+    }));
+  }
+
   return (
     <div className="mb-4 rounded-lg border border-indigo-700/40 bg-slate-900 p-4">
       <div className="mb-3 font-semibold text-white">{isNew ? "Add Subscriber" : `Edit ${form.imsi}`}</div>
       <div className="grid grid-cols-2 gap-3 text-xs">
         <FormField label="IMSI" value={form.imsi} onChange={(v) => setField("imsi", v)} disabled={!isNew} mono />
         <FormField label="Key (K)" value={form.security?.k || ""} onChange={(v) => setField("security.k", v)} mono />
-        <FormField label="OP" value={form.security?.op || ""} onChange={(v) => setField("security.op", v)} mono />
+        <FormField label="OP" value={form.security?.op ?? ""} onChange={setOp} mono />
+        <FormField label="OPc (optional)" value={form.security?.opc ?? ""} onChange={setOpc} mono />
         <FormField label="AMF" value={form.security?.amf || ""} onChange={(v) => setField("security.amf", v)} mono />
 
         <div className="col-span-2 border-t border-slate-800 pt-2 mt-1">

@@ -29,6 +29,25 @@
   changed_when: "'System clock was stepped' in chrony_makestep.stdout"
   failed_when: false
 
+- name: Deploy chrony-force-sync oneshot service
+  ansible.builtin.template:
+    src: chrony-force-sync.service.j2
+    dest: /etc/systemd/system/chrony-force-sync.service
+    mode: "0644"
+
+- name: Deploy chrony-force-sync timer
+  ansible.builtin.template:
+    src: chrony-force-sync.timer.j2
+    dest: /etc/systemd/system/chrony-force-sync.timer
+    mode: "0644"
+
+- name: Enable and start chrony-force-sync timer
+  ansible.builtin.systemd:
+    name: chrony-force-sync.timer
+    state: started
+    enabled: true
+    daemon_reload: true
+
 - name: Install Open vSwitch on worker/edge
   ansible.builtin.apt:
     name: "{{ openvswitch_pkg }}"

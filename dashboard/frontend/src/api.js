@@ -59,6 +59,7 @@ export const getRuntimeInfo = () => get("/health");
 
 // Admin: restart backend via systemd
 export const restartBackend = () => post("/api/v1/admin/restart-backend", {});
+export const getServiceStatus = () => get("/api/v1/admin/service-status");
 
 // Cluster
 export const getClusterSummary = () => get("/api/v1/cluster/summary");
@@ -81,6 +82,10 @@ export const scaleAmfController = (kind, name, replicas, namespace = "5g") =>
 
 // Deployments
 export const restartDeployment = (ns, dep) => post(`/api/v1/deployments/${dep}/restart`, { namespace: ns });
+
+// NF log level (Open5GS)
+export const getNfLogLevel = (deployment, ns = "5g") => get(`/api/v1/nf/${deployment}/log-level?namespace=${ns}`);
+export const setNfLogLevel = (deployment, level, ns = "5g") => patch(`/api/v1/nf/${deployment}/log-level?namespace=${ns}`, { level });
 
 // Topology & Network
 export const getTopology = (ns = "5g") => get(`/api/v1/topology?namespace=${ns}`);
@@ -230,6 +235,10 @@ export const getUePods = () => get("/api/v1/ue/pods");
 export const runUePing = (pod, target = "8.8.8.8") => post("/api/v1/ue/test/ping", { pod, target });
 export const runUeIperf = (pod, server = "10.45.0.1", duration = 5) => post("/api/v1/ue/test/iperf", { pod, server, duration });
 
+// Time Sync
+export const getTimeSync = () => get("/api/v1/time/sync");
+export const forceTimeSync = () => post("/api/v1/time/force-sync", {});
+
 // Sniffer
 export const getSnifferPoints = () => get("/api/v1/sniffer/points");
 export const runPathTrace = (duration = 5) => post(`/api/v1/sniffer/trace?duration=${duration}`, {});
@@ -244,9 +253,24 @@ export function buildSnifferWsUrl(pointId, { filter, count = 0, duration = 300 }
 }
 
 // Logs WebSocket
-export function buildLogsWsUrl(namespace, pod, container) {
+export function buildLogsWsUrl(namespace, pod, container, opts = {}) {
   const url = new URL(`${API_BASE}/api/v1/ws/logs/${namespace}/${pod}`);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   if (container) url.searchParams.set("container", container);
+  if (opts.tail) url.searchParams.set("tail", String(opts.tail));
+  if (opts.fromStart) url.searchParams.set("from_start", "1");
   return url.toString();
 }
+
+// Exec WebSocket
+export function buildExecWsUrl(namespace, pod, container, command = "/bin/sh") {
+  const url = new URL(`${API_BASE}/api/v1/ws/exec/${namespace}/${pod}`);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  if (container) url.searchParams.set("container", container);
+  if (command) url.searchParams.set("command", command);
+  return url.toString();
+}
+
+// Deployment scaling
+export const scaleDeployment = (name, replicas, ns = "5g") =>
+  post(`/api/v1/deployments/${name}/scale`, { replicas, namespace: ns });

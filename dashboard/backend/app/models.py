@@ -90,3 +90,7 @@ class ScaleControllerRequest(BaseModel):
 class ConfigMapPayload(BaseModel):
     data: dict[str, str]
     restart_deployments: list[str] = Field(default_factory=list)
+
+
+class LogLevelPayload(BaseModel):
+    level: str  # debug, info, warning, error

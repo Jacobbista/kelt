@@ -23,6 +23,8 @@ from app.routers.sniffer import router as sniffer_router
 from app.routers.subscribers import router as subscribers_router
 from app.routers.topology import router as topology_router
 from app.routers.traffic import router as traffic_router
+from app.routers.time_sync import router as time_sync_router
+from app.routers.exec_ws import router as exec_ws_router
 from app.routers.ue import router as ue_router
 
 log = logging.getLogger(__name__)
@@ -68,4 +70,6 @@ app.include_router(ran_router)
 app.include_router(sniffer_router)
 app.include_router(traffic_router)
 app.include_router(ue_router)
+app.include_router(time_sync_router)
+app.include_router(exec_ws_router)
 app.include_router(experiments_router)

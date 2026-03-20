@@ -63,6 +63,46 @@ _RE_SMF_REMOVED_SESSION = re.compile(
 _RE_SMF_UE_ADDED = re.compile(
     r"\[Added\] Number of SMF-UEs is now (\d+)",
 )
+_RE_SMF_UE_REMOVED = re.compile(
+    r"\[Removed\] Number of SMF-UEs is now (\d+)",
+)
+
+# ── AMF disconnect / failure patterns ─────────────────────────
+_RE_GNB_UE_REMOVED = re.compile(
+    r"\[Removed\] Number of gNB-UEs is now (\d+)",
+)
+_RE_AMF_UE_REMOVED = re.compile(
+    r"\[Removed\] Number of AMF-UEs is now (\d+)",
+)
+_RE_AMF_SESSION_REMOVED = re.compile(
+    r"\[Removed\] Number of AMF-Sessions is now (\d+)",
+)
+_RE_UE_CONTEXT_RELEASE = re.compile(
+    r"\[imsi-(\d+)\].*(?:UE Context Release|context released)", re.I,
+)
+_RE_AUTH_REJECT = re.compile(
+    r"\[imsi-(\d+)\].*(?:Authentication reject|authentication failure|auth[- ]?reject)", re.I,
+)
+
+# ── Auth failure reason mapping ───────────────────────────────
+_AUTH_FAIL_REASONS: dict[str, str] = {
+    "mac failure": "SIM auth failed (MAC mismatch — check K/OPc keys)",
+    "mac": "SIM auth failed (MAC mismatch — check K/OPc keys)",
+    "sqn failure": "Sequence number out of sync (re-provision subscriber)",
+    "sqn": "Sequence number out of sync (re-provision subscriber)",
+    "unknown": "Subscriber not found in database",
+    "not found": "Subscriber not found in database",
+    "serving network": "Serving network name mismatch",
+}
+
+
+def _extract_auth_reason(text: str) -> str:
+    """Map AMF log text to a human-readable auth failure explanation."""
+    lower = text.lower()
+    for pattern, explanation in _AUTH_FAIL_REASONS.items():
+        if pattern in lower:
+            return explanation
+    return "Check AMF logs for detailed cause"
 
 
 class UEService:
@@ -108,7 +148,7 @@ class UEService:
         events.extend(self._parse_amf_logs(tail))
         events.extend(self._parse_smf_logs(tail))
         events.sort(key=lambda e: e.get("ts", ""), reverse=True)
-        return _deduplicate_gnb_connect_events(events)
+        return _deduplicate_events(events)
 
     def _read_deploy_logs(self, deploy: str, tail: int = 500) -> str:
         try:
@@ -153,11 +193,13 @@ class UEService:
             m = _RE_REG_FAIL.search(text)
             if m:
                 detail = f"UE {m.group(1)} registration failed"
+                reason = "Network rejected registration — check subscriber provisioning"
                 if "de-register" in text.lower() or "deregister" in text.lower():
                     detail = f"UE {m.group(1)} de-registered"
+                    reason = "UE initiated deregistration (normal shutdown or SIM removal)"
                 events.append({"ts": ts, "type": "registration_fail", "source": "amf",
                                "severity": "warning", "imsi": m.group(1),
-                               "detail": detail})
+                               "detail": detail, "reason": reason})
                 continue
 
             if _RE_REG_REQ.search(text):
@@ -193,6 +235,49 @@ class UEService:
                                "severity": "info", "imsi": m.group(1),
                                "dnn": m.group(2), "slice": m.group(3),
                                "detail": f"UE {m.group(1)} PDU request DNN:{m.group(2)} S-NSSAI:{m.group(3)}"})
+                continue
+
+            m = _RE_GNB_UE_REMOVED.search(text)
+            if m:
+                events.append({"ts": ts, "type": "ue_count_change", "source": "amf",
+                               "severity": "warning",
+                               "detail": f"gNB-UE count decreased to {m.group(1)}",
+                               "reason": "A UE detached from the gNB — may indicate UE power-off or signal loss"})
+                continue
+
+            m = _RE_AMF_UE_REMOVED.search(text)
+            if m:
+                events.append({"ts": ts, "type": "ue_count_change", "source": "amf",
+                               "severity": "warning",
+                               "detail": f"AMF-UE count decreased to {m.group(1)}",
+                               "reason": "UE deregistered from AMF — normal shutdown or network-initiated release"})
+                continue
+
+            m = _RE_AMF_SESSION_REMOVED.search(text)
+            if m:
+                events.append({"ts": ts, "type": "session_count_change", "source": "amf",
+                               "severity": "warning",
+                               "detail": f"AMF session count decreased to {m.group(1)}",
+                               "reason": "An AMF session ended — UE disconnect or idle timeout"})
+                continue
+
+            m = _RE_UE_CONTEXT_RELEASE.search(text)
+            if m:
+                events.append({"ts": ts, "type": "ue_context_release", "source": "amf",
+                               "severity": "warning", "imsi": m.group(1),
+                               "detail": f"UE {m.group(1)} context released (detached)",
+                               "reason": "UE detached from network — power-off, signal loss, or idle timeout"})
+                continue
+
+            m = _RE_AUTH_REJECT.search(text)
+            if m:
+                reason = _extract_auth_reason(text)
+                events.append({"ts": ts, "type": "auth_reject", "source": "amf",
+                               "severity": "error", "imsi": m.group(1),
+                               "detail": f"Authentication rejected for {m.group(1)}",
+                               "reason": reason})
+                continue
+
         return events
 
     def _parse_smf_logs(self, tail: int) -> list[dict[str, Any]]:
@@ -215,7 +300,8 @@ class UEService:
                 events.append({"ts": ts, "type": "pdu_session_rel", "source": "smf",
                                "severity": "info", "imsi": m.group(1),
                                "dnn": m.group(2), "ue_ip": m.group(3),
-                               "detail": f"PDU session released: {m.group(1)} {m.group(3)} (DNN: {m.group(2)})"})
+                               "detail": f"PDU session released: {m.group(1)} {m.group(3)} (DNN: {m.group(2)})",
+                               "reason": "PDU session ended — UE disconnect or session timeout"})
                 continue
 
             m = _RE_SMF_SESSION_REMOVED.search(text)
@@ -237,15 +323,24 @@ class UEService:
                 events.append({"ts": ts, "type": "ue_count_change", "source": "smf",
                                "severity": "info",
                                "detail": f"SMF-UE count now {m.group(1)}"})
+                continue
+
+            m = _RE_SMF_UE_REMOVED.search(text)
+            if m:
+                events.append({"ts": ts, "type": "ue_count_change", "source": "smf",
+                               "severity": "warning",
+                               "detail": f"SMF-UE count decreased to {m.group(1)}",
+                               "reason": "A UE was removed from SMF — session cleanup"})
         return events
 
     # ── Active UE list ──────────────────────────────────────────
 
-    def get_active_ues(self) -> list[dict[str, Any]]:
+    async def get_active_ues(self) -> list[dict[str, Any]]:
         """Build an active-UE list by cross-referencing log events.
 
         Since Open5GS stores sessions in memory (not MongoDB), we reconstruct
-        state from recent AMF/SMF log entries.
+        state from recent AMF/SMF log entries.  Cross-checks with Prometheus
+        ran_ue gauge to detect stale entries.
         """
         registered: dict[str, dict[str, Any]] = {}
         for ev in self._parse_amf_logs(tail=1000):
@@ -264,6 +359,12 @@ class UEService:
                 registered[imsi]["last_seen"] = ev["ts"]
                 if "de-register" in (ev.get("detail") or "").lower() or "deregister" in (ev.get("detail") or "").lower():
                     registered[imsi]["sessions"] = []
+            elif ev["type"] == "ue_context_release":
+                registered.setdefault(imsi, {"imsi": imsi, "status": "released",
+                                              "last_seen": ev["ts"], "sessions": []})
+                registered[imsi]["status"] = "released"
+                registered[imsi]["sessions"] = []
+                registered[imsi]["last_seen"] = ev["ts"]
 
         for ev in self._parse_smf_logs(tail=1000):
             imsi = ev.get("imsi")
@@ -293,9 +394,9 @@ class UEService:
                             break
                     registered[imsi_rel]["last_seen"] = ev["ts"]
 
-        # Filter stale UEs: drop if last_seen older than 15 minutes
+        # Filter stale UEs: drop if last_seen older than 10 minutes
         now = datetime.now(timezone.utc)
-        max_age_sec = 15 * 60
+        max_age_sec = 10 * 60
         filtered = []
         for u in registered.values():
             try:
@@ -307,6 +408,19 @@ class UEService:
                     filtered.append(u)
             except Exception:
                 filtered.append(u)
+
+        # Cross-check with Prometheus: if ran_ue=0 but we have "registered" UEs, mark stale
+        try:
+            data = await self.prom.instant_query("ran_ue")
+            vec = data.get("result", [])
+            prom_count = int(float(vec[0]["value"][1])) if vec else 0
+            if prom_count == 0:
+                for u in filtered:
+                    if u["status"] == "registered":
+                        u["status"] = "stale"
+        except Exception:
+            pass
+
         return sorted(filtered, key=lambda u: u.get("last_seen", ""), reverse=True)
 
     # ── Open5GS infoAPI: connected gNBs (gnb_id, plmn, peer) ──────
@@ -406,19 +520,40 @@ def _normalize_gnb_ip(ip: str) -> str:
     return ip
 
 
-def _deduplicate_gnb_connect_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Keep only the most recent gnb_connect event per IP (events are sorted newest-first)."""
-    seen_ip: set[str] = set()
-    out = []
+def _deduplicate_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove duplicate events (events are sorted newest-first, so first seen wins).
+
+    Strategy per type:
+    - gnb_connect: keep latest per IP
+    - registration_ok/fail, auth_reject, ue_context_release: keep latest per IMSI
+    - ue_count_change, session_count_change: keep latest per (source, type)
+    - pdu_session_est: keep latest per (imsi, ue_ip, dnn)
+    - Others: keep all
+    """
+    seen: dict[str, set[str]] = {}
+    out: list[dict[str, Any]] = []
     for ev in events:
-        if ev.get("type") != "gnb_connect":
+        etype = ev.get("type", "")
+
+        if etype == "gnb_connect":
+            key = _normalize_gnb_ip(ev.get("gnb_ip", ""))
+        elif etype in ("registration_ok", "registration_fail", "auth_reject", "ue_context_release"):
+            key = ev.get("imsi", "")
+        elif etype in ("ue_count_change", "session_count_change"):
+            key = ev.get("source", "")
+        elif etype == "pdu_session_est":
+            key = f"{ev.get('imsi', '')}:{ev.get('ue_ip', '')}:{ev.get('dnn', '')}"
+        else:
             out.append(ev)
             continue
-        ip_norm = _normalize_gnb_ip(ev.get("gnb_ip", ""))
-        if ip_norm in seen_ip:
+
+        bucket = seen.setdefault(etype, set())
+        if key and key in bucket:
             continue
-        seen_ip.add(ip_norm)
+        if key:
+            bucket.add(key)
         out.append(ev)
+
     return out
 
 

@@ -1,4 +1,5 @@
-import React from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
+import TimeSyncPopover from "./TimeSyncPopover";
 
 const NAV_ITEMS = [
   { id: "overview", label: "Overview", icon: "\u25A3" },
@@ -11,7 +12,43 @@ const NAV_ITEMS = [
   { id: "metrics", label: "Metrics", icon: "\u2261" },
 ];
 
-export default function Sidebar({ activePage, onNavigate, runtime }) {
+const _localFmt = new Intl.DateTimeFormat(undefined, {
+  hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+});
+const _tzAbbr = (() => {
+  // Extract timezone abbreviation (e.g. "CET", "EST") from a formatted date
+  const parts = new Intl.DateTimeFormat(undefined, { timeZoneName: "short" }).formatToParts(new Date());
+  return parts.find((p) => p.type === "timeZoneName")?.value ?? "LOC";
+})();
+
+function useServerClock(serverTime) {
+  const offsetRef = useRef(0);
+  const [display, setDisplay] = useState(() => _localFmt.format(new Date()));
+
+  useEffect(() => {
+    if (serverTime) {
+      offsetRef.current = new Date(serverTime).getTime() - Date.now();
+    }
+  }, [serverTime]);
+
+  useEffect(() => {
+    function tick() {
+      setDisplay(_localFmt.format(new Date(Date.now() + offsetRef.current)));
+    }
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  return display;
+}
+
+export default function Sidebar({ activePage, onNavigate, runtime, serverTime }) {
+  const [showSync, setShowSync] = useState(false);
+  const clockStr = useServerClock(serverTime);
+  const toggleSync = useCallback(() => setShowSync((v) => !v), []);
+  const closeSync = useCallback(() => setShowSync(false), []);
+
   const modeBadgeClass =
     runtime.mode === "dev"
       ? "bg-amber-600 text-amber-50"
@@ -44,7 +81,22 @@ export default function Sidebar({ activePage, onNavigate, runtime }) {
         ))}
       </nav>
 
-      <div className="border-t border-slate-800 px-3 py-3">
+      <div className="relative border-t border-slate-800 px-3 py-3">
+        <button
+          type="button"
+          onClick={toggleSync}
+          className="mb-2 flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition-colors"
+          title="Cluster time — click for sync details"
+        >
+          <span className="text-[10px]">&#x25F7;</span>
+          <span className="font-mono tabular-nums">
+            {clockStr}
+          </span>
+          <span className="text-[9px] text-slate-600">{_tzAbbr}</span>
+        </button>
+
+        {showSync && <TimeSyncPopover onClose={closeSync} />}
+
         <a
           href="http://192.168.56.11:30300"
           target="_blank"

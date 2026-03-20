@@ -11,7 +11,7 @@ const SECTIONS = [
   { key: "other", title: "Other" },
 ];
 
-export default function CorePage({ onOpenLogs, expandNfType }) {
+export default function CorePage({ onOpenLogs, onOpenTerminal, onOpenIperf3Logs, expandNfType }) {
   const [nfStatus, setNfStatus] = useState(null);
   const [error, setError] = useState("");
   const [expandedPod, setExpandedPod] = useState(null);
@@ -162,6 +162,8 @@ export default function CorePage({ onOpenLogs, expandNfType }) {
                   onToggle={() => setExpandedPod(expandedPod === nf.name ? null : nf.name)}
                   onRestart={handleRestart}
                   onOpenLogs={onOpenLogs}
+                  onOpenTerminal={onOpenTerminal}
+                  onOpenIperf3Logs={onOpenIperf3Logs}
                   isRestarting={restartingDeps.has(nf.deployment)}
                 />
               ))}

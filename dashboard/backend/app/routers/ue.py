@@ -41,9 +41,9 @@ def ue_events(
 
 
 @router.get("/active")
-def ue_active(svc: UEService = Depends(_get_ue)) -> list[dict[str, Any]]:
+async def ue_active(svc: UEService = Depends(_get_ue)) -> list[dict[str, Any]]:
     try:
-        return svc.get_active_ues()
+        return await svc.get_active_ues()
     except Exception as exc:
         log.exception("Active UEs failed")
         raise HTTPException(500, detail=str(exc)) from exc

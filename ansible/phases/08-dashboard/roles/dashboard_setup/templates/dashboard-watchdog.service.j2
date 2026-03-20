@@ -1,0 +1,14 @@
+[Unit]
+Description=5G Dashboard Watchdog (backend restart/status)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ dashboard_service_user }}
+ExecStart=/usr/bin/python3 {{ dashboard_backend_dir }}/watchdog.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

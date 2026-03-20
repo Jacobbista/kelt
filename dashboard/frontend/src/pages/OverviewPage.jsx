@@ -163,9 +163,18 @@ export default function OverviewPage({ onNavigateToNf }) {
               }>
                 {nf.phase}
               </span>
-              {nf.restarts > 0 && (
-                <span className="ml-2 text-rose-400">{nf.restarts} restarts</span>
-              )}
+              {nf.restarts > 0 && (() => {
+                const ageMs = nf.start_time ? Date.now() - new Date(nf.start_time).getTime() : Infinity;
+                const recent = ageMs < 3600_000;
+                return (
+                  <span
+                    className={`ml-2 ${recent ? "text-rose-400" : "text-slate-500"}`}
+                    title={`${nf.restarts} restarts — pod up since ${nf.start_time ? new Date(nf.start_time).toLocaleString() : "unknown"}`}
+                  >
+                    {nf.restarts} restarts
+                  </span>
+                );
+              })()}
             </div>
             <div className="mt-1 truncate text-[10px] text-slate-600 font-mono">{nf.node || ""}</div>
           </button>

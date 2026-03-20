@@ -34,10 +34,19 @@ At this stage we're still outside Kubernetes — configuring the Linux networkin
 ### Outputs
 
 - `chrony` and `openvswitch-switch` services running (where applicable)
+- `chrony-force-sync.timer` active on all nodes (periodic drift correction)
 - `net.ipv4.ip_forward = 1` system-wide
 - Persistent iptables rules (if NAT enabled)
 - `/etc/hosts` includes all inventory hosts
 - Verified node-to-node connectivity
+
+### Chrony Force-Sync Timer
+
+VirtualBox VMs are prone to clock drift, especially after suspend/resume cycles. While chrony's `makestep 1 -1` directive allows stepping the clock when drift exceeds 1 second, it only triggers when chrony detects the offset through its polling cycle — which can take minutes.
+
+To close this gap, Phase 1 deploys a systemd timer (`chrony-force-sync.timer`) on all nodes that runs `chronyc makestep` every 5 minutes. This proactively checks for drift and corrects it immediately if found. When the clock is already in sync, the command is a no-op.
+
+The timer starts 30 seconds after boot (to let chrony establish its sources first) and repeats every 5 minutes. This is important for 5G signaling (NAS timers, certificate validation) and log correlation across nodes.
 
 ### Notes
 

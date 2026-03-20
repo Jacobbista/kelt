@@ -1,0 +1,6 @@
+[Unit]
+Description=Force chrony time step if drift exceeds threshold
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/chronyc -a makestep

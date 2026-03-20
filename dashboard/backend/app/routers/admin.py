@@ -46,3 +46,34 @@ def restart_backend(
         raise HTTPException(500, detail=str(exc)) from exc
 
     return {"status": "restarting", "service": svc}
+
+
+@router.get("/service-status")
+def service_status() -> dict[str, Any]:
+    """Return systemd service status and recent journal lines for the backend."""
+    svc = settings.backend_service_name
+    result: dict[str, Any] = {"service": svc}
+
+    # systemctl status (exit code 0=active, 3=inactive/failed)
+    try:
+        proc = subprocess.run(
+            ["systemctl", "status", svc, "--no-pager", "-l"],
+            capture_output=True, text=True, timeout=5,
+        )
+        result["status_output"] = proc.stdout.strip()
+        result["active"] = proc.returncode == 0
+    except Exception as exc:
+        result["status_output"] = f"Error: {exc}"
+        result["active"] = False
+
+    # Recent journal entries
+    try:
+        proc = subprocess.run(
+            ["journalctl", "-u", svc, "--no-pager", "-n", "40", "--output=short-iso"],
+            capture_output=True, text=True, timeout=5,
+        )
+        result["journal"] = proc.stdout.strip()
+    except Exception as exc:
+        result["journal"] = f"Error: {exc}"
+
+    return result

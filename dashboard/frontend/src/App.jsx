@@ -1,10 +1,11 @@
-import React, { useCallback, useEffect, useState } from "react";
-import { getRuntimeInfo, restartBackend } from "./api";
+import React, { useEffect, useState, useCallback } from "react";
+import { getRuntimeInfo } from "./api";
 import { OperationsProvider } from "./context/OperationsContext";
 import { useBackendHealth } from "./hooks/useBackendHealth";
 import ErrorBoundary from "./components/ErrorBoundary";
 import Layout from "./Layout";
 import LogViewer from "./components/LogViewer";
+import PodTerminal from "./components/PodTerminal";
 import CorePage from "./pages/CorePage";
 import DiagnosticsPage from "./pages/DiagnosticsPage";
 import MetricsPage from "./pages/MetricsPage";
@@ -18,21 +19,9 @@ export default function App() {
   const [activePage, setActivePage] = useState("overview");
   const [runtime, setRuntime] = useState({ mode: "unknown", runtime_source: "unknown" });
   const [logTarget, setLogTarget] = useState(null);
+  const [termTarget, setTermTarget] = useState(null);
   const [expandNfType, setExpandNfType] = useState(null);
-  const { unreachable: backendUnreachable, check: checkBackend } = useBackendHealth();
-  const [restartingBackend, setRestartingBackend] = useState(false);
-
-  const handleRestartBackend = useCallback(async () => {
-    setRestartingBackend(true);
-    try {
-      await restartBackend();
-    } catch {
-      /* Backend dies before responding — expected */
-    }
-    await new Promise((r) => setTimeout(r, 4000));
-    await checkBackend();
-    setRestartingBackend(false);
-  }, [checkBackend]);
+  const { unreachable: backendUnreachable, serverTime } = useBackendHealth();
 
   useEffect(() => {
     getRuntimeInfo()
@@ -51,7 +40,22 @@ export default function App() {
   }
 
   function handleOpenLogs(nf) {
-    setLogTarget({ name: nf.name, containers: nf.containers, namespace: "5g" });
+    setLogTarget({ name: nf.name, containers: nf.containers, namespace: "5g", deployment: nf.deployment });
+  }
+
+  function handleOpenTerminal(nf) {
+    setTermTarget({ name: nf.name, containers: nf.containers, nfType: nf.nf_type, namespace: "5g" });
+  }
+
+  function handleOpenIperf3Logs(nf) {
+    setTermTarget({
+      name: nf.name,
+      containers: nf.containers,
+      nfType: nf.nf_type,
+      namespace: "5g",
+      command: "tail -F /var/log/iperf3-server.log",
+      title: "iperf3 Server Logs",
+    });
   }
 
   return (
@@ -61,15 +65,14 @@ export default function App() {
       activePage={activePage}
       onNavigate={(page) => { setActivePage(page); setExpandNfType(null); }}
       runtime={runtime}
+      serverTime={serverTime}
       backendUnreachable={backendUnreachable}
-      onRestartBackend={handleRestartBackend}
-      restartingBackend={restartingBackend}
     >
       {activePage === "overview" && (
         <OverviewPage onNavigateToNf={handleNavigateToNf} />
       )}
       {activePage === "core" && (
-        <CorePage onOpenLogs={handleOpenLogs} expandNfType={expandNfType} />
+        <CorePage onOpenLogs={handleOpenLogs} onOpenTerminal={handleOpenTerminal} onOpenIperf3Logs={handleOpenIperf3Logs} expandNfType={expandNfType} />
       )}
       {activePage === "topology" && <TopologyPage />}
       {activePage === "ran" && <RanPage />}
@@ -82,8 +85,23 @@ export default function App() {
         <LogViewer
           namespace={logTarget.namespace}
           pod={logTarget.name}
+          containers={logTarget.containers}
           container={logTarget.containers?.[0]}
+          deployment={logTarget.deployment}
           onClose={() => setLogTarget(null)}
+        />
+      )}
+
+      {termTarget && (
+        <PodTerminal
+          namespace={termTarget.namespace}
+          pod={termTarget.name}
+          containers={termTarget.containers}
+          container={termTarget.containers?.[0]}
+          nfType={termTarget.nfType}
+          command={termTarget.command}
+          title={termTarget.title}
+          onClose={() => setTermTarget(null)}
         />
       )}
     </Layout>

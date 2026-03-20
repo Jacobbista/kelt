@@ -15,7 +15,7 @@ Environment=DASHBOARD_HOST=0.0.0.0
 Environment=DASHBOARD_PORT={{ dashboard_backend_port }}
 Environment=DASHBOARD_KUBECONFIG_PATH={{ kubeconfig_path | default('/vagrant/tests/kubeconfig') }}
 Environment=DASHBOARD_WORKER_SSH_HOST=worker
-Environment=DASHBOARD_ALLOW_CONFIGMAP_WRITE=false
+Environment=DASHBOARD_ALLOW_CONFIGMAP_WRITE={{ dashboard_allow_configmap_write | bool | lower }}
 Environment=DASHBOARD_PROMETHEUS_URL=http://{{ worker_ip | default('192.168.56.11') }}:30090
 Environment=DASHBOARD_MONGODB_URL=mongodb://{{ worker_ip | default('192.168.56.11') }}:30017/open5gs
 Environment=DASHBOARD_CORS_ORIGIN=http://{{ dashboard_bind_host }}:{{ dashboard_frontend_port }}
@@ -24,9 +24,9 @@ Environment=WATCHFILES_FORCE_POLLING=1
 {% endif %}
 EnvironmentFile=-{{ dashboard_backend_dir }}/.env.runtime
 {% if dashboard_mode == 'dev' %}
-ExecStart={{ dashboard_backend_venv }}/bin/uvicorn app.main:app --host 0.0.0.0 --port {{ dashboard_backend_port }} --reload
+ExecStart={{ dashboard_backend_venv }}/bin/uvicorn app.main:app --host 0.0.0.0 --port {{ dashboard_backend_port }} --reload --timeout-graceful-shutdown 5
 {% else %}
-ExecStart={{ dashboard_backend_venv }}/bin/uvicorn app.main:app --host 0.0.0.0 --port {{ dashboard_backend_port }}
+ExecStart={{ dashboard_backend_venv }}/bin/uvicorn app.main:app --host 0.0.0.0 --port {{ dashboard_backend_port }} --timeout-graceful-shutdown 5
 {% endif %}
 TimeoutStopSec=5
 KillMode=mixed

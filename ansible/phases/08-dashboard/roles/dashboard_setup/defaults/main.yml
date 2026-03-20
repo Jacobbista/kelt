@@ -15,6 +15,6 @@ dashboard_service_user: vagrant
 dashboard_backend_service_name: dashboard-backend
 dashboard_frontend_service_name: dashboard-frontend
 dashboard_admin_token: change-me
-dashboard_allow_configmap_write: false
+dashboard_allow_configmap_write: true
 
 dashboard_install_nodejs: true

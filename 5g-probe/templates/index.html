@@ -53,6 +53,7 @@
         .tag { font-size: .62rem; font-weight: 700; padding: .2em .55em; border-radius: 5px; }
         .tag-ue { background: rgba(34,197,94,.15); color: var(--green); }
         .tag-router { background: rgba(245,158,11,.15); color: var(--amber); }
+        .tag-wwan { background: rgba(99,102,241,.15); color: #818cf8; }
 
         /* ---- NS table ---- */
         .ns-tbl { width: 100%; font-size: .82rem; }
@@ -81,6 +82,23 @@
         .btn-amber:hover:not(:disabled) { background: #d97706; }
         .btn-green  { background: var(--green); color: #052e16; font-weight: 700; }
         .btn-green:hover:not(:disabled) { background: #16a34a; }
+        .sampling-btn { background: transparent; border: 1px solid var(--border-hi); color: var(--txt2); font-size: .72rem; font-weight: 500; padding: .25em .7em; border-radius: 6px; cursor: pointer; transition: all .15s; }
+        .sampling-btn:hover { border-color: var(--blue); color: var(--txt); }
+        .sampling-btn.active { background: var(--blue); color: #fff; border-color: var(--blue); }
+        /* ---- Planner tabs ---- */
+        .planner-tab { padding: .5rem 1.1rem; border-radius: 9px; font-size: .82rem; font-weight: 600; background: transparent; border: 1px solid var(--border); color: var(--txt2); cursor: pointer; transition: all .15s; }
+        .planner-tab:hover { border-color: var(--blue); color: var(--txt); }
+        .planner-tab.active { background: var(--bg-3, var(--card)); color: var(--txt); border-color: var(--border-hi, var(--blue)); }
+        /* ---- Results overview grid ---- */
+        .results-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: .75rem; }
+        .group-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: .85rem 1rem; cursor: pointer; transition: border-color .2s; }
+        .group-card:hover { border-color: var(--blue); }
+        /* ---- Queue item ---- */
+        .queue-item { display: flex; align-items: center; justify-content: space-between; padding: .5rem .75rem; background: var(--bg); border-radius: 8px; border: 1px solid var(--border); margin-bottom: .35rem; font-size: .82rem; }
+        /* ---- Run history table ---- */
+        .run-tbl { width: 100%; font-size: .82rem; border-collapse: collapse; }
+        .run-tbl th { color: var(--txt3); font-weight: 600; font-size: .65rem; text-transform: uppercase; letter-spacing: .07em; border-bottom: 1px solid var(--border); padding: .5rem .6rem; text-align: left; }
+        .run-tbl td { padding: .55rem .6rem; border-bottom: 1px solid var(--border); }
         .btn-start  { background: linear-gradient(135deg,var(--indigo),var(--purple)); color: #fff; font-weight: 700; font-size: .9rem; padding: .55em 1.8em; border-radius: 10px; box-shadow: 0 4px 18px rgba(99,102,241,.3); }
         .btn-start:hover:not(:disabled) { box-shadow: 0 6px 24px rgba(99,102,241,.45); transform: translateY(-1px); }
         .btn-stop   { background: var(--red); color: #fff; font-weight: 700; font-size: .9rem; padding: .55em 1.8em; border-radius: 10px; }
@@ -139,6 +157,9 @@
         <button class="nav-item" data-panel="throughput" onclick="nav('throughput')">📶 Throughput <small style="color:var(--txt3);font-size:.65rem;">iperf3</small></button>
         <button class="nav-item" data-panel="latency" onclick="nav('latency')">📍 Latency <small style="color:var(--txt3);font-size:.65rem;">ping</small></button>
         <button class="nav-item" data-panel="bufferbloat" onclick="nav('bufferbloat')">🌊 Bufferbloat <small style="color:var(--txt3);font-size:.65rem;">loaded RTT</small></button>
+
+        <div class="nav-sep">Planning</div>
+        <button class="nav-item" data-panel="planner" onclick="nav('planner');plannerNav(plannerTab);">🗂 Experiment Planner</button>
 
         <div class="nav-sep">Results</div>
         <button class="nav-item" data-panel="results" onclick="nav('results');loadResults();">📁 Test Results</button>
@@ -239,15 +260,20 @@
                         </select>
                     </div>
                     <div class="col-md-2" id="bwCol" style="display:none;">
-                        <label class="form-label">BW Target</label>
-                        <select id="tpBw" class="form-select form-select-sm">
-                            <option value="50M">50 Mbps</option>
-                            <option value="100M">100 Mbps</option>
-                            <option value="200M" selected>200 Mbps</option>
-                            <option value="500M">500 Mbps</option>
-                            <option value="1G">1 Gbps</option>
-                            <option value="0">Unlimited (MAX)</option>
-                        </select>
+                        <label class="form-label">BW Target (Mbps)</label>
+                        <div style="display:flex;gap:.3rem;flex-wrap:wrap;margin-bottom:.35rem;">
+                            <button class="btn_ btn-blue" style="padding:.18em .5em;font-size:.68rem;" onclick="setTpBwPreset(10)">10</button>
+                            <button class="btn_ btn-blue" style="padding:.18em .5em;font-size:.68rem;" onclick="setTpBwPreset(25)">25</button>
+                            <button class="btn_ btn-blue" style="padding:.18em .5em;font-size:.68rem;" onclick="setTpBwPreset(50)">50</button>
+                            <button class="btn_ btn-blue" style="padding:.18em .5em;font-size:.68rem;" onclick="setTpBwPreset(100)">100</button>
+                            <button class="btn_ btn-blue" style="padding:.18em .5em;font-size:.68rem;" onclick="setTpBwPreset(200)">200</button>
+                            <button class="btn_ btn-blue" style="padding:.18em .5em;font-size:.68rem;" onclick="setTpBwPreset(0)">MAX</button>
+                        </div>
+                        <input type="number" id="tpBwMbps" class="form-control form-control-sm" value="200" min="0" placeholder="Mbps (0=max)">
+                    </div>
+                    <div class="col-md-2" id="tpLengthCol" style="display:none;">
+                        <label class="form-label">UDP Datagram (B) <span title="UDP payload size per datagram. Must stay below the tunnel MTU (~1200 B for GTP-U over VXLAN). TCP uses Path MTU Discovery automatically." style="cursor:help;color:#64748b;">&#9432;</span></label>
+                        <input type="number" id="tpLength" class="form-control form-control-sm" value="1200" min="68" max="65507" placeholder="1200">
                     </div>
                     <div class="col-md-1 text-end">
                         <button class="btn_ btn-start" id="btnTp" onclick="startThroughput()">▶ Start</button>
@@ -290,9 +316,13 @@
                     </div>
                     <div class="col-md-2">
                         <label class="form-label">Interval (s)</label>
-                        <input type="number" id="latInterval" class="form-control form-control-sm" value="0.5" min="0.2" max="5" step="0.1">
+                        <input type="number" id="latInterval" class="form-control form-control-sm" value="0.5" min="0.1" max="5" step="0.1">
                     </div>
-                    <div class="col-md-2 text-end">
+                    <div class="col-md-2">
+                        <label class="form-label">Pkt Size (B)</label>
+                        <input type="number" id="latPktSize" class="form-control form-control-sm" value="56" min="8" max="65507">
+                    </div>
+                    <div class="col-md-1 text-end">
                         <button class="btn_ btn-start" id="btnLat" onclick="startLatency()">▶ Start</button>
                     </div>
                 </div>
@@ -383,15 +413,20 @@
                         </select>
                     </div>
                     <div class="col-md-2" id="bbBwCol" style="display:none;">
-                        <label class="form-label">BW Target</label>
-                        <select id="bbBw" class="form-select form-select-sm">
-                            <option value="50M">50 Mbps</option>
-                            <option value="100M">100 Mbps</option>
-                            <option value="200M" selected>200 Mbps</option>
-                            <option value="500M">500 Mbps</option>
-                            <option value="1G">1 Gbps</option>
-                            <option value="0">Unlimited (MAX)</option>
-                        </select>
+                        <label class="form-label">BW Target (Mbps)</label>
+                        <div style="display:flex;gap:.3rem;flex-wrap:wrap;margin-bottom:.35rem;">
+                            <button class="btn_ btn-blue" style="padding:.18em .5em;font-size:.68rem;" onclick="setBbBwPreset(10)">10</button>
+                            <button class="btn_ btn-blue" style="padding:.18em .5em;font-size:.68rem;" onclick="setBbBwPreset(25)">25</button>
+                            <button class="btn_ btn-blue" style="padding:.18em .5em;font-size:.68rem;" onclick="setBbBwPreset(50)">50</button>
+                            <button class="btn_ btn-blue" style="padding:.18em .5em;font-size:.68rem;" onclick="setBbBwPreset(100)">100</button>
+                            <button class="btn_ btn-blue" style="padding:.18em .5em;font-size:.68rem;" onclick="setBbBwPreset(200)">200</button>
+                            <button class="btn_ btn-blue" style="padding:.18em .5em;font-size:.68rem;" onclick="setBbBwPreset(0)">MAX</button>
+                        </div>
+                        <input type="number" id="bbBwMbps" class="form-control form-control-sm" value="200" min="0" placeholder="Mbps (0=max)">
+                    </div>
+                    <div class="col-md-2" id="bbLengthCol" style="display:none;">
+                        <label class="form-label">UDP Datagram (B) <span title="UDP payload size per datagram. Must stay below the tunnel MTU (~1200 B for GTP-U over VXLAN). TCP uses Path MTU Discovery automatically." style="cursor:help;color:#64748b;">&#9432;</span></label>
+                        <input type="number" id="bbLength" class="form-control form-control-sm" value="1200" min="68" max="65507" placeholder="1200">
                     </div>
                     <div class="col-md-1 text-end">
                         <button class="btn_ btn-start" id="btnBb" onclick="startBufferbloat()">▶ Start</button>
@@ -420,13 +455,211 @@
         </div>
 
 <!-- ====================================================== -->
+<!-- PANEL: Experiment Planner                               -->
+<!-- ====================================================== -->
+<div class="panel" id="panel-planner">
+    <div class="panel-title">🗂 Experiment Planner</div>
+    <div class="panel-sub">Define reusable experiment templates, queue runs, and track execution history.</div>
+    <!-- Tab bar -->
+    <div style="display:flex;gap:.25rem;margin-bottom:1.25rem;">
+        <button class="planner-tab active" onclick="plannerNav('templates')" id="planner-tab-templates">Plan Templates</button>
+        <button class="planner-tab" onclick="plannerNav('queue')" id="planner-tab-queue">Run Queue</button>
+        <button class="planner-tab" onclick="plannerNav('history')" id="planner-tab-history">Run History</button>
+    </div>
+
+    <!-- ===== TAB 1: Plan Templates ===== -->
+    <div id="planner-section-templates">
+        <div class="row g-3">
+            <div class="col-md-5">
+                <div class="card_">
+                    <div class="card-label">New Plan Template</div>
+                    <div class="row g-2 mb-2">
+                        <div class="col-8">
+                            <label class="form-label">Plan Name</label>
+                            <input type="text" id="planName" class="form-control form-control-sm" placeholder="e.g. udp_sweep_march">
+                        </div>
+                    </div>
+                    <div class="row g-2 mb-2">
+                        <div class="col-6">
+                            <label class="form-label">Namespace</label>
+                            <select id="planNs" class="form-select form-select-sm"></select>
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label">Target IP</label>
+                            <input type="text" id="planIp" class="form-control form-control-sm" value="10.45.0.1">
+                        </div>
+                    </div>
+                    <hr style="border-color:var(--border);margin:.75rem 0;">
+                    <div class="card-label">Add Experiment</div>
+                    <div class="row g-2 mb-2">
+                        <div class="col-4">
+                            <label class="form-label">Type</label>
+                            <select id="expType" class="form-select form-select-sm" onchange="togglePlannerFields()">
+                                <option value="throughput">Throughput</option>
+                                <option value="latency">Latency</option>
+                                <option value="bufferbloat">Bufferbloat</option>
+                            </select>
+                        </div>
+                        <div class="col-4" id="expDirRow">
+                            <label class="form-label">Direction</label>
+                            <select id="expDir" class="form-select form-select-sm">
+                                <option value="ul">⬆ Uplink</option>
+                                <option value="dl">⬇ Downlink</option>
+                                <option value="both">🔁 Both</option>
+                            </select>
+                        </div>
+                        <div class="col-4">
+                            <label class="form-label">Duration (s)</label>
+                            <input type="number" id="expDur" class="form-control form-control-sm" value="15" min="3">
+                        </div>
+                    </div>
+                    <div class="row g-2 mb-2" id="expProtoRow">
+                        <div class="col-6">
+                            <label class="form-label">Protocol</label>
+                            <select id="expProto" class="form-select form-select-sm" onchange="togglePlannerBwFields()">
+                                <option value="tcp">TCP</option>
+                                <option value="udp">UDP</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div id="expBwSection" style="display:none;">
+                        <div class="card-label">UDP Bandwidth</div>
+                        <div style="display:flex;gap:.3rem;flex-wrap:wrap;margin-bottom:.4rem;">
+                            <button class="btn_ btn-blue" style="padding:.2em .55em;font-size:.68rem;" onclick="setPlanBwPreset(10)">10</button>
+                            <button class="btn_ btn-blue" style="padding:.2em .55em;font-size:.68rem;" onclick="setPlanBwPreset(25)">25</button>
+                            <button class="btn_ btn-blue" style="padding:.2em .55em;font-size:.68rem;" onclick="setPlanBwPreset(50)">50</button>
+                            <button class="btn_ btn-blue" style="padding:.2em .55em;font-size:.68rem;" onclick="setPlanBwPreset(100)">100</button>
+                            <button class="btn_ btn-blue" style="padding:.2em .55em;font-size:.68rem;" onclick="setPlanBwPreset(200)">200</button>
+                            <span style="font-size:.68rem;color:var(--txt3);align-self:center;">Mbps</span>
+                        </div>
+                        <div class="row g-1 mb-1">
+                            <div class="col-12">
+                                <label class="form-label">Single Value (Mbps)</label>
+                                <input type="number" id="expBwSingle" class="form-control form-control-sm" placeholder="e.g. 200">
+                            </div>
+                        </div>
+                        <div class="card-label" style="font-size:.58rem;margin-top:.5rem;">OR Range → generates multiple experiments</div>
+                        <div class="row g-1">
+                            <div class="col-4"><label class="form-label">Start</label><input type="number" id="expBwStart" class="form-control form-control-sm" placeholder="50"></div>
+                            <div class="col-4"><label class="form-label">End</label><input type="number" id="expBwEnd" class="form-control form-control-sm" placeholder="200"></div>
+                            <div class="col-4"><label class="form-label">Step</label><input type="number" id="expBwStep" class="form-control form-control-sm" placeholder="10"></div>
+                        </div>
+                    </div>
+                    <div id="expPingSection" style="display:none;">
+                        <div class="card-label mt-2">Ping Parameters</div>
+                        <div class="row g-1">
+                            <div class="col-4"><label class="form-label">Packets</label><input type="number" id="expPingCount" class="form-control form-control-sm" value="60" min="5"></div>
+                            <div class="col-4"><label class="form-label">Interval (s)</label><input type="number" id="expPingInterval" class="form-control form-control-sm" value="0.5" min="0.1" step="0.1"></div>
+                            <div class="col-4"><label class="form-label">Size (B)</label><input type="number" id="expPingSize" class="form-control form-control-sm" value="56" min="8"></div>
+                        </div>
+                    </div>
+                    <div id="expLengthSection" style="display:none;">
+                        <div class="card-label mt-2">UDP Datagram (B) <span title="UDP payload size per datagram." style="cursor:help;color:#64748b;">&#9432;</span></div>
+                        <input type="number" id="expLength" class="form-control form-control-sm" value="1200" min="68" max="65507" placeholder="1200">
+                    </div>
+                    <div style="display:flex;align-items:center;gap:.5rem;margin-top:.75rem;">
+                        <button class="btn_ btn-blue" onclick="addExperiment()">+ Add</button>
+                        <span id="expPreviewCount" style="font-size:.72rem;color:var(--txt3);"></span>
+                    </div>
+                </div>
+                <div class="card_">
+                    <div class="card-label">Queued Experiments <span id="planExpCount" style="color:var(--txt3);">(0)</span></div>
+                    <div id="planExpList" style="max-height:180px;overflow-y:auto;font-size:.78rem;"></div>
+                    <div style="display:flex;gap:.5rem;margin-top:.75rem;">
+                        <button class="btn_ btn-green" onclick="savePlan()">💾 Save Template</button>
+                        <button class="btn_ btn-amber" onclick="clearPlanBuilder()">🗑 Clear</button>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-7">
+                <div class="card_">
+                    <div class="card-label">Saved Templates</div>
+                    <div id="planList"><div style="color:var(--txt3);font-size:.85rem;">No templates yet.</div></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== TAB 2: Run Queue ===== -->
+    <div id="planner-section-queue" style="display:none;">
+        <div class="row g-3">
+            <div class="col-md-5">
+                <div class="card_">
+                    <div class="card-label">Add to Queue</div>
+                    <div class="row g-2 mb-2">
+                        <div class="col-12">
+                            <label class="form-label">Plan Template</label>
+                            <select id="queuePlanSelect" class="form-select form-select-sm"></select>
+                        </div>
+                    </div>
+                    <div class="row g-2 mb-2">
+                        <div class="col-6">
+                            <label class="form-label">Repeat</label>
+                            <input type="number" id="queueRepeat" class="form-control form-control-sm" value="1" min="1">
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label">Delay between (s)</label>
+                            <input type="number" id="queueDelay" class="form-control form-control-sm" value="5" min="0">
+                        </div>
+                    </div>
+                    <button class="btn_ btn-blue" onclick="addToQueue()">+ Add to Queue</button>
+                </div>
+                <div class="card_">
+                    <div class="card-label">Current Queue <span id="queueCount" style="color:var(--txt3);">(0)</span></div>
+                    <div id="queueList" style="max-height:200px;overflow-y:auto;"></div>
+                    <div style="display:flex;gap:.5rem;margin-top:.75rem;">
+                        <button class="btn_ btn-green" id="btnStartQueue" onclick="startQueue()">▶ Start Queue</button>
+                        <button class="btn_ btn-amber" onclick="clearQueue()">🗑 Clear Queue</button>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-7">
+                <div class="card_">
+                    <div class="card-label">Execution Monitor</div>
+                    <div id="queueStatusBar" style="font-size:.78rem;color:var(--txt2);margin-bottom:.5rem;display:none;"></div>
+                    <div class="test-bar">
+                        <span class="t-dot" id="planDot"></span>
+                        <span id="planStatusMsg">No run in progress.</span>
+                    </div>
+                    <div style="margin:.75rem 0;">
+                        <div style="background:var(--bg);border-radius:6px;height:8px;overflow:hidden;">
+                            <div id="planProgressBar" style="background:linear-gradient(90deg,var(--indigo),var(--purple));height:100%;width:0%;transition:width .4s;border-radius:6px;"></div>
+                        </div>
+                        <div style="font-size:.72rem;color:var(--txt3);margin-top:.35rem;" id="planProgressLabel"></div>
+                    </div>
+                    <div id="planExpStatus" style="max-height:180px;overflow-y:auto;font-size:.78rem;"></div>
+                    <button class="btn_ btn-red mt-2" id="abortPlan" onclick="abortQueue()" style="display:none;">⏹ Abort</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== TAB 3: Run History ===== -->
+    <div id="planner-section-history" style="display:none;">
+        <div class="card_">
+            <div class="card-label">Recent Runs</div>
+            <div id="runHistoryContainer">
+                <div style="color:var(--txt3);font-size:.85rem;">Loading…</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ====================================================== -->
 <!-- PANEL: Test Results                                      -->
 <!-- ====================================================== -->
 <div class="panel" id="panel-results">
-    <div class="panel-title">📁 Saved Test Results</div>
-    <div class="panel-sub">Screenshots and summaries of completed tests, auto-saved after each run. Organized by date.</div>
-    <div id="resultsContainer" style="margin-top:1rem;">
+    <div class="panel-title">📁 Test Results</div>
+    <div class="panel-sub">Click a group to browse individual results.</div>
+    <!-- Overview: compact group cards -->
+    <div id="resultsOverview" style="margin-top:1rem;">
         <div style="color:var(--txt3);font-size:.85rem;">Loading…</div>
+    </div>
+    <!-- Detail: shown when a group is clicked -->
+    <div id="resultsDetail" style="display:none;margin-top:1rem;">
+        <button class="btn_ btn-blue" onclick="backToResultsOverview()" style="font-size:.78rem;margin-bottom:.75rem;">← Back to overview</button>
+        <div id="resultsDetailTitle" style="font-weight:600;font-size:1rem;margin-bottom:.75rem;"></div>
+        <div id="resultsDetailGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:.75rem;"></div>
     </div>
 </div>
 
@@ -435,7 +668,7 @@
 <!-- ====================================================== -->
 <div id="resultModal" class="modal-overlay" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:9999;backdrop-filter:blur(4px);justify-content:center;align-items:center;">
     <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;width:95%;max-width:1200px;max-height:95vh;display:flex;flex-direction:column;box-shadow:0 25px 50px -12px rgba(0,0,0,0.5);">
-        <div style="display:flex;justify-content:space-between;align-items:center;padding:1rem 1.5rem;border-bottom:1px solid var(--border);">
+        <div id="modalHeader" style="display:flex;justify-content:space-between;align-items:center;padding:1rem 1.5rem;border-bottom:1px solid var(--border);">
             <div style="font-weight:600;font-size:1.1rem;" id="modalTitle">Test Result</div>
             <div style="display:flex;gap:.5rem;">
                 <button class="btn btn-sm btn-outline-secondary" onclick="copyResultImage()">📋 Copy Image</button>
@@ -445,8 +678,23 @@
             </div>
         </div>
         <div style="padding:1.5rem;overflow-y:auto;display:flex;flex-direction:column;gap:1.5rem;background:#0f172a;">
-            <div style="display:flex;justify-content:center;align-items:center;background:var(--bg);padding:1rem;border-radius:8px;border:1px solid var(--border);">
-                <img id="resultModalImg" src="" style="max-width:100%;object-fit:contain;border-radius:6px;box-shadow:0 4px 6px -1px rgba(0,0,0,0.1);">
+            <div style="background:var(--bg);padding:1rem;border-radius:8px;border:1px solid var(--border);display:flex;flex-direction:column;align-items:center;">
+                <!-- Sampling rate controls -->
+                <div id="resultSamplingBar" style="display:none;margin-bottom:.75rem;gap:.5rem;align-items:center;">
+                    <span style="color:var(--txt2);font-size:.8rem;margin-right:.25rem;">Sampling:</span>
+                    <div id="samplingBtns" style="display:flex;gap:2px;">
+                        <button class="sampling-btn active" data-ms="100">100ms</button>
+                        <button class="sampling-btn" data-ms="200">200ms</button>
+                        <button class="sampling-btn" data-ms="500">500ms</button>
+                        <button class="sampling-btn" data-ms="1000">1s</button>
+                    </div>
+                </div>
+                <!-- Chart.js canvas (for CSV-based results) -->
+                <div id="resultChartWrap" style="width:100%;height:350px;display:none;">
+                    <canvas id="resultChart"></canvas>
+                </div>
+                <!-- Fallback image (for legacy/standalone PNG results) -->
+                <img id="resultModalImg" src="" style="max-width:100%;object-fit:contain;border-radius:6px;box-shadow:0 4px 6px -1px rgba(0,0,0,0.1);display:none;">
             </div>
             <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:1rem;">
                 <div style="font-weight:600;font-size:.9rem;color:var(--txt2);margin-bottom:.5rem;">Test Metadata (JSON)</div>
@@ -466,15 +714,26 @@
 const socket = io();
 let chartTP = null, chartLat = null, chartBbTp = null, chartBbLat = null;
 let tpRunning = false, latRunning = false, bbRunning = false;
+// tpData entries: {phase, mbps, second, loss_pct, jitter_ms, retr, cwnd_kb}
 let tpData = [], latData = [], jitterData = [], bbTpData = [], bbLatData = [];
 let latSent = 0, latLost = 0, latPrevRtt = null;
+// Planner state
+let planBuilderExps = [];
+let currentPlanName = null;
 
 function toggleBwField() {
-    document.getElementById('bwCol').style.display = document.getElementById('tpProto').value === 'udp' ? 'block' : 'none';
+    const isUdp = document.getElementById('tpProto').value === 'udp';
+    document.getElementById('bwCol').style.display = isUdp ? 'block' : 'none';
+    document.getElementById('tpLengthCol').style.display = isUdp ? 'block' : 'none';
 }
 function toggleBbBwField() {
-    document.getElementById('bbBwCol').style.display = document.getElementById('bbProto').value === 'udp' ? 'block' : 'none';
+    const isUdp = document.getElementById('bbProto').value === 'udp';
+    document.getElementById('bbBwCol').style.display = isUdp ? 'block' : 'none';
+    document.getElementById('bbLengthCol').style.display = isUdp ? 'block' : 'none';
 }
+function setTpBwPreset(mbps) { document.getElementById('tpBwMbps').value = mbps; }
+function setBbBwPreset(mbps) { document.getElementById('bbBwMbps').value = mbps; }
+function setPlanBwPreset(mbps) { document.getElementById('expBwSingle').value = mbps; }
 
 // =====================================================================
 // Navigation
@@ -519,19 +778,31 @@ async function refresh() {
         const d = j.data;
 
         // Sidebar info
-        document.getElementById('sysStatus').textContent = `${d.host_interfaces.length} USB | ${d.namespaces.length} NS`;
+        const usbCount = d.host_interfaces.filter(i => i.iface_type === 'usb').length;
+        const wwanCount = d.host_interfaces.filter(i => i.iface_type === 'wwan').length;
+        const ifaceSummary = [usbCount && `${usbCount} USB`, wwanCount && `${wwanCount} WWAN`].filter(Boolean).join(' | ') || '0';
+        document.getElementById('sysStatus').textContent = `${ifaceSummary} | ${d.namespaces.length} NS`;
 
         // Interface list
         const box = document.getElementById('ifaceList');
         if (!d.host_interfaces.length) {
-            box.innerHTML = '<span style="font-size:.82rem;color:var(--txt3);">No USB (enx*) interfaces on host (all may be isolated).</span>';
+            box.innerHTML = '<span style="font-size:.82rem;color:var(--txt3);">No USB/WWAN interfaces on host (all may be isolated).</span>';
         } else {
             box.innerHTML = d.host_interfaces.map(i => {
                 const router = i.role === 'router';
+                const isWwan = i.iface_type === 'wwan';
+                let tagClass, tagLabel;
+                if (router)       { tagClass = 'tag-router'; tagLabel = '⚠️ Router/Uplink'; }
+                else if (isWwan)  { tagClass = 'tag-wwan';   tagLabel = '📡 WWAN Modem'; }
+                else              { tagClass = 'tag-ue';     tagLabel = '📱 UE Dongle'; }
+                const ipLine = isWwan && i.current_ip
+                    ? `<div style="font-size:.68rem;color:var(--txt3);margin-top:.2rem;font-family:monospace;">IP: ${i.current_ip}${i.gateway ? ' · GW: ' + i.gateway : ''}</div>`
+                    : '';
                 return `<div class="iface-row">
                     <div>
                         <div class="iface-name">${i.name}</div>
-                        <div class="iface-mac">${i.mac} <span class="tag ${router ? 'tag-router' : 'tag-ue'} ms-2">${i.vendor} — ${router ? '⚠️ Router/Uplink' : '📱 UE Dongle'}</span></div>
+                        <div class="iface-mac">${i.mac} <span class="tag ${tagClass} ms-2">${i.vendor} — ${tagLabel}</span></div>
+                        ${ipLine}
                     </div>
                     <button class="btn_ btn-blue" onclick="doIsolate('${i.name}')">🔒 Isolate</button>
                 </div>`;
@@ -544,19 +815,25 @@ async function refresh() {
             ntc.innerHTML = '<div class="ns-empty">No active namespaces. Isolate a device first.</div>';
         } else {
             ntc.innerHTML = '<table class="ns-tbl"><thead><tr><th>Namespace</th><th>Interfaces</th><th>WebUI</th><th></th></tr></thead><tbody>' +
-                d.namespaces.map(ns => `<tr>
+                d.namespaces.map(ns => {
+                    const hasWwan = ns.interfaces.some(i => i.startsWith('wwan'));
+                    const webuiCell = hasWwan
+                        ? `<span style="font-size:.72rem;color:var(--txt3);">N/A (WWAN)</span>`
+                        : `<a class="btn_ btn-amber" style="font-size:.72rem;padding:.3em .75em;" href="http://localhost:${ns.webui_port}" target="_blank">🌐 :${ns.webui_port}</a>`;
+                    return `<tr>
                     <td><strong>${ns.name}</strong></td>
                     <td style="font-family:monospace;">${ns.interfaces.join(', ') || '<em>none</em>'}</td>
-                    <td><a class="btn_ btn-amber" style="font-size:.72rem;padding:.3em .75em;" href="http://localhost:${ns.webui_port}" target="_blank">🌐 :${ns.webui_port}</a></td>
+                    <td>${webuiCell}</td>
                     <td><button class="btn_ btn-red" style="font-size:.72rem;padding:.3em .8em;" onclick="doReset('${ns.name}')">🗑 Reset</button></td>
-                </tr>`).join('') + '</tbody></table>';
+                </tr>`;
+                }).join('') + '</tbody></table>';
         }
 
         // Populate all namespace selects
         const opts = d.namespaces.length
             ? d.namespaces.map(n => `<option value="${n.name}">${n.name}</option>`).join('')
             : '<option value="ue1">ue1</option>';
-        ['qNs', 'tpNs', 'latNs', 'bbNs'].forEach(id => document.getElementById(id).innerHTML = opts);
+        ['qNs', 'tpNs', 'latNs', 'bbNs', 'planNs'].forEach(id => document.getElementById(id).innerHTML = opts);
 
     } catch(_) {
         document.getElementById('sysStatus').textContent = 'Offline';
@@ -637,7 +914,7 @@ function mkChart(id, label, color, yLabel) {
     });
 }
 
-// Throughput chart with optional Loss % on right axis + Jitter dashed line
+// Throughput chart: dataset 0=Sender, 1=Loss%/Retransmits, 2=Jitter/Cwnd, 3=Receiver (dashed)
 function mkChartTp(id, label, color) {
     const ctx = document.getElementById(id).getContext('2d');
     return new Chart(ctx, {
@@ -646,6 +923,7 @@ function mkChartTp(id, label, color) {
             { label, data: [], borderColor: color, backgroundColor: mkGrad(ctx, color), fill: true, tension: .35, pointRadius: 2, borderWidth: 2, yAxisID: 'y' },
             { label: 'Loss %', data: [], borderColor: '#ef4444', backgroundColor: 'transparent', fill: false, tension: .3, pointRadius: 1.5, borderWidth: 1.5, borderDash: [5,3], yAxisID: 'y1' },
             { label: 'Jitter (ms)', data: [], borderColor: '#fbbf24', backgroundColor: 'transparent', fill: false, tension: .3, pointRadius: 1.5, borderWidth: 1.5, borderDash: [3,2], yAxisID: 'y2' },
+            { label: 'Server (Mbps)', data: [], borderColor: '#22c55e', backgroundColor: 'transparent', fill: false, tension: .35, pointRadius: 1.5, borderWidth: 2, borderDash: [6,3], yAxisID: 'y', spanGaps: false, hidden: true },
         ] },
         options: { responsive: true, maintainAspectRatio: false, animation: { duration: 150 },
             scales: {
@@ -654,10 +932,12 @@ function mkChartTp(id, label, color) {
                 y2: { beginAtZero: true, grid: {drawOnChartArea: false}, ticks: {color:'#fbbf24'}, title: {display:true,text:'Jitter ms',color:'#fbbf24'}, position: 'right', display: false },
                 x:  { grid: {color:'rgba(255,255,255,.02)'}, ticks: {color:'#94a3b8', maxTicksLimit: 30} }
             },
-            plugins: { legend: { labels: {color:'#e2e8f0'} } }
+            plugins: { legend: { labels: {color:'#e2e8f0', filter: item => item.text !== 'Server (Mbps)' || !chart4Hidden } } }
         }
     });
 }
+// Helper used by legend filter — updated when receiver data arrives
+let chart4Hidden = true;
 
 function mkChartDual(id) {
     const ctx = document.getElementById(id).getContext('2d');
@@ -687,6 +967,175 @@ function pushChart(chart, label, value) {
 }
 
 // =====================================================================
+// Result viewer: CSV parser, aggregation, Chart.js renderer
+// =====================================================================
+let resultModalChart = null;
+let resultCSVRows = null;
+let resultProtocol = null;
+let resultDirection = null;
+
+function parseCSV(text) {
+    const lines = text.trim().split('\n');
+    if (lines.length < 2) return [];
+    const header = lines[0].split(',');
+    const rows = [];
+    for (let i = 1; i < lines.length; i++) {
+        const vals = lines[i].split(',');
+        if (vals.length < header.length) continue;
+        const row = {};
+        header.forEach((col, j) => {
+            const key = col.trim().replace('#', 'seq');
+            const v = vals[j].trim();
+            row[key] = v === '' ? null : (isNaN(Number(v)) ? v : Number(v));
+        });
+        rows.push(row);
+    }
+    return rows;
+}
+
+function aggregateData(rows, windowMs) {
+    if (windowMs <= 100) return rows;
+    const bucketSize = Math.round(windowMs / 100);
+    const result = [];
+    for (let i = 0; i < rows.length; i += bucketSize) {
+        const bucket = rows.slice(i, i + bucketSize);
+        if (!bucket.length) continue;
+        const avg = (key) => {
+            const vals = bucket.map(r => r[key]).filter(v => v != null && typeof v === 'number');
+            return vals.length ? Math.round((vals.reduce((a,b) => a + b, 0) / vals.length) * 100) / 100 : null;
+        };
+        const sum = (key) => {
+            const vals = bucket.map(r => r[key]).filter(v => v != null && typeof v === 'number');
+            return vals.length ? vals.reduce((a,b) => a + b, 0) : null;
+        };
+        const last = (key) => {
+            for (let j = bucket.length - 1; j >= 0; j--) {
+                if (bucket[j][key] != null) return bucket[j][key];
+            }
+            return null;
+        };
+        result.push({
+            time_s: avg('time_s'),
+            protocol: bucket[0].protocol,
+            phase: bucket[0].phase,
+            client_Mbps: avg('client_Mbps'),
+            server_Mbps: avg('server_Mbps'),
+            loss_pct: avg('loss_pct'),
+            jitter_ms: avg('jitter_ms'),
+            retransmits: sum('retransmits'),
+            cwnd_kB: last('cwnd_kB'),
+        });
+    }
+    return result;
+}
+
+function renderResultChart(rows, protocol, direction) {
+    if (resultModalChart) { resultModalChart.destroy(); resultModalChart = null; }
+    const canvas = document.getElementById('resultChart');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+
+    const isTcp = protocol === 'tcp';
+    const isUl = direction !== 'dl';
+    const clientColor = isUl ? '#3b82f6' : '#22c55e';
+    // Server always a contrasting color — cyan for UL, blue for DL
+    const serverColor = isUl ? '#06b6d4' : '#3b82f6';
+
+    const labels = rows.map(r => r.time_s != null ? r.time_s.toFixed(1) : '');
+    const clientData = rows.map(r => r.client_Mbps);
+    const serverData = rows.map(r => r.server_Mbps);
+    const hasServer = serverData.some(v => v != null);
+
+    // Adaptive point radius — fewer points = bigger dots
+    const ptR = rows.length > 200 ? 0 : rows.length > 80 ? 1.5 : 2.5;
+    const ptRsec = rows.length > 200 ? 0 : 1;
+
+    // Secondary metrics
+    let sec1Data, sec1Label, sec1Color, sec1Dash;
+    let sec2Data, sec2Label, sec2Color, sec2Dash;
+    if (isTcp) {
+        sec1Data = rows.map(r => r.retransmits);
+        sec1Label = 'Retransmits';
+        sec1Color = '#ef4444';
+        sec1Dash = [5, 3];
+        sec2Data = rows.map(r => r.cwnd_kB);
+        sec2Label = 'cwnd (kB)';
+        sec2Color = '#fbbf24';
+        sec2Dash = [3, 2];
+    } else {
+        sec1Data = rows.map(r => r.loss_pct);
+        sec1Label = 'Loss %';
+        sec1Color = '#ef4444';
+        sec1Dash = [5, 3];
+        sec2Data = rows.map(r => r.jitter_ms);
+        sec2Label = 'Jitter (ms)';
+        sec2Color = '#fbbf24';
+        sec2Dash = [3, 2];
+    }
+    const hasSec1 = sec1Data.some(v => v != null && v > 0);
+    const hasSec2 = sec2Data.some(v => v != null && v > 0);
+
+    const datasets = [
+        { label: 'Client (Mbps)', data: clientData, borderColor: clientColor,
+          backgroundColor: mkGrad(ctx, clientColor), fill: true, tension: .35,
+          pointRadius: ptR, borderWidth: 1.5, yAxisID: 'y' },
+        { label: sec1Label, data: sec1Data, borderColor: sec1Color,
+          backgroundColor: 'transparent', fill: false, tension: .3,
+          pointRadius: ptRsec, borderWidth: 1, borderDash: sec1Dash, yAxisID: 'y1' },
+        { label: sec2Label, data: sec2Data, borderColor: sec2Color,
+          backgroundColor: 'transparent', fill: false, tension: .3,
+          pointRadius: ptRsec, borderWidth: 1, borderDash: sec2Dash, yAxisID: 'y2' },
+    ];
+    if (hasServer) {
+        datasets.push({
+            label: 'Server (Mbps)', data: serverData, borderColor: serverColor,
+            backgroundColor: 'transparent', fill: false, tension: .35,
+            pointRadius: ptR, borderWidth: 1.5, borderDash: [6, 3], yAxisID: 'y'
+        });
+    }
+
+    // Y1/Y2 axis config
+    const y1Max = isTcp ? undefined : 100;
+    const y1TickCb = isTcp ? undefined : (v => v + '%');
+
+    resultModalChart = new Chart(ctx, {
+        type: 'line',
+        data: { labels, datasets },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            animation: { duration: 0 },
+            scales: {
+                y:  { beginAtZero: true, grid: {color:'rgba(255,255,255,.04)'},
+                      ticks: {color:'#94a3b8'}, title: {display:true,text:'Mbps',color:'#64748b'}, position: 'left' },
+                y1: { beginAtZero: true, max: y1Max, grid: {drawOnChartArea: false},
+                      ticks: {color:'#fca5a5', callback: y1TickCb}, title: {display:true,text:sec1Label,color:sec1Color},
+                      position: 'right', display: hasSec1 },
+                y2: { beginAtZero: true, grid: {drawOnChartArea: false},
+                      ticks: {color:'#fbbf24'}, title: {display:true,text:sec2Label,color:sec2Color},
+                      position: 'right', display: hasSec2 },
+                x:  { grid: {color:'rgba(255,255,255,.02)'}, ticks: {color:'#94a3b8', maxTicksLimit: 40} }
+            },
+            plugins: {
+                legend: { labels: {color:'#e2e8f0'} },
+                // Dark background for canvas (needed for copy/export)
+                customCanvasBackgroundColor: { color: '#0b0e14' }
+            }
+        },
+        plugins: [{
+            id: 'customCanvasBackgroundColor',
+            beforeDraw: (chart) => {
+                const {ctx: c, chartArea} = chart;
+                c.save();
+                c.globalCompositeOperation = 'destinationOver';
+                c.fillStyle = '#0b0e14';
+                c.fillRect(0, 0, chart.width, chart.height);
+                c.restore();
+            }
+        }]
+    });
+}
+
+// =====================================================================
 // THROUGHPUT test
 // =====================================================================
 function setTpUI(running) {
@@ -708,17 +1157,20 @@ function startThroughput() {
     const dur = parseInt(document.getElementById('tpDur').value) || 15;
     const mode = document.getElementById('tpMode').value;
     const proto = document.getElementById('tpProto').value;
-    const bw = document.getElementById('tpBw').value;
+    const bwMbps = parseInt(document.getElementById('tpBwMbps').value) || 200;
+    const bw = proto === 'udp' ? (bwMbps === 0 ? '0' : bwMbps + 'M') : '200M';
+    const length_bytes = parseInt(document.getElementById('tpLength').value) || 1200;
 
     tpData = [];
+    chart4Hidden = true;
     if (chartTP) chartTP.destroy();
     const directionStr = mode === 'both' ? 'Sequential (DL → UL)' : (mode === 'dl' ? 'Downlink' : 'Uplink');
-    chartTP = mkChartTp('chartTP', `${directionStr} (Mbps)`, mode === 'dl' ? '#22c55e' : '#3b82f6');
+    chartTP = mkChartTp('chartTP', `${directionStr} Client (Mbps)`, mode === 'dl' ? '#22c55e' : '#3b82f6');
     document.getElementById('tpSummary').style.display = 'none';
     document.getElementById('tpMsg').textContent = 'Starting…';
     setTpUI(true);
 
-    socket.emit('start_live_benchmark', { namespace: ns, target_ip: ip, duration: dur, mode, proto, bandwidth: bw, with_ping: false });
+    socket.emit('start_live_benchmark', { namespace: ns, target_ip: ip, duration: dur, mode, proto, bandwidth: bw, length_bytes, with_ping: false });
 }
 
 // =====================================================================
@@ -753,7 +1205,8 @@ function startLatency() {
     document.getElementById('latMsg').textContent = 'Starting…';
     setLatUI(true);
 
-    socket.emit('start_live_ping', { namespace: ns, target_ip: ip, count, interval });
+    const packet_size = parseInt(document.getElementById('latPktSize').value) || 56;
+    socket.emit('start_live_ping', { namespace: ns, target_ip: ip, count, interval, packet_size });
 }
 
 // =====================================================================
@@ -778,19 +1231,21 @@ function startBufferbloat() {
     const dur = parseInt(document.getElementById('bbDur').value) || 20;
     const mode = document.getElementById('bbMode').value;
     const proto = document.getElementById('bbProto').value;
-    const bw = document.getElementById('bbBw').value;
+    const bwMbps = parseInt(document.getElementById('bbBwMbps').value) || 200;
+    const bw = proto === 'udp' ? (bwMbps === 0 ? '0' : bwMbps + 'M') : '200M';
+    const length_bytes = parseInt(document.getElementById('bbLength').value) || 1200;
 
     bbTpData = []; bbLatData = [];
     if (chartBbTp) chartBbTp.destroy();
     if (chartBbLat) chartBbLat.destroy();
     const directionStr = mode === 'both' ? 'Seq DL→UL' : (mode === 'dl' ? 'DL' : 'UL');
-    chartBbTp = mkChartTp('chartBbTp', `Throughput (${directionStr}, ${proto.toUpperCase()})`, mode === 'dl' ? '#22c55e' : '#3b82f6');
+    chartBbTp = mkChartTp('chartBbTp', `Throughput Sender (${directionStr}, ${proto.toUpperCase()})`, mode === 'dl' ? '#22c55e' : '#3b82f6');
     chartBbLat = mkChart('chartBbLat', 'Loaded RTT', '#ef4444', 'ms');
     document.getElementById('bbSummary').style.display = 'none';
     document.getElementById('bbMsg').textContent = 'Starting iperf3 + ping…';
     setBbUI(true);
 
-    socket.emit('start_live_benchmark', { namespace: ns, target_ip: ip, duration: dur, mode, proto, bandwidth: bw, with_ping: true });
+    socket.emit('start_live_benchmark', { namespace: ns, target_ip: ip, duration: dur, mode, proto, bandwidth: bw, length_bytes, with_ping: true });
 }
 
 function stopTest() {
@@ -816,10 +1271,20 @@ socket.on('iperf_data', (data) => {
     // Pick the active chart
     let chart = null;
     if (tpRunning) {
-        tpData.push({ phase: data.phase || document.getElementById('tpMode').value, mbps: data.mbps });
+        tpData.push({
+            phase: data.phase || document.getElementById('tpMode').value,
+            mbps: data.mbps, second: data.second,
+            loss_pct: data.loss_pct ?? null, jitter_ms: data.jitter_ms ?? null,
+            retr: data.retr ?? null, cwnd_kb: data.cwnd_kb ?? null,
+        });
         chart = chartTP;
     } else if (bbRunning) {
-        bbTpData.push({ phase: data.phase || document.getElementById('bbMode').value, mbps: data.mbps });
+        bbTpData.push({
+            phase: data.phase || document.getElementById('bbMode').value,
+            mbps: data.mbps, second: data.second,
+            loss_pct: data.loss_pct ?? null, jitter_ms: data.jitter_ms ?? null,
+            retr: data.retr ?? null, cwnd_kb: data.cwnd_kb ?? null,
+        });
         chart = chartBbTp;
     }
 
@@ -894,12 +1359,30 @@ socket.on('iperf_data', (data) => {
             chart.data.datasets[2].data.push(null);
         }
 
+        // Dataset 3 (receiver line): keep null during live run — filled retroactively at test_complete
+        chart.data.datasets[3].data.push(null);
+
         chart.update('none');
 
         // Sender-side warning badge
         if (data.sender_side) {
             const msgEl = tpRunning ? document.getElementById('tpMsg') : document.getElementById('bbMsg');
-            msgEl.textContent = `⚠ UDP UL: chart shows injected traffic (sender-side) — real stats at end`;
+            msgEl.textContent = `⚠ UDP UL: blue = injected (sender-side) — green dashed = received (shown at end)`;
+        }
+    }
+});
+
+// Backfill UDP metrics (loss_pct, jitter_ms) from server intervals into tpData
+socket.on('iperf_backfill', (data) => {
+    const arr = tpRunning ? tpData : bbRunning ? bbTpData : tpData;
+    if (!arr) return;
+    const intervals = data.intervals || [];
+    let idx = 0;
+    for (let i = 0; i < arr.length; i++) {
+        if (arr[i].phase === data.phase && idx < intervals.length) {
+            if (intervals[idx].loss_pct != null) arr[i].loss_pct = intervals[idx].loss_pct;
+            if (intervals[idx].jitter_ms != null) arr[i].jitter_ms = intervals[idx].jitter_ms;
+            idx++;
         }
     }
 });
@@ -962,20 +1445,27 @@ socket.on('test_complete', (data) => {
         let html = '';
         let realMbps;
 
-        if (ph.sender_side && !ph.retro_fixed) {
-            // UDP/TCP Uplink without server output: chart data is sender-side (injected), NOT real throughput
-            realMbps = ph.receiver_mbps != null ? ph.receiver_mbps.toFixed(2) : (clientM ? clientM.avg : '?');
-            const injected = ph.sender_mbps != null ? ph.sender_mbps.toFixed(0) : (clientM ? clientM.peak : '?');
-            html += `<span class="sum-badge" style="background:${bgColor};color:${fgColor};">${dir} Received ${realMbps} Mbps</span>`;
-            html += `<span class="sum-badge" style="background:rgba(245,158,11,.1);color:#fbbf24;">⚠ Injected ${injected} Mbps (chart = sender-side)</span>`;
+        if (ph.sender_side && ph.retro_fixed && ph.server_intervals?.length > 0) {
+            // UDP UL with full receiver telemetry: show both sides with correct peaks
+            const rxVals = ph.server_intervals.map(s => s.mbps).filter(v => v != null);
+            const rxAvg  = rxVals.length ? (rxVals.reduce((a,b)=>a+b,0)/rxVals.length).toFixed(2) : '?';
+            const rxPeak = rxVals.length ? Math.max(...rxVals).toFixed(2) : '?';
+            const txAvg  = clientM ? clientM.avg : '?';
+            const txPeak = clientM ? clientM.peak : '?';
+            realMbps = rxAvg;
+            html += `<span class="sum-badge" style="background:${bgColor};color:${fgColor};">${dir} Rx Avg ${rxAvg} Mbps (Peak ${rxPeak})</span>`;
+            html += `<span class="sum-badge" style="background:rgba(59,130,246,.08);color:#93c5fd;">${dir} Tx injected Avg ${txAvg} Mbps (Peak ${txPeak})</span>`;
+            html += `<span class="sum-badge" style="background:rgba(34,197,94,.1);color:#4ade80;">✓ Chart shows exact receiver telemetry</span>`;
+        } else if (ph.sender_side && !ph.retro_fixed) {
+            // UDP UL without server intervals: only sender-side data available
+            realMbps = clientM ? clientM.avg : '?';
+            html += `<span class="sum-badge" style="background:${bgColor};color:${fgColor};">${dir} Tx injected Avg ${realMbps} Mbps (Peak ${clientM ? clientM.peak : '?'})</span>`;
+            html += `<span class="sum-badge" style="background:rgba(245,158,11,.1);color:#fbbf24;">⚠ Sender-side only — actual received throughput unknown</span>`;
         } else {
-            // TCP or UDP DL (receiver-side), OR UL with retro_fixed true receiver telemetry
-            realMbps = ph.receiver_mbps != null ? ph.receiver_mbps.toFixed(2) : (clientM ? clientM.avg : '?');
+            // TCP (all) or UDP DL: client sees receiver-side data directly
+            realMbps = ph.client_mbps != null ? ph.client_mbps.toFixed(2) : (clientM ? clientM.avg : '?');
             const peakMbps = clientM ? clientM.peak : '?';
             html += `<span class="sum-badge" style="background:${bgColor};color:${fgColor};">${dir} Avg ${realMbps} Mbps (Peak ${peakMbps})</span>`;
-            if (ph.retro_fixed) {
-                html += `<span class="sum-badge" style="background:rgba(34,197,94,.1);color:#4ade80;">✓ Chart shows exact receiver telemetry</span>`;
-            }
         }
 
         // Show loss for UDP
@@ -996,36 +1486,24 @@ socket.on('test_complete', (data) => {
     }
 
     if (wasTp && tpData.length > 0) {
-        // OVERWRITE CHART DATA WITH SERVER INTERVALS IF APPLICABLE
-        let chartNeedsUpdate = false;
+        // Fill dataset 3 (receiver line) retroactively from server_intervals
+        // Dataset 0 (sender line) is NOT modified — shows what was injected
         for (const ph of phases) {
             if (ph.sender_side && ph.server_intervals && ph.server_intervals.length > 0) {
-                let phasePoints = tpData.filter(d => d.phase === ph.phase);
-                let numPoints = Math.min(phasePoints.length, ph.server_intervals.length);
+                const phaseStartIdx = tpData.findIndex(d => d.phase === ph.phase);
+                const phaseCount = tpData.filter(d => d.phase === ph.phase).length;
+                const numPoints = Math.min(phaseCount, ph.server_intervals.length);
                 for (let i = 0; i < numPoints; i++) {
-                    phasePoints[i].mbps = ph.server_intervals[i].mbps;
+                    chartTP.data.datasets[3].data[phaseStartIdx + i] = ph.server_intervals[i].mbps;
                 }
                 ph.retro_fixed = true;
-                chartNeedsUpdate = true;
+                chart4Hidden = false;
+                chartTP.data.datasets[3].hidden = false;
+                chartTP.data.datasets[0].label = 'Client (Mbps)';
+                chartTP.data.datasets[3].label = 'Server (Mbps)';
             }
         }
-
-        if (chartNeedsUpdate) {
-            // RE-CALCULATE MOVING AVERAGE for the entire chart
-            const datasetData = [];
-            for (let i = 0; i < tpData.length; i++) {
-                let sum = 0, count = 0;
-                for (let j = Math.max(0, i - 2); j <= i; j++) {
-                    if (tpData[j].phase === tpData[i].phase) {
-                        sum += tpData[j].mbps;
-                        count++;
-                    }
-                }
-                datasetData.push({ x: tpData[i].x, y: parseFloat((sum / count).toFixed(2)) });
-            }
-            chartTp.data.datasets[0].data = datasetData;
-            chartTp.update();
-        }
+        if (!chart4Hidden) chartTP.update();
 
         let htmlStr = ''; let msgStr = 'Done — ';
         for (const ph of phases) {
@@ -1045,34 +1523,21 @@ socket.on('test_complete', (data) => {
     }
 
     if (wasBb && bbTpData.length > 0) {
-        let chartNeedsUpdate = false;
         for (const ph of phases) {
             if (ph.sender_side && ph.server_intervals && ph.server_intervals.length > 0) {
-                let phasePoints = bbTpData.filter(d => d.phase === ph.phase);
-                let numPoints = Math.min(phasePoints.length, ph.server_intervals.length);
+                const phaseStartIdx = bbTpData.findIndex(d => d.phase === ph.phase);
+                const phaseCount = bbTpData.filter(d => d.phase === ph.phase).length;
+                const numPoints = Math.min(phaseCount, ph.server_intervals.length);
                 for (let i = 0; i < numPoints; i++) {
-                    phasePoints[i].mbps = ph.server_intervals[i].mbps;
+                    chartBbTp.data.datasets[3].data[phaseStartIdx + i] = ph.server_intervals[i].mbps;
                 }
                 ph.retro_fixed = true;
-                chartNeedsUpdate = true;
+                chartBbTp.data.datasets[3].hidden = false;
+                chartBbTp.data.datasets[0].label = 'Client (Mbps)';
+                chartBbTp.data.datasets[3].label = 'Server (Mbps)';
             }
         }
-
-        if (chartNeedsUpdate) {
-            const datasetData = [];
-            for (let i = 0; i < bbTpData.length; i++) {
-                let sum = 0, count = 0;
-                for (let j = Math.max(0, i - 2); j <= i; j++) {
-                    if (bbTpData[j].phase === bbTpData[i].phase) {
-                        sum += bbTpData[j].mbps;
-                        count++;
-                    }
-                }
-                datasetData.push({ x: bbTpData[i].x, y: parseFloat((sum / count).toFixed(2)) });
-            }
-            chartBbTp.data.datasets[0].data = datasetData;
-            chartBbTp.update();
-        }
+        chartBbTp.update();
 
         let htmlStr = ''; let msgStr = 'Done — ';
         for (const ph of phases) {
@@ -1100,12 +1565,12 @@ socket.on('test_complete', (data) => {
         payload.lat_data = latData;
         payload.bb_lat_data = bbLatData;
 
-        // Auto-save screenshot after a short delay (let DOM update)
+        // Auto-save after a short delay (let DOM settle after receiver overlay)
         setTimeout(() => {
-            if (wasTp) saveTestScreenshot('throughput', document.getElementById('tpMode').value, document.getElementById('tpProto').value, payload);
-            if (wasLat) saveTestScreenshot('latency', '', '', payload);
-            if (wasBb) saveTestScreenshot('bufferbloat', document.getElementById('bbMode').value, document.getElementById('bbProto').value, payload);
-        }, 500);
+            if (wasTp) saveTestResult('throughput', document.getElementById('tpMode').value, document.getElementById('tpProto').value, payload);
+            if (wasLat) saveTestResult('latency', '', '', payload);
+            if (wasBb) saveTestResult('bufferbloat', document.getElementById('bbMode').value, document.getElementById('bbProto').value, payload);
+        }, 600);
     }
 });
 
@@ -1117,8 +1582,7 @@ window.addEventListener('DOMContentLoaded', refresh);
 // =====================================================================
 // Test Results — save & browse
 // =====================================================================
-async function saveTestScreenshot(testType, direction, protocol, summaryData) {
-    // Determine which panel to capture
+async function saveTestResult(testType, direction, protocol, summaryData) {
     let captureEl;
     if (testType === 'throughput') captureEl = document.querySelector('#panel-throughput .card_');
     else if (testType === 'latency') captureEl = document.querySelector('#panel-latency .card_');
@@ -1127,109 +1591,344 @@ async function saveTestScreenshot(testType, direction, protocol, summaryData) {
 
     try {
         const canvas = await html2canvas(captureEl, {
-            backgroundColor: '#0f172a',
-            scale: 2,
-            useCORS: true,
-            logging: false,
-            ignoreElements: (element) => element.classList && element.classList.contains('ignore-screenshot')
+            backgroundColor: '#0f172a', scale: 2, useCORS: true, logging: false,
+            ignoreElements: el => el.classList && el.classList.contains('ignore-screenshot'),
         });
         const dataUrl = canvas.toDataURL('image/png');
-        // If summaryData is an object, JSON-ify it nicely
-        const summaryMsg = typeof summaryData === 'object' ? JSON.stringify(summaryData, null, 2) : summaryData;
+
+        // Build interval rows for CSV
+        let intervals = [], ping_rows = [];
+        if (testType === 'throughput' || testType === 'bufferbloat') {
+            const arr = testType === 'throughput' ? tpData : bbTpData;
+            const ds3 = testType === 'throughput'
+                ? chartTP?.data?.datasets[3]?.data
+                : chartBbTp?.data?.datasets[3]?.data;
+            const lenEl = testType === 'throughput' ? 'tpLength' : 'bbLength';
+            const lenVal = parseInt(document.getElementById(lenEl)?.value) || 1200;
+            intervals = arr.map((d, i) => ({
+                protocol:      protocol,
+                phase:         d.phase,
+                timestamp_s:   d.second ?? +((i + 1) * 0.1).toFixed(2),
+                interval_start: d.second != null ? Math.max(0, +(d.second - 0.1).toFixed(2)) : +(i * 0.1).toFixed(2),
+                interval_end:   d.second != null ? d.second : +((i + 1) * 0.1).toFixed(2),
+                length_bytes:  lenVal,
+                client_mbps:   d.mbps,
+                server_mbps:   ds3 ? (ds3[i] ?? null) : null,
+                loss_pct:      d.loss_pct ?? null,
+                jitter_ms:     d.jitter_ms ?? null,
+                retransmits:   d.retr ?? null,
+                cwnd_kb:       d.cwnd_kb ?? null,
+            }));
+        } else if (testType === 'latency') {
+            const latInterval  = parseFloat(document.getElementById('latInterval')?.value) || 0.5;
+            const latPktSize   = parseInt(document.getElementById('latPktSize')?.value) || 56;
+            ping_rows = latData.map((rtt, i) => ({
+                seq:         i + 1,
+                timestamp_s: +((i * latInterval).toFixed(3)),
+                rtt_ms:      rtt,
+                owd_ms:      +(rtt / 2).toFixed(3),
+                jitter_ms:   jitterData[i] ?? null,
+                ttl:         null,
+                packet_size: latPktSize,
+            }));
+        }
+
+        // Build structured summary_stats
+        const summary_stats = {};
+        for (const ph of (summaryData.phases || [])) {
+            const pfx = ph.phase || '';
+            for (const k of ['client_mbps','server_mbps','loss_pct','jitter_ms','total_retr']) {
+                if (ph[k] != null) summary_stats[`${pfx}_${k}`] = ph[k];
+            }
+        }
+
+        const nsEl = testType === 'throughput' ? 'tpNs' : testType === 'latency' ? 'latNs' : 'bbNs';
+        const ipEl = testType === 'throughput' ? 'tpIp' : testType === 'latency' ? 'latIp' : 'bbIp';
+        const durEl = testType === 'throughput' ? 'tpDur' : testType === 'bufferbloat' ? 'bbDur' : null;
+        const lenEl2 = testType !== 'latency' ? (testType === 'throughput' ? 'tpLength' : 'bbLength') : null;
 
         await fetch('/api/save_result', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                image: dataUrl,
-                test_type: testType,
-                direction: direction,
-                protocol: protocol,
-                summary: summaryMsg
-            })
+                image: dataUrl, test_type: testType, direction, protocol,
+                bandwidth: testType !== 'latency'
+                    ? (document.getElementById(testType === 'throughput' ? 'tpBwMbps' : 'bbBwMbps')?.value + 'M')
+                    : '',
+                length_bytes: lenEl2 ? (parseInt(document.getElementById(lenEl2)?.value) || 1200) : null,
+                namespace: document.getElementById(nsEl)?.value || '',
+                target_ip: document.getElementById(ipEl)?.value || '',
+                duration_s: durEl ? parseInt(document.getElementById(durEl)?.value) : null,
+                summary_stats, intervals, ping_rows,
+            }),
         });
     } catch (e) {
-        console.warn('Screenshot save failed:', e);
+        console.warn('Result save failed:', e);
     }
+}
+
+function _resultCard(item, imgSrc, deletePath) {
+    const time = item.timestamp ? item.timestamp.split('T')[1].split('.')[0] : '';
+    const typeIcon = item.test_type === 'throughput' ? '📶' : item.test_type === 'latency' ? '📍' : '🌊';
+    const dirLabel = item.direction === 'both' ? 'DL→UL' : (item.direction || '').toUpperCase();
+    const protoLabel = (item.protocol || '').toUpperCase();
+    const bwLabel = item.bandwidth && item.bandwidth !== 'M' ? item.bandwidth : '';
+    const tag = [dirLabel, protoLabel, bwLabel].filter(x=>x).join(' · ');
+    const summaryStr = typeof item.summary === 'object'
+        ? Object.entries(item.summary || {}).map(([k,v])=>`${k}: ${v}`).join(' | ')
+        : (item.summary || '');
+    const escapedPath = deletePath.replace(/'/g, "\\'");
+    const hasChart = item.chart || item.image;
+    const csvLink = item.csv && item.result_path
+        ? `<a href="/api/results/${item.result_path}/${item.csv}" download style="font-size:.65rem;color:var(--cyan);margin-top:.2rem;display:inline-block;">⬇ CSV</a>`
+        : (item._legacy ? '' : '');
+
+    let imgHtml = '';
+    if (hasChart) {
+        imgHtml = `<img src="${imgSrc}" style="width:100%;height:140px;object-fit:cover;object-position:top;display:block;border-bottom:1px solid var(--border);" loading="lazy">`;
+    } else {
+        imgHtml = `<div style="height:60px;display:flex;align-items:center;justify-content:center;background:var(--bg);border-bottom:1px solid var(--border);color:var(--txt3);font-size:.75rem;">No chart (plan result)</div>`;
+    }
+    return `<div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;overflow:hidden;cursor:pointer;transition:border-color .2s;" onmouseenter="this.style.borderColor='var(--blue)'" onmouseleave="this.style.borderColor='var(--border)'" onclick="openResultModal('${escapedPath}', ${JSON.stringify(item._legacy||false)})">
+        ${imgHtml}
+        <div style="padding:.6rem .75rem;">
+            <div style="font-size:.8rem;font-weight:600;color:var(--txt);">${typeIcon} ${(item.test_type||'').charAt(0).toUpperCase()+(item.test_type||'').slice(1)} <span style="color:var(--txt3);font-weight:400;">${tag}</span></div>
+            <div style="font-size:.7rem;color:var(--txt3);margin-top:.2rem;">🕐 ${time}</div>
+            ${summaryStr ? `<div style="font-size:.68rem;color:var(--txt2);margin-top:.3rem;line-height:1.4;">${summaryStr.slice(0,120)}</div>` : ''}
+            ${csvLink}
+        </div>
+    </div>`;
+}
+
+function _dateSection(date, items, isLegacy) {
+    let html = `<div class="card_" style="margin-bottom:1rem;">`;
+    html += `<div class="card-label" style="margin-bottom:.75rem;">📅 ${date} <span style="color:var(--txt3);font-size:.75rem;">(${items.length} result${items.length>1?'s':''}${isLegacy?' · legacy':''})</span></div>`;
+    html += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:.75rem;">`;
+    for (const item of items) {
+        let imgSrc, deletePath;
+        if (item._legacy) {
+            imgSrc = `/api/results/${item.date}/${item.image}`;
+            deletePath = `${item.date}/${item.image}`;
+        } else {
+            imgSrc = item.chart ? `/api/results/${item.result_path}/chart.png` : '';
+            deletePath = item.result_path || '';
+        }
+        html += _resultCard(item, imgSrc, deletePath);
+    }
+    html += `</div></div>`;
+    return html;
+}
+
+function _summarizeTypes(items) {
+    const counts = {};
+    for (const it of items) {
+        const t = (it.test_type || 'test').charAt(0).toUpperCase() + (it.test_type || 'test').slice(1);
+        counts[t] = (counts[t] || 0) + 1;
+    }
+    return Object.entries(counts).map(([k,v]) => v > 1 ? `${v} ${k}` : k).join(', ');
+}
+
+function _groupCard(type, key, label, count, summary, extraClass) {
+    const escaped = key.replace(/'/g, "\\'");
+    return `<div class="group-card ${extraClass||''}" onclick="openResultGroup('${type}','${escaped}')">
+        <div style="font-weight:600;font-size:.85rem;">${label}</div>
+        <div style="font-size:.72rem;color:var(--txt3);margin-top:.25rem;">
+            ${count} test${count>1?'s':''} ${summary ? '· '+summary : ''}
+        </div>
+    </div>`;
 }
 
 async function loadResults() {
-    const container = document.getElementById('resultsContainer');
-    container.innerHTML = '<div style="color:var(--txt3);font-size:.85rem;">Loading…</div>';
+    const overview = document.getElementById('resultsOverview');
+    const detail = document.getElementById('resultsDetail');
+    detail.style.display = 'none';
+    overview.style.display = 'block';
+    overview.innerHTML = '<div style="color:var(--txt3);font-size:.85rem;">Loading…</div>';
     try {
         const r = await fetch('/api/results');
         const data = await r.json();
-        const dates = Object.keys(data);
-        if (!dates.length) {
-            container.innerHTML = '<div style="color:var(--txt3);font-size:.9rem;padding:2rem 0;text-align:center;">No saved results yet. Run a test and it will appear here automatically.</div>';
+        window._resultsData = data;
+        const standaloneKeys = Object.keys(data.standalone || {});
+        const legacyKeys = Object.keys(data.legacy || {});
+        const planKeys = Object.keys(data.plans || {});
+        if (!standaloneKeys.length && !legacyKeys.length && !planKeys.length) {
+            overview.innerHTML = '<div style="color:var(--txt3);font-size:.9rem;padding:2rem 0;text-align:center;">No saved results yet. Run a test and it will appear here.</div>';
             return;
         }
         let html = '';
-        for (const date of dates) {
-            const items = data[date];
-            html += `<div class="card_" style="margin-bottom:1rem;">`;
-            html += `<div class="card-label" style="margin-bottom:.75rem;">📅 ${date} <span style="color:var(--txt3);font-size:.75rem;">(${items.length} test${items.length>1?'s':''})</span></div>`;
-            html += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:.75rem;">`;
-            for (const item of items) {
-                const time = item.timestamp ? item.timestamp.split('T')[1].split('.')[0] : '';
-                const typeIcon = item.test_type === 'throughput' ? '📶' : item.test_type === 'latency' ? '📍' : '🌊';
-                const dirLabel = item.direction === 'both' ? 'DL→UL' : (item.direction || '').toUpperCase();
-                const protoLabel = (item.protocol || '').toUpperCase();
-                const tag = [dirLabel, protoLabel].filter(x=>x).join(' · ');
-                html += `<div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;overflow:hidden;cursor:pointer;transition:border-color .2s;" onmouseenter="this.style.borderColor='var(--blue)'" onmouseleave="this.style.borderColor='var(--border)'" onclick="openResultModal('${item.date}', '${item.image}')">`;
-                html += `<img src="/api/results/${item.date}/${item.image}" style="width:100%;height:140px;object-fit:cover;object-position:top;display:block;border-bottom:1px solid var(--border);" loading="lazy">`;
-                html += `<div style="padding:.6rem .75rem;">`;
-                html += `<div style="font-size:.8rem;font-weight:600;color:var(--txt);">${typeIcon} ${item.test_type.charAt(0).toUpperCase()+item.test_type.slice(1)} <span style="color:var(--txt3);font-weight:400;">${tag}</span></div>`;
-                html += `<div style="font-size:.7rem;color:var(--txt3);margin-top:.2rem;">🕐 ${time}</div>`;
-                if (item.summary) html += `<div style="font-size:.7rem;color:var(--txt2);margin-top:.3rem;line-height:1.4;">${item.summary}</div>`;
-                html += `</div></div>`;
+        // Standalone groups by date
+        if (standaloneKeys.length) {
+            html += `<div style="font-size:.65rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--txt3);margin:.5rem 0 .6rem;">Standalone Tests</div>`;
+            html += '<div class="results-grid">';
+            for (const date of standaloneKeys) {
+                const items = data.standalone[date];
+                html += _groupCard('standalone', date, `📅 ${date}`, items.length, _summarizeTypes(items));
             }
-            html += `</div></div>`;
+            html += '</div>';
         }
-        container.innerHTML = html;
+        // Plan runs
+        if (planKeys.length) {
+            html += `<div style="font-size:.65rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--txt3);margin:.75rem 0 .6rem;">Plan Results</div>`;
+            html += '<div class="results-grid">';
+            for (const pname of planKeys) {
+                const p = data.plans[pname];
+                const exps = (p.plan.experiments || []).filter(e => e.result_path);
+                if (!exps.length) continue;
+                const statusTxt = `${p.completed}/${p.total} done`;
+                html += _groupCard('plan', pname, `🗂 ${pname}`, exps.length, statusTxt);
+            }
+            html += '</div>';
+        }
+        // Legacy groups
+        if (legacyKeys.length) {
+            html += `<div style="font-size:.65rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--txt3);margin:.75rem 0 .6rem;">Legacy</div>`;
+            html += '<div class="results-grid">';
+            for (const date of legacyKeys) {
+                const items = data.legacy[date];
+                html += _groupCard('legacy', date, `📅 ${date}`, items.length, 'legacy');
+            }
+            html += '</div>';
+        }
+        overview.innerHTML = html;
     } catch (e) {
-        container.innerHTML = `<div style="color:#fca5a5;font-size:.85rem;">Error loading results: ${e.message}</div>`;
+        overview.innerHTML = `<div style="color:#fca5a5;font-size:.85rem;">Error loading results: ${e.message}</div>`;
     }
 }
 
-// Modal State
-let currentResultDate = null;
-let currentResultFilename = null;
-let currentResultMeta = null;
+function openResultGroup(type, key) {
+    const overview = document.getElementById('resultsOverview');
+    const detail = document.getElementById('resultsDetail');
+    overview.style.display = 'none';
+    detail.style.display = 'block';
 
-async function openResultModal(date, image) {
-    currentResultDate = date;
-    currentResultFilename = image;
-    document.getElementById('resultModalImg').src = `/api/results/${date}/${image}`;
-    document.getElementById('modalTitle').textContent = `Test Result - ${date} ${image}`;
+    const data = window._resultsData;
+    let items = [], title = '', isLegacy = false;
 
-    try {
-        // Fetch JSON metadata
-        const jsonName = image.replace('.png', '.json');
-        const res = await fetch(`/api/results/${date}/${jsonName}`);
-        if (res.ok) {
-            currentResultMeta = await res.json();
-            // Display raw JSON payload inside the modal's <pre>
-            if (currentResultMeta.summary && (currentResultMeta.summary.startsWith('{') || currentResultMeta.summary.startsWith('['))) {
-                try {
-                    // Try parsing the summary and formatting it nicer if it's JSON
-                    let parsed = JSON.parse(currentResultMeta.summary);
-                    delete parsed.raw; // removing spam
-                    document.getElementById('resultModalMeta').textContent = JSON.stringify(parsed, null, 2);
-                } catch(pe) {
-                    document.getElementById('resultModalMeta').textContent = currentResultMeta.summary;
-                }
-            } else {
-                document.getElementById('resultModalMeta').textContent = currentResultMeta.summary || 'No metadata available';
-            }
-        }
-    } catch (e) {
-        document.getElementById('resultModalMeta').textContent = 'Error loading metadata';
+    if (type === 'standalone') {
+        items = data.standalone[key] || [];
+        title = `📅 ${key}`;
+    } else if (type === 'plan') {
+        const p = data.plans[key];
+        items = (p.plan.experiments || []).filter(e => e.result_path).map(e => ({
+            test_type: e.type, direction: e.direction, protocol: e.protocol,
+            bandwidth: e.bandwidth, timestamp: e.completed_at, summary: {},
+            result_path: e.result_path, chart: null, csv: 'data.csv',
+        }));
+        title = `🗂 ${key} — ${p.completed}/${p.total} completed`;
+    } else {
+        items = data.legacy[key] || [];
+        title = `📅 ${key} (legacy)`;
+        isLegacy = true;
     }
 
+    document.getElementById('resultsDetailTitle').textContent = title;
+    const grid = document.getElementById('resultsDetailGrid');
+    let html = '';
+    for (const item of items) {
+        let imgSrc, deletePath;
+        if (item._legacy || isLegacy) {
+            imgSrc = `/api/results/${item.date}/${item.image}`;
+            deletePath = `${item.date}/${item.image}`;
+        } else {
+            imgSrc = item.chart ? `/api/results/${item.result_path}/chart.png` : '';
+            deletePath = item.result_path || '';
+        }
+        html += _resultCard(item, imgSrc, deletePath);
+    }
+    grid.innerHTML = html || '<div style="color:var(--txt3);font-size:.85rem;">No results in this group.</div>';
+}
+
+function backToResultsOverview() {
+    document.getElementById('resultsOverview').style.display = 'block';
+    document.getElementById('resultsDetail').style.display = 'none';
+}
+
+// Modal State — resultPath is the subpath under /api/results/
+let currentResultPath = null;  // e.g. "standalone/2026-03-16/14-30_throughput_ul_udp" or "2026-03-06/foo.png"
+let currentResultIsLegacy = false;
+let currentResultMeta = null;
+
+async function openResultModal(resultPath, isLegacy) {
+    currentResultPath = resultPath;
+    currentResultIsLegacy = isLegacy;
+    document.getElementById('modalTitle').textContent = `Result — ${resultPath.split('/').pop()}`;
+
+    const chartWrap = document.getElementById('resultChartWrap');
+    const imgEl = document.getElementById('resultModalImg');
+    const samplingBar = document.getElementById('resultSamplingBar');
+
+    // Reset display
+    chartWrap.style.display = 'none';
+    imgEl.style.display = 'none';
+    samplingBar.style.display = 'none';
+    if (resultModalChart) { resultModalChart.destroy(); resultModalChart = null; }
+    resultCSVRows = null;
+    resultProtocol = null;
+    resultDirection = null;
+
+    // Load metadata
+    const metaUrl = isLegacy
+        ? `/api/results/${resultPath.replace('.png', '.json')}`
+        : `/api/results/${resultPath}/metadata.json`;
+    let meta = null;
+    try {
+        const res = await fetch(metaUrl);
+        if (res.ok) {
+            meta = await res.json();
+            currentResultMeta = meta;
+            document.getElementById('resultModalMeta').textContent = JSON.stringify(meta, null, 2);
+            document.getElementById('btnOpenFolder').onclick = () => openResultFolder(resultPath);
+        }
+    } catch { document.getElementById('resultModalMeta').textContent = 'Error loading metadata'; }
+
+    // Try CSV-based Chart.js rendering first (non-legacy results)
+    let csvRendered = false;
+    if (!isLegacy) {
+        try {
+            const csvRes = await fetch(`/api/results/${resultPath}/data.csv`);
+            if (csvRes.ok) {
+                const csvText = await csvRes.text();
+                resultCSVRows = parseCSV(csvText);
+                resultProtocol = meta?.protocol || (resultCSVRows[0]?.protocol) || 'tcp';
+                resultDirection = meta?.direction || (resultCSVRows[0]?.phase) || 'ul';
+                if (resultCSVRows.length > 0) {
+                    chartWrap.style.display = 'block';
+                    samplingBar.style.display = 'flex';
+                    // Default to 500ms aggregation to avoid lag with 600+ raw data points
+                    const defaultMs = resultCSVRows.length > 200 ? 500 : 100;
+                    const initialData = defaultMs > 100 ? aggregateData(resultCSVRows, defaultMs) : resultCSVRows;
+                    renderResultChart(initialData, resultProtocol, resultDirection);
+                    csvRendered = true;
+                    // Wire sampling buttons
+                    document.querySelectorAll('#samplingBtns .sampling-btn').forEach(btn => {
+                        btn.classList.remove('active');
+                        if (btn.dataset.ms === String(defaultMs)) btn.classList.add('active');
+                        btn.onclick = () => {
+                            document.querySelectorAll('#samplingBtns .sampling-btn')
+                                .forEach(b => b.classList.remove('active'));
+                            btn.classList.add('active');
+                            const ms = parseInt(btn.dataset.ms);
+                            const agg = ms > 100 ? aggregateData(resultCSVRows, ms) : resultCSVRows;
+                            renderResultChart(agg, resultProtocol, resultDirection);
+                        };
+                    });
+                }
+            }
+        } catch (e) { console.warn('CSV chart render failed:', e); }
+    }
+
+    // Fallback: show PNG if no CSV chart was rendered
+    if (!csvRendered) {
+        const imgSrc = isLegacy
+            ? `/api/results/${resultPath}`
+            : `/api/results/${resultPath}/chart.png`;
+        imgEl.src = imgSrc;
+        imgEl.style.display = 'block';
+    }
+
+    // Show modal
     const modal = document.getElementById('resultModal');
     modal.style.display = 'flex';
-    // Small animation
     modal.style.opacity = '0';
     setTimeout(() => modal.style.opacity = '1', 10);
     modal.style.transition = 'opacity 0.15s ease';
@@ -1238,9 +1937,18 @@ async function openResultModal(date, image) {
 function closeResultModal() {
     document.getElementById('resultModal').style.display = 'none';
     document.getElementById('resultModalImg').src = '';
+    document.getElementById('resultModalImg').style.display = 'none';
+    document.getElementById('resultChartWrap').style.display = 'none';
+    document.getElementById('resultSamplingBar').style.display = 'none';
     document.getElementById('resultModalMeta').textContent = '';
-    currentResultDate = null;
-    currentResultFilename = null;
+    if (resultModalChart) { resultModalChart.destroy(); resultModalChart = null; }
+    resultCSVRows = null;
+    resultProtocol = null;
+    resultDirection = null;
+    const btn = document.getElementById('btnOpenFolder');
+    if (btn) { btn.disabled = false; btn.textContent = '📂 Open Folder'; }
+    currentResultPath = null;
+    currentResultIsLegacy = false;
     currentResultMeta = null;
 }
 
@@ -1257,44 +1965,64 @@ document.getElementById('resultModal').addEventListener('click', (e) => {
 });
 
 async function copyResultImage() {
-    if (!currentResultDate || !currentResultFilename) return;
+    if (!currentResultPath) return;
     try {
-        const response = await fetch(`/api/results/${currentResultDate}/${currentResultFilename}`);
-        const blob = await response.blob();
-        
-        // Check for secure context and clipboard support
+        let blob;
+        // If Chart.js canvas is visible, capture from canvas
+        const canvas = document.getElementById('resultChart');
+        if (resultModalChart && canvas) {
+            blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+        } else {
+            // Fallback: fetch the PNG file
+            const imgUrl = currentResultIsLegacy
+                ? `/api/results/${currentResultPath}`
+                : `/api/results/${currentResultPath}/chart.png`;
+            const response = await fetch(imgUrl);
+            blob = await response.blob();
+        }
         if (navigator.clipboard && navigator.clipboard.write) {
-            await navigator.clipboard.write([
-                new ClipboardItem({ [blob.type]: blob })
-            ]);
+            await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
             notify('Image copied to clipboard!', true);
         } else {
-             // Fallback if not on HTTPS or missing API
-            alert('Clipboard access denied (likely due to non-HTTPS local IP). Please Right-Click the image and select "Copy image".');
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.target = '_blank'; a.rel = 'noopener'; a.click();
+            setTimeout(() => URL.revokeObjectURL(url), 10000);
+            notify('Clipboard unavailable on HTTP — image opened in new tab (right-click → Copy image).', true);
         }
     } catch (e) {
-        notify('Failed to copy image: ' + e.message);
+        notify('Failed: ' + e.message);
     }
 }
 
-async function openResultFolder() {
-    if (!currentResultDate) return;
+async function openResultFolder(resultPath) {
+    const path = resultPath || currentResultPath;
+    if (!path) return;
+    const btn = document.getElementById('btnOpenFolder');
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.textContent = '⏳ Opening…';
+    const folderPath = currentResultIsLegacy ? path.split('/')[0] : path;
     try {
-        const res = await fetch(`/api/open_folder/${currentResultDate}`, { method: 'POST' });
+        const res = await fetch(`/api/open_folder/${folderPath}`, { method: 'POST' });
         const data = await res.json();
-        if (data.ok) notify('Folder opened in file manager.', true);
-        else notify('Error: ' + data.error);
+        if (data.ok) notify('Folder opened.', true);
+        else { notify('Could not open folder: ' + data.error); btn.disabled = false; }
     } catch (e) {
-        notify('Failed to open folder: ' + e.message);
+        notify('Failed: ' + e.message);
+        btn.disabled = false;
+    } finally {
+        btn.textContent = '📂 Open Folder';
     }
+    // Keep disabled until modal is closed to prevent duplicate windows
 }
 
 async function deleteResultImage() {
-    if (!currentResultDate || !currentResultFilename) return;
-    if (!confirm('Are you sure you want to delete this test result? This cannot be undone.')) return;
-
+    if (!currentResultPath) return;
+    if (!confirm('Delete this result? This cannot be undone.')) return;
+    const deletePath = currentResultIsLegacy ? currentResultPath : currentResultPath;
     try {
-        const res = await fetch(`/api/results/${currentResultDate}/${currentResultFilename}`, { method: 'DELETE' });
+        const res = await fetch(`/api/results/${deletePath}`, { method: 'DELETE' });
         const data = await res.json();
         if (data.ok) {
             notify('Test result deleted.', true);
@@ -1307,6 +2035,411 @@ async function deleteResultImage() {
         notify('Failed to delete: ' + e.message);
     }
 }
+
+// =====================================================================
+// Experiment Planner
+// =====================================================================
+function togglePlannerFields() {
+    const type = document.getElementById('expType').value;
+    const isLatency = type === 'latency';
+    document.getElementById('expProtoRow').style.display = isLatency ? 'none' : '';
+    document.getElementById('expDirRow').style.display = isLatency ? 'none' : '';
+    togglePlannerBwFields();
+    document.getElementById('expPingSection').style.display = (isLatency || type === 'bufferbloat') ? 'block' : 'none';
+}
+
+function togglePlannerBwFields() {
+    const type = document.getElementById('expType').value;
+    const proto = document.getElementById('expProto').value;
+    const isUdp = type !== 'latency' && proto === 'udp';
+    document.getElementById('expBwSection').style.display = isUdp ? 'block' : 'none';
+    document.getElementById('expLengthSection').style.display = isUdp ? 'block' : 'none';
+    updateExpPreview();
+}
+
+function updateExpPreview() {
+    const start = parseInt(document.getElementById('expBwStart').value);
+    const end = parseInt(document.getElementById('expBwEnd').value);
+    const step = parseInt(document.getElementById('expBwStep').value);
+    const single = document.getElementById('expBwSingle').value;
+    const el = document.getElementById('expPreviewCount');
+    if (!single && start && end && step && step > 0 && end >= start) {
+        const count = Math.floor((end - start) / step) + 1;
+        el.textContent = `→ ${count} experiments`;
+    } else {
+        el.textContent = '';
+    }
+}
+['expBwStart','expBwEnd','expBwStep','expBwSingle'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', updateExpPreview);
+});
+
+function addExperiment() {
+    const type = document.getElementById('expType').value;
+    const dir = document.getElementById('expDir').value;
+    const proto = type === 'latency' ? '' : document.getElementById('expProto').value;
+    const dur = parseInt(document.getElementById('expDur').value) || 15;
+
+    const bwSingle = document.getElementById('expBwSingle').value;
+    const bwStart = document.getElementById('expBwStart').value;
+    const bwEnd = document.getElementById('expBwEnd').value;
+    const bwStep = document.getElementById('expBwStep').value;
+
+    const base = {
+        type, direction: dir, protocol: proto, duration: dur,
+        length_bytes: proto === 'udp' ? (parseInt(document.getElementById('expLength').value) || 1200) : null,
+        ping_count: parseInt(document.getElementById('expPingCount').value) || 60,
+        ping_interval: parseFloat(document.getElementById('expPingInterval').value) || 0.5,
+        ping_packet_size: parseInt(document.getElementById('expPingSize').value) || 56,
+    };
+
+    if (proto === 'udp' && !bwSingle && bwStart && bwEnd && bwStep) {
+        // Range: backend will expand; send as bandwidth_start/end/step
+        planBuilderExps.push({...base, bandwidth_start: bwStart, bandwidth_end: bwEnd, bandwidth_step: bwStep});
+    } else if (proto === 'udp' && bwSingle) {
+        planBuilderExps.push({...base, bandwidth: bwSingle + 'M'});
+    } else {
+        planBuilderExps.push({...base, bandwidth: null});
+    }
+    renderPlanExpList();
+}
+
+function renderPlanExpList() {
+    const el = document.getElementById('planExpList');
+    document.getElementById('planExpCount').textContent = `(${planBuilderExps.length})`;
+    if (!planBuilderExps.length) { el.innerHTML = '<span style="color:var(--txt3);">No experiments yet.</span>'; return; }
+    el.innerHTML = planBuilderExps.map((e, i) => {
+        const bwStr = e.bandwidth || (e.bandwidth_start ? `${e.bandwidth_start}→${e.bandwidth_end}M step ${e.bandwidth_step}` : '');
+        const label = [e.type, e.direction, e.protocol, bwStr].filter(x=>x).join(' ');
+        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:.3rem .1rem;border-bottom:1px solid var(--border);">
+            <span>${i+1}. ${label} (${e.duration}s)</span>
+            <button class="btn_" style="padding:.1em .4em;font-size:.65rem;background:var(--bg-3);color:var(--txt2);" onclick="removeExperiment(${i})">✕</button>
+        </div>`;
+    }).join('');
+}
+
+function removeExperiment(idx) {
+    planBuilderExps.splice(idx, 1);
+    renderPlanExpList();
+}
+
+function clearPlanBuilder() {
+    planBuilderExps = [];
+    document.getElementById('planName').value = '';
+    renderPlanExpList();
+}
+
+async function savePlan() {
+    const name = document.getElementById('planName').value.trim();
+    if (!name) { notify('Enter a plan name first.'); return; }
+    if (!planBuilderExps.length) { notify('Add at least one experiment.'); return; }
+    const ns = document.getElementById('planNs').value;
+    const ip = document.getElementById('planIp').value;
+    try {
+        const r = await fetch('/api/plans', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ name, config: {namespace: ns, target_ip: ip}, experiments: planBuilderExps }),
+        });
+        const d = await r.json();
+        if (d.ok) {
+            notify(`Plan '${d.plan_name}' saved (${d.experiment_count} experiments).`, true);
+            clearPlanBuilder();
+            loadPlans();
+        } else { notify('Error: ' + d.error); }
+    } catch (e) { notify('Save failed: ' + e.message); }
+}
+
+// ---- Planner tab navigation ----
+let plannerTab = 'templates';
+function plannerNav(tab) {
+    plannerTab = tab;
+    ['templates','queue','history'].forEach(t => {
+        const tabBtn = document.getElementById('planner-tab-' + t);
+        const section = document.getElementById('planner-section-' + t);
+        if (tabBtn) tabBtn.classList.toggle('active', t === tab);
+        if (section) section.style.display = t === tab ? 'block' : 'none';
+    });
+    if (tab === 'templates') loadPlans();
+    if (tab === 'queue') { loadQueuePlanSelect(); loadQueueState(); }
+    if (tab === 'history') loadRunHistory();
+}
+
+// ---- Templates tab ----
+async function loadPlans() {
+    const el = document.getElementById('planList');
+    try {
+        const r = await fetch('/api/plans');
+        const d = await r.json();
+        window._plansData = d.plans;
+        if (!d.plans.length) { el.innerHTML = '<div style="color:var(--txt3);font-size:.85rem;">No templates yet.</div>'; return; }
+        el.innerHTML = d.plans.map(p => {
+            const escaped = p.name.replace(/'/g, "\\'");
+            return `<div style="background:var(--bg-2);border-radius:10px;padding:.75rem 1rem;margin-bottom:.5rem;border:1px solid var(--border);">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <div>
+                        <div style="font-weight:600;font-size:.85rem;">${p.name}</div>
+                        <div style="font-size:.7rem;color:var(--txt3);">${p.experiment_count} experiments · ${p.experiments_summary || ''}</div>
+                    </div>
+                    <div style="display:flex;gap:.35rem;">
+                        <button class="btn_ btn-blue" style="font-size:.7rem;padding:.25em .6em;" onclick="toggleTemplateDetail('${escaped}')">👁 View</button>
+                        <button class="btn_ btn-red" style="font-size:.7rem;padding:.25em .6em;" onclick="deletePlan('${escaped}')">🗑</button>
+                    </div>
+                </div>
+                <div id="tmpl-detail-${p.name}" style="display:none;margin-top:.5rem;border-top:1px solid var(--border);padding-top:.5rem;"></div>
+            </div>`;
+        }).join('');
+    } catch (e) { el.innerHTML = `<div style="color:#fca5a5;">Error: ${e.message}</div>`; }
+}
+
+function toggleTemplateDetail(name) {
+    const el = document.getElementById('tmpl-detail-' + name);
+    if (!el) return;
+    if (el.style.display !== 'none') { el.style.display = 'none'; return; }
+    const plans = window._plansData || [];
+    const plan = plans.find(p => p.name === name);
+    if (!plan || !plan.experiments) { el.innerHTML = '<span style="color:var(--txt3);font-size:.75rem;">No experiments.</span>'; el.style.display = 'block'; return; }
+    el.innerHTML = plan.experiments.map((e, i) => {
+        const parts = [e.type, e.direction?.toUpperCase(), e.protocol?.toUpperCase(), e.bandwidth].filter(x=>x);
+        return `<div style="font-size:.75rem;padding:.2rem 0;color:var(--txt2);">${i+1}. ${parts.join(' ')} — ${e.duration||15}s</div>`;
+    }).join('');
+    el.style.display = 'block';
+}
+
+async function deletePlan(name) {
+    if (!confirm(`Delete template '${name}'? All run results will also be removed.`)) return;
+    try {
+        const r = await fetch(`/api/plans/${name}`, { method: 'DELETE' });
+        const d = await r.json();
+        if (d.ok) { notify(`Template '${name}' deleted.`, true); loadPlans(); }
+        else notify('Error: ' + d.error);
+    } catch (e) { notify('Delete failed: ' + e.message); }
+}
+
+// ---- Queue tab ----
+let clientQueue = [];
+
+async function loadQueuePlanSelect() {
+    const sel = document.getElementById('queuePlanSelect');
+    if (!sel) return;
+    try {
+        const r = await fetch('/api/plans');
+        const d = await r.json();
+        sel.innerHTML = d.plans.map(p => `<option value="${p.name}">${p.name} (${p.experiment_count} exp)</option>`).join('');
+        if (!d.plans.length) sel.innerHTML = '<option value="">No templates available</option>';
+    } catch {}
+}
+
+async function loadQueueState() {
+    try {
+        const r = await fetch('/api/queue');
+        const d = await r.json();
+        clientQueue = d.items || [];
+        document.getElementById('queueDelay').value = d.delay_between_s || 5;
+        renderQueueList();
+    } catch {}
+}
+
+function addToQueue() {
+    const plan = document.getElementById('queuePlanSelect').value;
+    if (!plan) { notify('Select a plan template first.'); return; }
+    const repeat = parseInt(document.getElementById('queueRepeat').value) || 1;
+    clientQueue.push({ plan_name: plan, repeat });
+    renderQueueList();
+    syncQueue();
+}
+
+function removeFromQueue(idx) {
+    clientQueue.splice(idx, 1);
+    renderQueueList();
+    syncQueue();
+}
+
+function renderQueueList() {
+    const el = document.getElementById('queueList');
+    const countEl = document.getElementById('queueCount');
+    countEl.textContent = `(${clientQueue.length})`;
+    if (!clientQueue.length) { el.innerHTML = '<div style="color:var(--txt3);font-size:.8rem;">Queue is empty.</div>'; return; }
+    el.innerHTML = clientQueue.map((item, i) => {
+        return `<div class="queue-item">
+            <span>${item.plan_name} ${item.repeat > 1 ? '×' + item.repeat : ''}</span>
+            <button class="btn_" style="padding:.1em .4em;font-size:.65rem;background:var(--bg-3);color:var(--txt2);" onclick="removeFromQueue(${i})">✕</button>
+        </div>`;
+    }).join('');
+}
+
+async function syncQueue() {
+    const delay = parseInt(document.getElementById('queueDelay').value) || 5;
+    try {
+        await fetch('/api/queue', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ items: clientQueue, delay_between_s: delay }),
+        });
+    } catch {}
+}
+
+function startQueue() {
+    if (!clientQueue.length) { notify('Add items to the queue first.'); return; }
+    syncQueue().then(() => {
+        socket.emit('start_queue');
+        document.getElementById('planDot').className = 't-dot run';
+        document.getElementById('planStatusMsg').textContent = 'Starting queue…';
+        document.getElementById('planProgressBar').style.width = '0%';
+        document.getElementById('planProgressLabel').textContent = '';
+        document.getElementById('planExpStatus').innerHTML = '';
+        document.getElementById('abortPlan').style.display = '';
+        document.getElementById('queueStatusBar').style.display = 'block';
+        document.getElementById('btnStartQueue').disabled = true;
+    });
+}
+
+async function clearQueue() {
+    clientQueue = [];
+    renderQueueList();
+    try { await fetch('/api/queue', { method: 'DELETE' }); } catch {}
+}
+
+function abortQueue() {
+    socket.emit('stop_queue');
+    document.getElementById('planDot').className = 't-dot';
+    document.getElementById('planStatusMsg').textContent = 'Aborting…';
+}
+
+// ---- Run History tab ----
+async function loadRunHistory() {
+    const el = document.getElementById('runHistoryContainer');
+    el.innerHTML = '<div style="color:var(--txt3);font-size:.85rem;">Loading…</div>';
+    try {
+        const r = await fetch('/api/run-history');
+        const d = await r.json();
+        if (!d.runs.length) { el.innerHTML = '<div style="color:var(--txt3);font-size:.85rem;">No runs yet.</div>'; return; }
+        let html = '<table class="run-tbl"><thead><tr><th>Date</th><th>Plan</th><th>Status</th><th>Experiments</th><th>Actions</th></tr></thead><tbody>';
+        for (const run of d.runs) {
+            const date = run.started_at ? run.started_at.replace('T', ' ').slice(0, 16) : '—';
+            const statusIcon = run.status === 'completed' ? '✅' : run.status === 'partial' ? '⚠️' : run.status === 'running' ? '⏳' : '❌';
+            const dur = run.started_at && run.completed_at
+                ? _formatDuration(new Date(run.completed_at) - new Date(run.started_at))
+                : '—';
+            html += `<tr>
+                <td>${date}</td>
+                <td style="font-weight:600;">${run.plan_name}</td>
+                <td>${statusIcon} ${run.status}</td>
+                <td>${run.completed}/${run.total}${dur !== '—' ? ' · ' + dur : ''}</td>
+                <td><button class="btn_ btn-blue" style="font-size:.65rem;padding:.2em .5em;" onclick="viewRunResults('${run.plan_name}','${run.run_id}')">👁 View</button></td>
+            </tr>`;
+        }
+        html += '</tbody></table>';
+        el.innerHTML = html;
+    } catch (e) { el.innerHTML = `<div style="color:#fca5a5;">Error: ${e.message}</div>`; }
+}
+
+function _formatDuration(ms) {
+    const s = Math.round(ms / 1000);
+    if (s < 60) return s + 's';
+    const m = Math.floor(s / 60);
+    return m + 'm ' + (s % 60) + 's';
+}
+
+async function viewRunResults(planName, runId) {
+    // Navigate to results panel and open the plan group
+    try {
+        const r = await fetch(`/api/plans/${planName}/runs/${runId}`);
+        if (!r.ok) { notify('Run not found.'); return; }
+        const runData = await r.json();
+        const exps = (runData.experiments || []).filter(e => e.result_path);
+        if (!exps.length) { notify('No completed experiments in this run.'); return; }
+        // Switch to results panel and show detail
+        nav('results');
+        const overview = document.getElementById('resultsOverview');
+        const detail = document.getElementById('resultsDetail');
+        overview.style.display = 'none';
+        detail.style.display = 'block';
+        document.getElementById('resultsDetailTitle').textContent = `🗂 ${planName} — run ${runId}`;
+        const grid = document.getElementById('resultsDetailGrid');
+        let html = '';
+        for (const exp of exps) {
+            const fakeMeta = {
+                test_type: exp.type, direction: exp.direction, protocol: exp.protocol,
+                bandwidth: exp.bandwidth, timestamp: exp.completed_at, summary: {},
+                result_path: exp.result_path, chart: null, csv: 'data.csv',
+            };
+            html += _resultCard(fakeMeta, '', exp.result_path);
+        }
+        grid.innerHTML = html;
+    } catch (e) { notify('Error: ' + e.message); }
+}
+
+// Plan SocketIO events
+socket.on('plan_progress', (data) => {
+    const pct = Math.round((data.current_exp / data.total_exp) * 100);
+    document.getElementById('planProgressBar').style.width = pct + '%';
+    document.getElementById('planProgressLabel').textContent = `${data.current_exp} / ${data.total_exp} experiments`;
+    const remaining = Math.round(data.estimated_remaining_s);
+    const elapsed = Math.round(data.elapsed_s);
+    document.getElementById('planDot').className = 't-dot run';
+    document.getElementById('planStatusMsg').textContent =
+        `${data.exp_state === 'running' ? '▶' : data.exp_state === 'completed' ? '✓' : '✗'} ${data.exp_name} — elapsed ${elapsed}s${remaining > 0 ? `, ~${remaining}s left` : ''}`;
+    document.getElementById('abortPlan').style.display = '';
+
+    // Update per-experiment status list
+    const statusEl = document.getElementById('planExpStatus');
+    let row = document.getElementById('planrow-' + data.exp_id);
+    if (!row) {
+        row = document.createElement('div');
+        row.id = 'planrow-' + data.exp_id;
+        row.style.cssText = 'padding:.25rem 0;border-bottom:1px solid var(--border);display:flex;gap:.5rem;align-items:center;';
+        statusEl.appendChild(row);
+    }
+    const icon = data.exp_state === 'running' ? '⏳' : data.exp_state === 'completed' ? '✅' : '❌';
+    row.innerHTML = `<span>${icon}</span><span style="flex:1;">${data.exp_name}</span><span style="color:var(--txt3);font-size:.68rem;">${data.exp_state}</span>`;
+});
+
+socket.on('plan_complete', (data) => {
+    document.getElementById('planDot').className = 't-dot';
+    const msg = data.status === 'error'
+        ? `Error: ${data.message}`
+        : data.status === 'stopped'
+        ? 'Aborted by user.'
+        : `Complete — ${data.completed} succeeded, ${data.failed || 0} failed`;
+    document.getElementById('planStatusMsg').textContent = msg;
+    document.getElementById('planProgressBar').style.width = '100%';
+    const abortBtn = document.getElementById('abortPlan');
+    if (abortBtn) { abortBtn.disabled = true; abortBtn.style.opacity = '0.4'; }
+    notify(msg, data.status === 'done' && !data.failed);
+    // Re-enable after 3s
+    setTimeout(() => {
+        if (abortBtn) { abortBtn.disabled = false; abortBtn.style.opacity = ''; }
+    }, 3000);
+});
+
+socket.on('queue_progress', (data) => {
+    const bar = document.getElementById('queueStatusBar');
+    if (bar) {
+        bar.style.display = 'block';
+        bar.textContent = `Queue: item ${data.queue_position}/${data.queue_total} · ${data.plan_name} repeat ${data.repeat_current}/${data.repeat_total}`;
+    }
+});
+
+socket.on('queue_complete', (data) => {
+    const bar = document.getElementById('queueStatusBar');
+    if (bar) {
+        bar.textContent = data.status === 'done' ? 'Queue finished.' : `Queue ${data.status}: ${data.message || ''}`;
+        setTimeout(() => { bar.style.display = 'none'; }, 5000);
+    }
+    document.getElementById('planDot').className = 't-dot';
+    document.getElementById('planStatusMsg').textContent = data.message || 'Queue complete.';
+    const startBtn = document.getElementById('btnStartQueue');
+    if (startBtn) startBtn.disabled = false;
+    const abortBtn = document.getElementById('abortPlan');
+    if (abortBtn) { abortBtn.style.display = 'none'; }
+    notify(data.message || 'Queue complete.', data.status === 'done');
+    // Refresh queue list and history
+    clientQueue = [];
+    renderQueueList();
+    if (plannerTab === 'history') loadRunHistory();
+});
 
 </script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>

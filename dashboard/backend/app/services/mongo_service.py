@@ -5,6 +5,7 @@ from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
 
 from app.config import settings
+from app.services.subscriber_schema import normalize_subscriber
 
 log = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ class MongoService:
         return self.subscribers.find_one({"imsi": imsi}, {"_id": 0})
 
     def create_subscriber(self, data: dict[str, Any]) -> dict[str, Any]:
-        data.pop("_id", None)
+        data = normalize_subscriber(data)
         self.subscribers.update_one(
             {"imsi": data["imsi"]},
             {"$set": data},
@@ -48,11 +49,17 @@ class MongoService:
         return self.get_subscriber(data["imsi"]) or data
 
     def update_subscriber(self, imsi: str, data: dict[str, Any]) -> dict[str, Any] | None:
-        data.pop("_id", None)
-        data.pop("imsi", None)
-        result = self.subscribers.update_one({"imsi": imsi}, {"$set": data})
-        if result.matched_count == 0:
+        existing = self.subscribers.find_one({"imsi": imsi})
+        if existing is None:
             return None
+        existing.pop("_id", None)
+        merged = {**existing, **{k: v for k, v in data.items() if k != "imsi"}}
+        merged["imsi"] = imsi
+        normalized = normalize_subscriber(merged)
+        self.subscribers.update_one(
+            {"imsi": imsi},
+            {"$set": normalized},
+        )
         return self.get_subscriber(imsi)
 
     def delete_subscriber(self, imsi: str) -> bool:

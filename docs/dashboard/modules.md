@@ -196,6 +196,41 @@ Per-interface connectivity checks and real-time traffic monitoring.
 
 ---
 
+## Sidebar: Cluster Clock & Time Sync
+
+**Area**: Infrastructure visibility
+
+The sidebar footer includes a live clock and a time synchronization monitor.
+
+### Features
+
+**Live clock**:
+- Displays current time in the user's local timezone (e.g. `01:32:05 CET`)
+- Synced to the backend server time (corrected for browser-server drift via the `/health` endpoint, polled every 5 seconds)
+- Starts ticking immediately on page load using the browser clock, then silently corrects when the first server response arrives
+
+**Time Sync popover** (click the clock to open):
+- Shows per-VM time readings for all 4 testbed VMs (ansible, master, worker, edge)
+- Times tick forward live in the browser
+- Offset column shows drift relative to the ansible VM (reference clock)
+- Color-coded: green (< 500ms), amber (500ms-2s), red (> 2s)
+- Max drift summary and IN SYNC / DRIFT DETECTED badge
+- Auto-refreshes every 30 seconds while open
+
+**Automatic drift correction**:
+- When the popover detects drift (> 1 second), it automatically triggers `chronyc makestep` on all VMs via `POST /api/v1/time/force-sync`
+- Auto-correction fires once per popover open to prevent loops
+- A manual "Force Sync" button also appears when drift is detected, for on-demand correction
+- The endpoint SSHs to each VM, runs the sync command, and returns updated time readings
+
+### What you need
+
+- SSH access from ansible VM to all nodes (for time reads and force-sync)
+- `chrony` installed on all VMs (deployed by Phase 1)
+- `sudo` access for `chronyc` on remote nodes (configured by Phase 1)
+
+---
+
 ## Planned / Stubbed
 
 The following endpoints are stubbed for future modules:

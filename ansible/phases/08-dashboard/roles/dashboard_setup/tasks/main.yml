@@ -147,11 +147,19 @@
     mode: "0644"
   register: frontend_service_unit
 
+- name: Install watchdog systemd service
+  become: true
+  ansible.builtin.template:
+    src: dashboard-watchdog.service.j2
+    dest: /etc/systemd/system/dashboard-watchdog.service
+    mode: "0644"
+  register: watchdog_service_unit
+
 - name: Reload systemd after unit changes
   become: true
   ansible.builtin.systemd:
     daemon_reload: true
-  when: backend_service_unit.changed or frontend_service_unit.changed
+  when: backend_service_unit.changed or frontend_service_unit.changed or watchdog_service_unit.changed
 
 - name: Allow dashboard user to restart backend via systemctl (for in-app recovery)
   become: true
@@ -172,6 +180,13 @@
   become: true
   ansible.builtin.systemd:
     name: "{{ dashboard_frontend_service_name }}"
+    enabled: true
+    state: started
+
+- name: Enable and start dashboard watchdog service
+  become: true
+  ansible.builtin.systemd:
+    name: dashboard-watchdog
     enabled: true
     state: started
 

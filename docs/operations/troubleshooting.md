@@ -4,15 +4,31 @@ Common issues and their solutions.
 
 ## Time Sync (VM Clock Drift)
 
-**Symptom**: `ping` shows `invalid tv_usec`, `time of day goes back`, `wrong data byte`; logs have odd timestamps.
+**Symptom**: `ping` shows `invalid tv_usec`, `time of day goes back`, `wrong data byte`; logs have odd timestamps; dashboard Time Sync popover shows "DRIFT DETECTED".
 
-**Cause**: VM clock drift (common with VirtualBox suspend/resume).
+**Cause**: VM clock drift (common with VirtualBox suspend/resume). Chrony's gradual frequency steering is often insufficient in virtualized environments where VMs get paused, resumed, or snapshotted.
 
-**Solutions**:
-- Phase 1 deploys **chrony** with `makestep 1 -1` for VM-friendly NTP sync.
-- Vagrant triggers enable **VirtualBox Guest Additions** time sync (10s interval) after `up`/`resume`.
-- Force immediate sync: `vagrant ssh worker -c 'sudo chronyc -a makestep'`
-- Check chrony: `chronyc sources -v` and `chronyc tracking`
+**Automatic correction** (deployed by Phase 1):
+- **Chrony**: configured with `makestep 1 -1` — allows stepping the clock at any time if drift exceeds 1 second
+- **VirtualBox Guest Additions**: time sync every 10 seconds (Vagrant trigger on `up`/`resume`/`reload`)
+- **Systemd timer** (`chrony-force-sync.timer`): runs `chronyc makestep` every 5 minutes on all VMs. If drift exceeds the chrony threshold, the clock is stepped immediately; otherwise it's a no-op
+
+**Manual correction**:
+- **Dashboard**: open the Time Sync popover (click the clock in the sidebar). If drift is detected, a "Force Sync" button appears — this runs `chronyc makestep` on all VMs via SSH
+- **CLI**: `vagrant ssh worker -c 'sudo chronyc -a makestep'`
+
+**Diagnostics**:
+```bash
+# Check chrony sources and tracking
+chronyc sources -v
+chronyc tracking
+
+# Check the force-sync timer is active
+systemctl list-timers | grep chrony-force-sync
+
+# Check last sync result
+journalctl -u chrony-force-sync.service --no-pager -n 5
+```
 
 ---
 

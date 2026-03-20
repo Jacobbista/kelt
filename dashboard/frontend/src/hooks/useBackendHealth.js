@@ -13,6 +13,7 @@ const FETCH_TIMEOUT_MS = 5000;
  */
 export function useBackendHealth() {
   const [unreachable, setUnreachable] = useState(false);
+  const [serverTime, setServerTime] = useState(null);
 
   const check = useCallback(async () => {
     const ctrl = new AbortController();
@@ -25,6 +26,10 @@ export function useBackendHealth() {
       clearTimeout(to);
       if (res.ok) {
         setUnreachable(false);
+        try {
+          const data = await res.json();
+          if (data.server_time_utc) setServerTime(data.server_time_utc);
+        } catch { /* ignore parse errors */ }
         return true;
       }
     } catch (err) {
@@ -42,5 +47,5 @@ export function useBackendHealth() {
     return () => clearInterval(id);
   }, [check, unreachable]);
 
-  return { unreachable, check };
+  return { unreachable, check, serverTime };
 }
