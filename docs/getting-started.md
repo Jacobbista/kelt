@@ -11,13 +11,23 @@ This guide will get you from zero to a running 5G testbed in under 30 minutes.
 - **OS**: Linux, macOS, or Windows with virtualization enabled
 
 ```bash
-# Install Vagrant and VirtualBox (see docs/requirements.md for details)
-# Install gum for interactive configuration (optional but recommended):
+# VirtualBox
+sudo apt install -y virtualbox virtualbox-ext-pack
+
+# Vagrant
+wget -O- https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
+  | sudo tee /etc/apt/sources.list.d/hashicorp.list
+sudo apt update && sudo apt install -y vagrant
+
+# gum — interactive TUI for testbed-config (optional but recommended)
 sudo mkdir -p /etc/apt/keyrings
 curl -fsSL https://repo.charm.sh/apt/gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/charm.gpg
 echo "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" | sudo tee /etc/apt/sources.list.d/charm.list
 sudo apt update && sudo apt install gum
 ```
+
+For macOS/Windows install instructions, see [Requirements](requirements.md).
 
 For the full list of tools and versions (including 5G UE Probe requirements for physical dongle experiments), see [Requirements](requirements.md).
 

@@ -20,6 +20,30 @@ For `vagrant up`, Ansible provisioning, and the K3s cluster:
 
 The Ansible VM is provisioned with Python, Ansible, and Kubernetes collections; no host-side Ansible is required for deployment.
 
+### Install VirtualBox
+
+```bash
+# Debian/Ubuntu
+sudo apt update
+sudo apt install -y virtualbox virtualbox-ext-pack
+```
+
+On macOS: `brew install --cask virtualbox`. On Windows: download the installer from [virtualbox.org](https://www.virtualbox.org/wiki/Downloads).
+
+> **BIOS**: Ensure VT-x (Intel) or AMD-V is enabled. On NUC/server hardware, also enable VT-d for direct I/O.
+
+### Install Vagrant
+
+```bash
+# Debian/Ubuntu
+wget -O- https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
+  | sudo tee /etc/apt/sources.list.d/hashicorp.list
+sudo apt update && sudo apt install -y vagrant
+```
+
+On macOS: `brew install --cask vagrant`. On Windows: download from [vagrantup.com](https://developer.hashicorp.com/vagrant/install).
+
 ### Install gum (Recommended)
 
 [gum](https://github.com/charmbracelet/gum) provides the interactive TUI for [`testbed-config`](tools/testbed-config.md). Without it, the tool still works but uses basic terminal prompts.
