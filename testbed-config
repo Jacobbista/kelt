@@ -115,6 +115,13 @@ show_status() {
   local ran_label
   [[ "$PHYSICAL_RAN_ENABLED" == "true" ]] && ran_label="${PHYSICAL_RAN_BRIDGE:-auto}" || ran_label="disabled"
 
+  local ueransim_label
+  if [[ "$EDGE_ENABLED" == "true" ]]; then
+    [[ "$DEPLOY_MODE" == "full" ]] && ueransim_label="enabled" || ueransim_label="disabled"
+  else
+    ueransim_label="—  (requires edge)"
+  fi
+
   if $HAS_GUM; then
     gum style --border rounded --padding "1 2" --border-foreground 39 \
       "5G K3s KubeEdge Testbed" \
@@ -122,7 +129,7 @@ show_status() {
       "Hardware:  ${hw}" \
       "Profile:   ${TESTBED_PROFILE}" \
       "Edge VM:   ${edge_label}" \
-      "Deploy:    ${DEPLOY_MODE}" \
+      "UERANSIM:  ${ueransim_label}" \
       "RAN:       ${ran_label}" \
       "Dashboard: ${DASHBOARD_MODE}"
   else
@@ -132,7 +139,7 @@ show_status() {
     echo "  Hardware:  ${hw}"
     echo "  Profile:   ${TESTBED_PROFILE}"
     echo "  Edge VM:   ${edge_label}"
-    echo "  Deploy:    ${DEPLOY_MODE}"
+    echo "  UERANSIM:  ${ueransim_label}"
     echo "  RAN:       ${ran_label}"
     echo "  Dashboard: ${DASHBOARD_MODE}"
     echo ""
@@ -153,14 +160,15 @@ do_set_profile() {
     laptop|server) TESTBED_PROFILE="$profile" ;;
     *) echo "Unknown profile: $profile (valid: laptop, server)"; return 1 ;;
   esac
-  # Adjust edge default per profile
+  # Adjust edge and deploy mode per profile
   if [[ "$TESTBED_PROFILE" == "server" ]]; then
     EDGE_ENABLED="false"
+    DEPLOY_MODE="core_only"
   else
     EDGE_ENABLED="true"
   fi
   save_config
-  echo "Profile set to: ${TESTBED_PROFILE} (edge: ${EDGE_ENABLED})"
+  echo "Profile set to: ${TESTBED_PROFILE} (edge: ${EDGE_ENABLED}, deploy: ${DEPLOY_MODE})"
 }
 
 do_edge() {
@@ -173,12 +181,23 @@ do_edge() {
     fi
   fi
   case "$toggle" in
-    on|true)   EDGE_ENABLED="true" ;;
-    off|false) EDGE_ENABLED="false" ;;
+    on|true)
+      EDGE_ENABLED="true"
+      # Ask whether to also deploy UERANSIM on the edge
+      if [[ "$DEPLOY_MODE" != "full" ]]; then
+        if gum_confirm "Also deploy UERANSIM on edge? (full mode)"; then
+          DEPLOY_MODE="full"
+        fi
+      fi
+      ;;
+    off|false)
+      EDGE_ENABLED="false"
+      DEPLOY_MODE="core_only"
+      ;;
     *) echo "Usage: $0 edge on|off"; return 1 ;;
   esac
   save_config
-  echo "Edge VM: ${EDGE_ENABLED}"
+  echo "Edge VM: ${EDGE_ENABLED} (deploy: ${DEPLOY_MODE})"
 }
 
 do_ran() {
@@ -234,23 +253,35 @@ interactive_menu() {
   while true; do
     show_status
     local choice
-    choice="$(gum_choose \
-      "Set deployment profile" \
-      "Toggle edge VM" \
-      "Configure physical RAN" \
-      "Set deploy mode (core_only/full)" \
-      "Start cluster (vagrant up)" \
-      "Run provisioning" \
-      "Show full status" \
-      "Exit")"
+    # Build menu: deploy mode toggle only visible when edge is enabled
+    local menu_items=(
+      "Set deployment profile"
+      "Toggle edge VM"
+      "Configure physical RAN"
+    )
+    if [[ "$EDGE_ENABLED" == "true" ]]; then
+      menu_items+=("Toggle UERANSIM (deploy mode)")
+    fi
+    menu_items+=(
+      "Start cluster (vagrant up)"
+      "Run provisioning"
+      "Show full status"
+      "Exit"
+    )
+    choice="$(gum_choose "${menu_items[@]}")"
     case "$choice" in
       "Set deployment profile")          do_set_profile ;;
       "Toggle edge VM")                  do_edge ;;
       "Configure physical RAN")          do_ran ;;
-      "Set deploy mode (core_only/full)")
-        DEPLOY_MODE="$(gum_choose "core_only" "full")"
+      "Toggle UERANSIM (deploy mode)")
+        if [[ "$DEPLOY_MODE" == "full" ]]; then
+          DEPLOY_MODE="core_only"
+          echo "UERANSIM disabled (core_only)"
+        else
+          DEPLOY_MODE="full"
+          echo "UERANSIM enabled (full)"
+        fi
         save_config
-        echo "Deploy mode: ${DEPLOY_MODE}"
         ;;
       "Start cluster (vagrant up)")      do_up ;;
       "Run provisioning")                do_provision ;;

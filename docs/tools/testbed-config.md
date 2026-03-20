@@ -127,7 +127,7 @@ Setting `server` automatically disables edge. Setting `laptop` automatically ena
 
 ### Edge Toggle
 
-`edge on` adds the edge VM to the deployment. This changes the active profile from `server` to `server_edge` internally (different resource allocation). `edge off` removes it.
+`edge on` adds the edge VM to the deployment. This changes the active profile from `server` to `server_edge` internally (different resource allocation). In interactive mode, enabling edge also asks whether to deploy UERANSIM (`full` mode). `edge off` removes the edge VM and automatically sets deploy mode to `core_only` — UERANSIM requires the edge node.
 
 ### Physical RAN Bridge
 

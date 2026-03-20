@@ -4,9 +4,9 @@ This guide will get you from zero to a running 5G testbed in under 30 minutes.
 
 ## Prerequisites
 
-- **Vagrant** >= 2.3.0
 - **VirtualBox** >= 6.1.0
-- **gum** (optional, recommended) — interactive TUI for [`testbed-config`](tools/testbed-config.md)
+- **Vagrant** >= 2.3.0
+- **gum** (recommended) — interactive TUI for [`testbed-config`](tools/testbed-config.md)
 - **Host resources**: 16 GB RAM, 4+ CPU cores recommended
 - **OS**: Linux, macOS, or Windows with virtualization enabled
 
@@ -20,7 +20,7 @@ echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://
   | sudo tee /etc/apt/sources.list.d/hashicorp.list
 sudo apt update && sudo apt install -y vagrant
 
-# gum — interactive TUI for testbed-config (optional but recommended)
+# gum — interactive TUI for testbed-config (recommended)
 sudo mkdir -p /etc/apt/keyrings
 curl -fsSL https://repo.charm.sh/apt/gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/charm.gpg
 echo "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" | sudo tee /etc/apt/sources.list.d/charm.list
@@ -29,72 +29,33 @@ sudo apt update && sudo apt install gum
 
 For macOS/Windows install instructions, see [Requirements](requirements.md).
 
-For the full list of tools and versions (including 5G UE Probe requirements for physical dongle experiments), see [Requirements](requirements.md).
-
 ## Quick Start
-
-### Deploy 5G Core Only (Default — Laptop)
 
 ```bash
 git clone https://github.com/Jacobbista/5g-k3s-kubedge-testbed.git
 cd 5g-k3s-kubedge-testbed
 
-# (Optional) Configure the testbed interactively
+# Configure the testbed (profile, edge, RAN, deploy mode)
 ./testbed-config
 
 # Deploy
 vagrant up
 ```
 
-Running `./testbed-config` opens an interactive menu where you can select the deployment profile, toggle the edge VM, configure physical RAN, and more. Without it, the default `laptop` profile is used (4 VMs, edge included). See [`testbed-config`](tools/testbed-config.md) for the full reference.
+[`testbed-config`](tools/testbed-config.md) opens an interactive menu (powered by gum) where you choose:
+
+- **Deployment profile**: `laptop` (4 VMs, edge included) or `server` (3 VMs, no edge — for NUC/server)
+- **Edge VM**: on/off — controls whether the edge node is created and KubeEdge EdgeCore is deployed
+- **Deploy mode**: `core_only` (5G core + observability + dashboard) or `full` (also deploys UERANSIM on the edge)
+- **Physical RAN**: bridge a host NIC for a real gNB
+
+Configuration is saved to `.testbed.env` and picked up automatically by `vagrant up`. See [`testbed-config`](tools/testbed-config.md) for the full CLI reference.
+
+> **Without gum**: the tool falls back to basic terminal prompts. You can also use it non-interactively: `./testbed-config set-profile server && ./testbed-config edge off`.
 
 ### Server / NUC Deployment
 
-For headless servers or Intel NUCs with limited CPU, use the `server` profile:
-
-```bash
-./testbed-config set-profile server   # 3 VMs, no edge, optimized resources
-vagrant up
-vagrant provision ansible
-```
-
-See [Server / NUC Deployment](deployment/server-setup.md) for hardware requirements, remote access setup, and reverse proxy configuration.
-
-This deploys:
-- K3s cluster (master, worker, edge nodes)
-- KubeEdge (CloudCore + EdgeCore)
-- OVS overlay networks with VXLAN tunnels
-- Open5GS 5G Core (AMF, SMF, UPF, NRF, etc.)
-- Observability stack (Prometheus, Loki, Grafana)
-- Dashboard control plane (out-of-band on ansible VM)
-
-### Deploy Full Stack (with UERANSIM)
-
-```bash
-DEPLOY_MODE=full vagrant up
-```
-
-Adds UERANSIM simulator (gNB + UEs) for end-to-end testing.
-
-## Startup Flags
-
-Use this flag with `vagrant up`:
-
-| Flag | Values | Default | Behavior |
-|------|--------|---------|----------|
-| `DEPLOY_MODE` | `core_only`, `full` | `core_only` | `full` includes Phase 6 (UERANSIM + MEC) |
-| `TESTBED_PROFILE` | `laptop`, `server` | `laptop` | `server` creates 3 VMs (no edge) with optimized resources. See [Server Setup](deployment/server-setup.md) |
-| `EDGE_ENABLED` | `true`, `false` | `true` (laptop) / `false` (server) | Controls edge VM creation and KubeEdge EdgeCore deployment |
-
-Recommended command combinations:
-
-```bash
-# Default: core only
-vagrant up
-
-# Add UERANSIM
-DEPLOY_MODE=full vagrant up
-```
+For headless servers or Intel NUCs, see [Server / NUC Deployment](deployment/server-setup.md) for hardware requirements, resource profiles, and remote access setup (reverse proxy).
 
 ## What Gets Deployed
 
@@ -109,13 +70,23 @@ graph LR
         W3["5G Core NFs"]
         W4["MongoDB · UPF-Cloud"]
     end
-    subgraph Edge["Edge  192.168.56.12"]
+    subgraph Edge["Edge  192.168.56.12 (optional)"]
         E1["EdgeCore (KubeEdge)"]
         E2["gNB + UEs (UERANSIM)"]
     end
     Worker <-->|"VXLAN N2/N3/N4/N6"| Edge
     Master --- Worker
 ```
+
+> **Edge is optional.** In the `server` profile, only master, worker, and ansible VMs are created. The edge VM is added when enabled via `testbed-config edge on`. Without edge, phases 3 (EdgeCore) and 6 (UERANSIM) are skipped, and OVS bridges run locally on the worker without VXLAN tunnels.
+
+Components deployed:
+- K3s cluster (master + worker, optionally edge)
+- KubeEdge (CloudCore on worker, EdgeCore on edge if enabled)
+- OVS overlay networks (VXLAN tunnels when edge is present)
+- Open5GS 5G Core (AMF, SMF, UPF, NRF, etc.)
+- Observability stack (Prometheus, Loki, Grafana)
+- Dashboard control plane (out-of-band on ansible VM)
 
 ## Verify Deployment
 
@@ -126,13 +97,15 @@ vagrant ssh master
 sudo k3s kubectl get nodes
 ```
 
-Expected output:
+Expected output (with edge enabled):
 ```
 NAME     STATUS   ROLES                  AGE   VERSION
 master   Ready    control-plane,master   10m   v1.30.6+k3s1
 worker   Ready    <none>                 8m    v1.30.6+k3s1
 edge     Ready    agent,edge             6m    v1.30.6+k3s1
 ```
+
+Without edge, only `master` and `worker` appear.
 
 > **kubectl on K3s VMs**: K3s does not create a standalone `kubectl` binary — the cluster is managed via `sudo k3s kubectl`. All in-VM kubectl commands throughout these docs use this form.
 
@@ -144,7 +117,7 @@ sudo k3s kubectl get pods -n 5g
 
 All pods should be `Running`.
 
-### Check UERANSIM (if deployed with full mode)
+### Check UERANSIM (if edge is enabled and deploy mode is full)
 
 ```bash
 sudo k3s kubectl get pods -n 5g -l app=gnb-1
@@ -173,7 +146,7 @@ sudo k3s kubectl get nodes
 
 ## Deploy UERANSIM Manually
 
-If you deployed with `core_only` mode (default) and want to add UERANSIM later:
+If you deployed with `core_only` mode and want to add UERANSIM later (requires edge VM):
 
 ```bash
 vagrant ssh ansible
