@@ -309,6 +309,8 @@ INVENTORY
 
       # Point ansible.cfg to the generated inventory instead of the static one
       sed -i 's|inventory = /home/vagrant/ansible-ro/inventory.ini|inventory = /home/vagrant/ansible-work/inventory.ini|' /home/vagrant/ansible-work/ansible.cfg
+      # Symlink group_vars so Ansible finds them relative to the dynamic inventory
+      ln -sfn /home/vagrant/ansible-ro/group_vars /home/vagrant/ansible-work/group_vars
       echo "[INFO] Generated inventory at /home/vagrant/ansible-work/inventory.ini"
 
       # Add PATH to .bashrc for interactive sessions
