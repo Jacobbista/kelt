@@ -4,7 +4,5 @@
 - name: Phase 08 - Dashboard Setup
   hosts: control
   gather_facts: true
-  vars:
-    dashboard_mode: "{{ dashboard_mode | default('prod') }}"
   roles:
     - role: dashboard_setup
