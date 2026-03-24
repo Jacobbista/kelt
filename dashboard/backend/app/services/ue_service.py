@@ -339,52 +339,56 @@ class UEService:
         """Build an active-UE list by cross-referencing log events.
 
         Since Open5GS stores sessions in memory (not MongoDB), we reconstruct
-        state from recent AMF/SMF log entries.  Cross-checks with Prometheus
-        ran_ue gauge to detect stale entries.
+        state from recent AMF/SMF log entries.  Events are merged and sorted
+        chronologically so that deregistration correctly clears prior sessions.
+        Cross-checks with Prometheus ran_ue gauge to detect stale entries.
         """
-        registered: dict[str, dict[str, Any]] = {}
-        for ev in self._parse_amf_logs(tail=1000):
-            imsi = ev.get("imsi")
-            if not imsi:
-                continue
-            if ev["type"] == "registration_ok":
-                registered.setdefault(imsi, {"imsi": imsi, "status": "registered",
-                                              "last_seen": ev["ts"], "sessions": []})
-                registered[imsi]["status"] = "registered"
-                registered[imsi]["last_seen"] = ev["ts"]
-            elif ev["type"] == "registration_fail":
-                registered.setdefault(imsi, {"imsi": imsi, "status": "deregistered",
-                                              "last_seen": ev["ts"], "sessions": []})
-                registered[imsi]["status"] = "deregistered"
-                registered[imsi]["last_seen"] = ev["ts"]
-                if "de-register" in (ev.get("detail") or "").lower() or "deregister" in (ev.get("detail") or "").lower():
-                    registered[imsi]["sessions"] = []
-            elif ev["type"] == "ue_context_release":
-                registered.setdefault(imsi, {"imsi": imsi, "status": "released",
-                                              "last_seen": ev["ts"], "sessions": []})
-                registered[imsi]["status"] = "released"
-                registered[imsi]["sessions"] = []
-                registered[imsi]["last_seen"] = ev["ts"]
+        # Merge AMF + SMF events and sort chronologically
+        all_events = self._parse_amf_logs(tail=1000) + self._parse_smf_logs(tail=1000)
+        all_events.sort(key=lambda e: e.get("ts", ""))
 
-        for ev in self._parse_smf_logs(tail=1000):
+        registered: dict[str, dict[str, Any]] = {}
+        for ev in all_events:
             imsi = ev.get("imsi")
             if not imsi:
                 continue
-            if ev["type"] == "pdu_session_est":
+
+            if ev["type"] == "registration_ok":
+                entry = registered.setdefault(imsi, {"imsi": imsi, "status": "registered",
+                                                      "last_seen": ev["ts"], "sessions": []})
+                entry["status"] = "registered"
+                entry["last_seen"] = ev["ts"]
+                # New registration clears stale sessions from previous lifecycle
+                entry["sessions"] = []
+
+            elif ev["type"] == "registration_fail":
+                entry = registered.setdefault(imsi, {"imsi": imsi, "status": "deregistered",
+                                                      "last_seen": ev["ts"], "sessions": []})
+                entry["status"] = "deregistered"
+                entry["last_seen"] = ev["ts"]
+                entry["sessions"] = []
+
+            elif ev["type"] == "ue_context_release":
+                entry = registered.setdefault(imsi, {"imsi": imsi, "status": "released",
+                                                      "last_seen": ev["ts"], "sessions": []})
+                entry["status"] = "released"
+                entry["sessions"] = []
+                entry["last_seen"] = ev["ts"]
+
+            elif ev["type"] == "pdu_session_est":
                 entry = registered.setdefault(imsi, {"imsi": imsi, "status": "registered",
                                                       "last_seen": ev["ts"], "sessions": []})
                 ue_ip, dnn = ev.get("ue_ip", ""), ev.get("dnn", "")
                 # Avoid duplicate session entries (same IP+DNN)
-                existing = [s for s in entry["sessions"] if s.get("ue_ip") == ue_ip and s.get("dnn") == dnn]
-                if not existing:
+                if not any(s.get("ue_ip") == ue_ip and s.get("dnn") == dnn for s in entry["sessions"]):
                     entry["sessions"].append({"dnn": dnn, "ue_ip": ue_ip, "ts": ev["ts"]})
                 entry["last_seen"] = ev["ts"]
-            elif ev["type"] == "pdu_session_rel" and ev.get("imsi") and ev.get("ue_ip"):
-                imsi_rel = ev["imsi"]
+
+            elif ev["type"] == "pdu_session_rel" and ev.get("ue_ip"):
                 ue_ip_rel = ev["ue_ip"]
-                dnn_rel = (ev.get("dnn") or "").split(":")[0]  # "internet:123" -> "internet"
-                if imsi_rel in registered:
-                    sessions = registered[imsi_rel]["sessions"]
+                dnn_rel = (ev.get("dnn") or "").split(":")[0]
+                if imsi in registered:
+                    sessions = registered[imsi]["sessions"]
                     for i in range(len(sessions) - 1, -1, -1):
                         s_dnn = (sessions[i].get("dnn") or "").split(":")[0]
                         ip_match = sessions[i].get("ue_ip") == ue_ip_rel
@@ -392,7 +396,12 @@ class UEService:
                         if ip_match and dnn_match:
                             sessions.pop(i)
                             break
-                    registered[imsi_rel]["last_seen"] = ev["ts"]
+                    registered[imsi]["last_seen"] = ev["ts"]
+
+        # Safety net: force-clear sessions for terminal UEs
+        for u in registered.values():
+            if u["status"] in ("deregistered", "released"):
+                u["sessions"] = []
 
         # Filter stale UEs: drop if last_seen older than 10 minutes
         now = datetime.now(timezone.utc)
@@ -407,7 +416,7 @@ class UEService:
                 if (now - dt).total_seconds() <= max_age_sec:
                     filtered.append(u)
             except Exception:
-                filtered.append(u)
+                continue  # skip entries with unparseable timestamps
 
         # Cross-check with Prometheus: if ran_ue=0 but we have "registered" UEs, mark stale
         try:
@@ -561,11 +570,13 @@ def _strip_ansi(text: str) -> str:
     return _RE_ANSI.sub("", text)
 
 
+_RE_K8S_TS = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)")
+
+
 def _extract_ts(line: str) -> str:
     """Extract the leading K8s timestamp from a log line (RFC3339 format)."""
-    if line and len(line) > 20 and line[4] == "-":
-        return line[:30].strip()
-    return ""
+    m = _RE_K8S_TS.match(line)
+    return m.group(1) if m else ""
 
 
 def get_ue_service(k8s: K8sService, prom: PrometheusService) -> UEService:

@@ -356,8 +356,10 @@ export default function UEMonitoringPage() {
                 </tr>
               </thead>
               <tbody>
-                {activeUes.map((ue) => (
-                  <tr key={ue.imsi} className="border-b border-slate-800">
+                {activeUes.map((ue) => {
+                  const isDead = ue.status === "deregistered" || ue.status === "released" || ue.status === "stale";
+                  return (
+                  <tr key={ue.imsi} className={`border-b border-slate-800${isDead ? " opacity-60" : ""}`}>
                     <td className="py-2 pr-4 font-mono text-slate-200">
                       {ue.imsi}
                     </td>
@@ -372,24 +374,37 @@ export default function UEMonitoringPage() {
                       </span>
                     </td>
                     <td className="py-2 pr-4">
-                      {ue.sessions && ue.sessions.length > 0 ? (
-                        ue.sessions.map((sess, i) => (
-                          <span
-                            key={i}
-                            className="mr-2 inline-block rounded bg-indigo-900/30 px-1.5 py-0.5 text-[10px] text-indigo-300"
-                          >
-                            {sess.ue_ip || "?"} ({sess.dnn || "?"})
-                          </span>
-                        ))
+                      {ue.status === "deregistered" || ue.status === "released" || ue.status === "stale" ? (
+                        <span className="text-slate-600">—</span>
+                      ) : ue.sessions && ue.sessions.length > 0 ? (
+                        <>
+                          {ue.sessions.slice(0, 3).map((sess, i) => (
+                            <span
+                              key={i}
+                              className="mr-1.5 mb-1 inline-block rounded bg-indigo-900/30 px-1.5 py-0.5 text-[10px] text-indigo-300"
+                            >
+                              {sess.ue_ip || "?"} ({sess.dnn || "?"})
+                            </span>
+                          ))}
+                          {ue.sessions.length > 3 && (
+                            <span
+                              className="inline-block rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400"
+                              title={ue.sessions.slice(3).map(s => `${s.ue_ip} (${s.dnn})`).join(", ")}
+                            >
+                              +{ue.sessions.length - 3} more
+                            </span>
+                          )}
+                        </>
                       ) : (
-                        <span className="text-slate-600">-</span>
+                        <span className="text-slate-600">—</span>
                       )}
                     </td>
                     <td className="py-2 text-slate-500" title={formatTs(ue.last_seen)}>
                       {relativeTime(ue.last_seen)}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
