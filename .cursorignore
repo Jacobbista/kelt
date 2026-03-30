@@ -1,0 +1,49 @@
+# Virtual environments (heaviest: ~360MB total)
+5g-probe/venv/
+tests/venv/
+dashboard/frontend/node_modules/
+
+# Python caches
+**/__pycache__/
+*.pyc
+*.pyo
+
+# Build output
+dashboard/frontend/dist/
+**/build/
+**/*.egg-info/
+
+# Test results
+5g-probe/results/
+
+# Git internals
+.git/
+
+# Vagrant VM state
+.vagrant/
+
+# Logs
+**/logs/
+**/*.log
+dashboard/backend/logs/
+
+# Runtime & secrets
+.env
+*.env
+.env.runtime
+secrets/
+credentials/
+
+# Ansible artifacts
+*.retry
+ansible.log
+kubeconfig
+*.kubeconfig
+k3s_token
+edge_token
+
+# OS junk
+.DS_Store
+*.swp
+*.swo
+*~
