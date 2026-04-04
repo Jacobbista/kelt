@@ -157,12 +157,15 @@ sudo k3s kubectl -n 5g exec deploy/smf -- ip -o -4 addr show dev n4
 |----------|-------|
 | Purpose | Connection to external data network (internet or MEC) |
 | Protocol | IP routing + NAT |
-| N6 cloud subnet | 10.207.0.0/24 (UPF-Cloud → internet) |
-| N6 edge subnet | 10.206.0.0/24 (UPF-Edge → MEC) |
-| OVS bridges | br-n6c (VNI 107), br-n6e (VNI 106) |
-| NADs | `5g/n6-cld-net`, `5g/n6e-net` |
+| N6c subnet | 10.207.0.0/24 — UPF-Cloud → internet |
+| N6m subnet | 10.208.0.0/24 — UPF-Cloud → MEC data network |
+| N6e subnet | 10.206.0.0/24 — UPF-Edge → MEC (disabled) |
+| OVS bridges | br-n6c (VNI 107), br-n6m (VNI 108), br-n6e (VNI 106) |
+| NADs | `5g/n6-cld-net`, `mec/n6m-net`, `mec/n6-mec-net` |
 
 **N6c (internet breakout via UPF-Cloud)**: The worker VM has `ip_forward` enabled and `iptables MASQUERADE` rules for the `10.207.0.0/24` subnet. Traffic exiting UPF-Cloud on the N6c interface is NAT'd to the worker's `eth0` (NAT NIC) and forwarded to the internet.
+
+**N6m (MEC data network via UPF-Cloud)**: A second N6 interface on UPF-Cloud connecting to the MEC data network (`10.208.0.0/24`). Allows UEs to reach MEC application services via UPF-Cloud when UPF-Edge is not active.
 
 **N6e (MEC local breakout via UPF-Edge)**: Reserved for MEC applications on the edge node. Currently not active due to UPF-Edge being disabled. See [known-issues/upf-edge-cni-route-conflict.md](../known-issues/upf-edge-cni-route-conflict.md).
 
@@ -187,12 +190,12 @@ NFs using SBI: NRF, AMF, SMF, UDM, UDR, AUSF, PCF, BSF, NSSF.
 
 All static IPs are defined in `ansible/group_vars/all.yml` and excluded from Whereabouts dynamic allocation:
 
-| Component | N1 | N2 | N3 | N4 | N6e | N6c |
-|-----------|-----|-----|-----|-----|-----|-----|
-| AMF | 10.201.0.100 | 10.202.0.100 | — | — | — | — |
-| SMF | — | — | — | 10.204.0.100 | — | — |
-| UPF-Cloud | — | — | 10.203.0.101 | 10.204.0.101 | — | 10.207.0.101 |
-| UPF-Edge | — | — | 10.203.0.100 | 10.204.0.102 | 10.206.0.100 | — |
+| Component | N1 | N2 | N3 | N4 | N6c | N6m | N6e |
+|-----------|-----|-----|-----|-----|-----|-----|-----|
+| AMF | 10.201.0.100 | 10.202.0.100 | — | — | — | — | — |
+| SMF | — | — | — | 10.204.0.100 | — | — | — |
+| UPF-Cloud | — | — | 10.203.0.101 | 10.204.0.101 | 10.207.0.101 | 10.208.0.101 | — |
+| UPF-Edge | — | — | 10.203.0.100 | 10.204.0.102 | — | — | 10.206.0.100 |
 
 ---
 

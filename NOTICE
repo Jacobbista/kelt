@@ -1,0 +1,47 @@
+5G KubeEdge Testbed
+Copyright 2024-2026 Jacopo Bennati
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+---
+
+This project depends on the following third-party components, each governed
+by its own license. Their source code is not included in this repository.
+
+Open5GS
+  Source:  https://github.com/open5gs/open5gs
+  License: GNU Affero General Public License v3.0 (AGPL-3.0)
+
+UERANSIM
+  Source:  https://github.com/aligungr/UERANSIM
+  License: GNU General Public License v3.0 (GPL-3.0)
+
+K3s
+  Source:  https://github.com/k3s-io/k3s
+  License: Apache License 2.0
+
+KubeEdge
+  Source:  https://github.com/kubeedge/kubeedge
+  License: Apache License 2.0
+
+Multus CNI
+  Source:  https://github.com/k8snetworkplumbingwg/multus-cni
+  License: Apache License 2.0
+
+OVS CNI
+  Source:  https://github.com/k8snetworkplumbingwg/ovs-cni
+  License: Apache License 2.0
+
+Whereabouts
+  Source:  https://github.com/k8snetworkplumbingwg/whereabouts
+  License: Apache License 2.0
