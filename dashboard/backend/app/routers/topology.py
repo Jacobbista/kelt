@@ -10,10 +10,13 @@ router = APIRouter(prefix="/api/v1", tags=["topology"])
 NAD_TO_BRIDGE = {
     "n1-net": "br-n1",
     "n2-net": "br-n2",
+    "n2-cell-1": "br-n2-cell-1",
     "n3-net": "br-n3",
+    "n3-cell-1": "br-n3-cell-1",
     "n4-net": "br-n4",
-    "n6-cld-net": "br-n6c",
-    "n6-mec-net": "br-n6e",
+    "n6c-net": "br-n6c",
+    "n6e-net": "br-n6e",
+    "n6m-net": "br-n6m",
 }
 
 

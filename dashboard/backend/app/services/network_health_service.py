@@ -5,6 +5,7 @@ link (N2, N3, N4, N6) is operational.  Uses the K8s Python client ``stream``
 API (same approach as ``ue_service._exec_in_pod``).
 """
 
+import ipaddress
 import logging
 import re
 import subprocess
@@ -26,7 +27,23 @@ GROUP_VARS = Path("/home/vagrant/ansible-ro/group_vars/all.yml")
 
 _RE_LATENCY = re.compile(r"time[=<]([\d.]+)\s*ms")
 _N6_SUBNET = "10.207.0.0/24"
-_PRIVATE_DESTS = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+
+# RFC 1918 private address blocks — any RETURN rule whose destination is a
+# subnet of one of these is treated as a private-network bypass rule.
+_RFC1918 = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+)
+
+
+def _is_private(dst: str) -> bool:
+    """Return True if dst (CIDR notation) is a subnet of an RFC 1918 block."""
+    try:
+        net = ipaddress.ip_network(dst, strict=False)
+        return any(net.subnet_of(r) for r in _RFC1918)
+    except ValueError:
+        return False
 
 
 def _read_ips() -> dict[str, str]:
@@ -46,15 +63,25 @@ def _read_ips() -> dict[str, str]:
 
 
 def _exec(core, pod: str, container: str, cmd: list[str]) -> str:
-    try:
-        return stream(
-            core.connect_get_namespaced_pod_exec,
-            pod, NS, command=cmd,
-            stderr=True, stdout=True, stdin=False, tty=False,
-            _request_timeout=8,
-        )
-    except Exception as exc:
-        return f"ERROR: {exc}"
+    # Retry once on transient WebSocket handshake failures (K8s API returns
+    # 200 instead of 101 under load; a brief pause usually resolves it).
+    for attempt in range(2):
+        try:
+            return stream(
+                core.connect_get_namespaced_pod_exec,
+                pod, NS, command=cmd,
+                stderr=True, stdout=True, stdin=False, tty=False,
+                _request_timeout=8,
+            )
+        except Exception as exc:
+            msg = str(exc)
+            if " -+-+- " in msg:
+                msg = msg.split(" -+-+- ")[0].strip()
+            if attempt == 0 and "Handshake status" in msg:
+                time.sleep(1)
+                continue
+            return f"ERROR: {msg}"
+    return "ERROR: exec unavailable after retry"
 
 
 def _find_pod(core, app: str) -> tuple[str, str] | None:
@@ -141,7 +168,7 @@ class NetworkHealthService:
             elif tok == "-j" and i + 1 < len(parts):
                 action = parts[i + 1]
         rule_type = "other"
-        if action == "RETURN" and dst in _PRIVATE_DESTS:
+        if action == "RETURN" and _is_private(dst):
             rule_type = "private_bypass"
         elif action == "MASQUERADE":
             rule_type = "public_masquerade"
@@ -192,8 +219,18 @@ class NetworkHealthService:
         for r in rules:
             r["duplicate"] = counts.get(r["raw"], 0) > 1
 
-        private_rule_set = {(r["dest"], r["action"]) for r in rules if r["type"] == "private_bypass"}
-        required_private_ok = all((dst, "RETURN") in private_rule_set for dst in _PRIVATE_DESTS)
+        # Verify that at least one RETURN rule covers each of the 3 RFC 1918 blocks.
+        covered: set[int] = set()
+        for r in rules:
+            if r["type"] == "private_bypass":
+                try:
+                    net = ipaddress.ip_network(r["dest"], strict=False)
+                    for idx, block in enumerate(_RFC1918):
+                        if net.subnet_of(block):
+                            covered.add(idx)
+                except ValueError:
+                    pass
+        required_private_ok = covered == {0, 1, 2}
         has_masquerade = any(r["action"] == "MASQUERADE" for r in rules)
         has_legacy_leftovers = len(legacy_n6) > 0 if active_source == "nft" else False
 

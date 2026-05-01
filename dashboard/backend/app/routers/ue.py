@@ -2,9 +2,10 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.services.k8s_service import K8sService, get_k8s_service
+from app.services.mongo_service import MongoService, get_mongo_service
 from app.services.prometheus_service import PrometheusService, get_prometheus_service
 from app.services.ue_service import UEService
 
@@ -15,14 +16,21 @@ router = APIRouter(prefix="/api/v1/ue", tags=["ue-monitoring"])
 def _get_ue(
     k8s: K8sService = Depends(get_k8s_service),
     prom: PrometheusService = Depends(get_prometheus_service),
+    mongo: MongoService = Depends(get_mongo_service),
 ) -> UEService:
-    return UEService(k8s, prom)
+    return UEService(k8s, prom, mongo=mongo)
 
 
 @router.get("/summary")
-async def ue_summary(svc: UEService = Depends(_get_ue)) -> dict[str, Any]:
+async def ue_summary(
+    window: int = Query(
+        300, ge=60, le=86400,
+        description="Counter window in seconds (increase() range). Gauges ignore this.",
+    ),
+    svc: UEService = Depends(_get_ue),
+) -> dict[str, Any]:
     try:
-        return await svc.get_summary()
+        return await svc.get_summary(window_seconds=window)
     except Exception as exc:
         log.exception("UE summary failed")
         raise HTTPException(500, detail=str(exc)) from exc
@@ -95,4 +103,120 @@ def ue_test_iperf(req: IperfRequest, svc: UEService = Depends(_get_ue)) -> dict[
         return svc.run_iperf(req.pod, server=req.server, duration=req.duration)
     except Exception as exc:
         log.exception("iperf test failed")
+        raise HTTPException(500, detail=str(exc)) from exc
+
+
+# Image uploads are stored inline as data URLs in the Mongo personalization
+# document. The frontend resizes + recompresses to WebP client-side so even a
+# 10 MB camera photo lands here as a ~20 KB thumbnail. These caps are a hard
+# safety net, not the normal payload size.
+_IMAGE_ALLOWED_MIMES = ("image/webp", "image/png", "image/jpeg", "image/jpg")
+_IMAGE_MAX_DATA_URL_LEN = 150 * 1024  # ~110 KB raw after base64 decoding
+
+
+class UePersonalizationPayload(BaseModel):
+    nickname: str | None = Field(default=None, max_length=64)
+    icon: str | None = Field(default=None, max_length=64)
+    image: str | None = Field(
+        default=None,
+        max_length=_IMAGE_MAX_DATA_URL_LEN,
+        description="Data URL (data:image/webp;base64,...). Pass '' to clear.",
+    )
+
+
+def _validate_image_data_url(value: str) -> None:
+    """Reject oversized or unsupported image uploads.
+
+    Raises HTTPException on failure; returns silently on success. An empty
+    string is treated as a "clear the image" request and passes through.
+    """
+    if value == "":
+        return
+    if len(value) > _IMAGE_MAX_DATA_URL_LEN:
+        raise HTTPException(
+            413,
+            detail=(
+                f"image data URL is {len(value)} bytes, max {_IMAGE_MAX_DATA_URL_LEN}. "
+                "Resize client-side before upload."
+            ),
+        )
+    if not value.startswith("data:"):
+        raise HTTPException(400, detail="image must be a data URL (data:image/...;base64,...)")
+    header, _, _ = value.partition(",")
+    # header looks like "data:image/webp;base64"
+    mime = header[5:].split(";", 1)[0].strip().lower()
+    if mime not in _IMAGE_ALLOWED_MIMES:
+        raise HTTPException(
+            400,
+            detail=f"image MIME '{mime}' not allowed. Use one of: {_IMAGE_ALLOWED_MIMES}",
+        )
+    if ";base64" not in header:
+        raise HTTPException(400, detail="image must be base64-encoded (data:...;base64,...)")
+
+
+@router.get("/personalizations")
+def list_ue_personalizations(
+    mongo: MongoService = Depends(get_mongo_service),
+) -> list[dict[str, Any]]:
+    """Return all dashboard-side UE customizations (nickname/icon/image by IMSI)."""
+    try:
+        return mongo.list_ue_personalizations()
+    except Exception as exc:
+        log.exception("list UE personalizations failed")
+        raise HTTPException(500, detail=str(exc)) from exc
+
+
+@router.put("/personalizations/{imsi}")
+def upsert_ue_personalization(
+    imsi: str,
+    payload: UePersonalizationPayload,
+    mongo: MongoService = Depends(get_mongo_service),
+) -> dict[str, Any]:
+    if not imsi.isdigit() or not 14 <= len(imsi) <= 15:
+        raise HTTPException(400, detail="imsi must be 14-15 digits")
+    if payload.image is not None:
+        _validate_image_data_url(payload.image)
+    try:
+        return mongo.upsert_ue_personalization(
+            imsi=imsi,
+            nickname=payload.nickname,
+            icon=payload.icon,
+            image=payload.image,
+        )
+    except Exception as exc:
+        log.exception("upsert UE personalization failed for %s", imsi)
+        raise HTTPException(500, detail=str(exc)) from exc
+
+
+@router.delete("/personalizations/{imsi}")
+def delete_ue_personalization(
+    imsi: str,
+    mongo: MongoService = Depends(get_mongo_service),
+) -> dict[str, bool]:
+    try:
+        return {"deleted": mongo.delete_ue_personalization(imsi)}
+    except Exception as exc:
+        log.exception("delete UE personalization failed for %s", imsi)
+        raise HTTPException(500, detail=str(exc)) from exc
+
+
+@router.get("/logs/{nf}")
+def nf_raw_logs(
+    nf: str,
+    tail: int = Query(100, ge=10, le=2000),
+    svc: UEService = Depends(_get_ue),
+) -> dict[str, Any]:
+    """Return raw log lines for a 5G NF pod (amf, smf, udm, …).
+
+    Useful for verifying that log-parsing regexes match the actual Open5GS output.
+    """
+    allowed = {"amf", "smf", "udm", "udr", "ausf", "nrf", "pcf", "bsf", "nssf", "upf-cloud", "upf-edge"}
+    if nf not in allowed:
+        raise HTTPException(400, detail=f"nf must be one of: {sorted(allowed)}")
+    try:
+        raw = svc._read_deploy_logs(nf, tail=tail)
+        lines = raw.splitlines()
+        return {"nf": nf, "tail": tail, "count": len(lines), "lines": lines}
+    except Exception as exc:
+        log.exception("Raw logs fetch failed for %s", nf)
         raise HTTPException(500, detail=str(exc)) from exc

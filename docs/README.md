@@ -25,6 +25,7 @@ These documents explain how the system is designed. Read them in order — each 
 | [Virtualization Layers](architecture/virtualization-layers.md) | The 5 abstraction layers: host → VMs → K8s → overlay → 5G NFs |
 | [Network Topology](architecture/network-topology.md) | OVS bridges, VXLAN tunnels, Multus CNI — explained from first principles |
 | [5G Interfaces](architecture/5g-interfaces.md) | N1/N2/N3/N4/N6 subnets, static IPs, protocols, and verification commands |
+| [Subscriber Persistence](architecture/subscriber-persistence.md) | MongoDB PVC and `subscribers-snapshot` ConfigMap — how UE records survive restarts |
 
 ---
 
@@ -129,4 +130,4 @@ Platform-specific limitations with documented workarounds. These are bugs or con
 
 ## Roadmap
 
-[roadmap.md](roadmap.md) describes the project's direction across four phases: thesis consolidation, O-RAN integration, intelligence layer, and 6G research positioning. It also covers monetization paths and what to study at each stage.
+[roadmap.md](roadmap.md) lists Near Term items tied to the current codebase and longer-term Planned directions, with positioning context against comparable open tools.

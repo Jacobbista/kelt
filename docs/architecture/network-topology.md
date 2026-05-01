@@ -208,6 +208,26 @@ ovs-vsctl add-port br-n2 vxlan-n2 -- \
 
 The VXLAN tunnel runs over the management NIC (`eth1`, 192.168.56.0/24) between worker and edge. All six bridge tunnels share this single physical link.
 
+### MTU sizing and GTP-U encapsulation
+
+VXLAN adds 50 bytes of header (14 outer Ethernet + 20 IP + 8 UDP + 8 VXLAN) to every frame, so overlay interfaces (`n1`…`n6m`) use `overlay_mtu: 1450` (defined in `ansible/group_vars/all.yml`) instead of the 1500 default of the underlying `eth1`.
+
+The user plane adds a second layer of encapsulation on top of that. Packets leaving the UPF on `ogstun` are re-encapsulated by `open5gs-upfd` in GTP-U (~40 bytes of outer IP + UDP + GTP header) before being emitted on `n3` towards the gNB. Without MTU adjustment the chain is:
+
+```
+UE payload  →  ogstun (1500)  →  UPF encaps GTP-U (+40)  →  n3 (1450)  =  fragmentation or drop
+```
+
+To keep UE traffic inside the overlay budget without requiring any UE-side configuration, the UPF init scripts:
+
+1. Set `ogstun` and `ogstun2` MTU to **1400** (leaves 10 bytes of headroom after GTP-U over the 1450 overlay).
+2. Apply TCP MSS clamping to **1360** (= 1400 − 20 IP − 20 TCP) on both directions of the FORWARD chain for `ogstun`/`ogstun2`, so remote peers negotiate a segment size that survives GTP-U encapsulation regardless of what the UE advertises.
+
+This keeps the overlay MTU (used by Multus/OVS for VXLAN framing) decoupled from the UE-visible MTU (constrained by GTP-U overhead). Implemented in:
+
+- `ansible/phases/05-5g-core/scripts/upf_cloud_init.sh`
+- `ansible/phases/05-5g-core/scripts/upf_edge_init.sh`
+
 ---
 
 ## Multus Deployment Details

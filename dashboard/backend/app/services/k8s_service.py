@@ -14,12 +14,45 @@ from app.models import NodeSummary, PodSummary
 log = logging.getLogger(__name__)
 
 
+def _parse_cpu_millicores(qty: str) -> float:
+    """Convert a Kubernetes CPU quantity string to millicores."""
+    qty = qty.strip()
+    if qty.endswith("n"):
+        return float(qty[:-1]) / 1_000_000
+    if qty.endswith("u"):
+        return float(qty[:-1]) / 1_000
+    if qty.endswith("m"):
+        return float(qty[:-1])
+    return float(qty) * 1000  # whole cores
+
+
+def _parse_memory_mb(qty: str) -> float:
+    """Convert a Kubernetes memory quantity string to mebibytes."""
+    qty = qty.strip()
+    if qty.endswith("Ki"):
+        return float(qty[:-2]) / 1024
+    if qty.endswith("Mi"):
+        return float(qty[:-2])
+    if qty.endswith("Gi"):
+        return float(qty[:-2]) * 1024
+    if qty.endswith("Ti"):
+        return float(qty[:-2]) * 1024 * 1024
+    if qty.endswith("K") or qty.endswith("k"):
+        return float(qty[:-1]) * 1e3 / 1024 / 1024
+    if qty.endswith("M"):
+        return float(qty[:-1]) * 1e6 / 1024 / 1024
+    if qty.endswith("G"):
+        return float(qty[:-1]) * 1e9 / 1024 / 1024
+    return float(qty) / 1024 / 1024  # bare bytes
+
+
 class K8sService:
     def __init__(self) -> None:
         kubeconfig = os.environ.get("KUBECONFIG", settings.kubeconfig_path)
         config.load_kube_config(config_file=kubeconfig)
         self.core = client.CoreV1Api()
         self.apps = client.AppsV1Api()
+        self.storage = client.StorageV1Api()
         self.custom = client.CustomObjectsApi()
 
     def list_nodes(self) -> list[NodeSummary]:
@@ -285,6 +318,43 @@ class K8sService:
             labels=pod.metadata.labels or {},
         )
 
+    def get_pod_resource_metrics(self, namespace: str) -> dict[str, list]:
+        """Query the Kubernetes Metrics API (metrics-server) for current pod CPU/memory.
+
+        Returns the same shape as PrometheusService._extract_vector so the existing
+        frontend/router code needs no changes:
+          {"cpu": [{"label": pod, "value": millicores}, ...],
+           "memory": [{"label": pod, "value": mb}, ...]}
+        """
+        try:
+            result = self.custom.list_namespaced_custom_object(
+                group="metrics.k8s.io",
+                version="v1beta1",
+                namespace=namespace,
+                plural="pods",
+            )
+        except Exception as exc:
+            log.warning("Metrics API unavailable: %s", exc)
+            return {"cpu": [], "memory": []}
+
+        cpu_out: list[dict] = []
+        mem_out: list[dict] = []
+        for item in result.get("items", []):
+            pod_name = item.get("metadata", {}).get("name", "")
+            containers = item.get("containers", [])
+            total_cpu = sum(
+                _parse_cpu_millicores(c.get("usage", {}).get("cpu", "0"))
+                for c in containers
+            )
+            total_mem = sum(
+                _parse_memory_mb(c.get("usage", {}).get("memory", "0"))
+                for c in containers
+            )
+            cpu_out.append({"label": pod_name, "value": round(total_cpu, 2)})
+            mem_out.append({"label": pod_name, "value": round(total_mem, 2)})
+
+        return {"cpu": cpu_out, "memory": mem_out}
+
     def list_nads(self, namespace: str) -> list[dict[str, Any]]:
         try:
             result = self.custom.list_namespaced_custom_object(
@@ -343,6 +413,197 @@ class K8sService:
                 }
             )
         return data
+
+    # ------------------------------------------------------------------
+    # Generic Kubernetes inventory helpers (used by /api/v1/k8s/* router).
+    # Kept as lightweight read-only wrappers so the new "Kubernetes" dashboard
+    # section does not sprinkle raw client calls across the codebase.
+    # ------------------------------------------------------------------
+
+    def list_namespaces(self) -> list[dict[str, Any]]:
+        items = self.core.list_namespace().items
+        out: list[dict[str, Any]] = []
+        for ns in items:
+            out.append({
+                "name": ns.metadata.name,
+                "phase": ns.status.phase if ns.status else None,
+                "labels": ns.metadata.labels or {},
+                "created": ns.metadata.creation_timestamp.isoformat()
+                    if ns.metadata.creation_timestamp else None,
+            })
+        return out
+
+    def list_pvcs(self, namespace: str | None = None) -> list[dict[str, Any]]:
+        if namespace:
+            items = self.core.list_namespaced_persistent_volume_claim(namespace=namespace).items
+        else:
+            items = self.core.list_persistent_volume_claim_for_all_namespaces().items
+        out: list[dict[str, Any]] = []
+        for pvc in items:
+            spec = pvc.spec
+            status = pvc.status
+            requested = None
+            if spec and spec.resources and spec.resources.requests:
+                requested = spec.resources.requests.get("storage")
+            capacity = None
+            if status and status.capacity:
+                capacity = status.capacity.get("storage")
+            out.append({
+                "name": pvc.metadata.name,
+                "namespace": pvc.metadata.namespace,
+                "phase": status.phase if status else None,
+                "volume": spec.volume_name if spec else None,
+                "storage_class": spec.storage_class_name if spec else None,
+                "access_modes": list(spec.access_modes or []) if spec else [],
+                "requested": requested,
+                "capacity": capacity,
+                "created": pvc.metadata.creation_timestamp.isoformat()
+                    if pvc.metadata.creation_timestamp else None,
+            })
+        return out
+
+    def list_storage_classes(self) -> list[dict[str, Any]]:
+        items = self.storage.list_storage_class().items
+        out: list[dict[str, Any]] = []
+        for sc in items:
+            annotations = sc.metadata.annotations or {}
+            is_default = annotations.get(
+                "storageclass.kubernetes.io/is-default-class"
+            ) == "true"
+            out.append({
+                "name": sc.metadata.name,
+                "provisioner": sc.provisioner,
+                "reclaim_policy": sc.reclaim_policy,
+                "volume_binding_mode": sc.volume_binding_mode,
+                "allow_volume_expansion": bool(sc.allow_volume_expansion),
+                "is_default": is_default,
+                "parameters": sc.parameters or {},
+                "created": sc.metadata.creation_timestamp.isoformat()
+                    if sc.metadata.creation_timestamp else None,
+            })
+        return out
+
+    def list_services(self, namespace: str | None = None) -> list[dict[str, Any]]:
+        if namespace:
+            items = self.core.list_namespaced_service(namespace=namespace).items
+        else:
+            items = self.core.list_service_for_all_namespaces().items
+        out: list[dict[str, Any]] = []
+        for svc in items:
+            spec = svc.spec
+            ports: list[dict[str, Any]] = []
+            for p in (spec.ports or []) if spec else []:
+                ports.append({
+                    "name": p.name,
+                    "port": p.port,
+                    "target_port": str(p.target_port) if p.target_port is not None else None,
+                    "node_port": p.node_port,
+                    "protocol": p.protocol,
+                })
+            out.append({
+                "name": svc.metadata.name,
+                "namespace": svc.metadata.namespace,
+                "type": spec.type if spec else None,
+                "cluster_ip": spec.cluster_ip if spec else None,
+                "external_ips": list(spec.external_i_ps or []) if spec else [],
+                "selector": (spec.selector or {}) if spec else {},
+                "ports": ports,
+                "created": svc.metadata.creation_timestamp.isoformat()
+                    if svc.metadata.creation_timestamp else None,
+            })
+        return out
+
+    def list_events(
+        self,
+        namespace: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Recent events ordered newest first. Pass namespace=None for cluster-wide."""
+        if namespace:
+            items = self.core.list_namespaced_event(namespace=namespace).items
+        else:
+            items = self.core.list_event_for_all_namespaces().items
+
+        def _ts(ev: Any) -> Any:
+            return (
+                ev.last_timestamp
+                or ev.event_time
+                or (ev.metadata.creation_timestamp if ev.metadata else None)
+            )
+
+        items = sorted(items, key=lambda e: _ts(e) or 0, reverse=True)[:limit]
+        out: list[dict[str, Any]] = []
+        for ev in items:
+            ts = _ts(ev)
+            involved = ev.involved_object
+            out.append({
+                "namespace": ev.metadata.namespace if ev.metadata else None,
+                "type": ev.type,
+                "reason": ev.reason,
+                "message": ev.message,
+                "count": ev.count or 1,
+                "component": (ev.source.component if ev.source else None),
+                "host": (ev.source.host if ev.source else None),
+                "involved": {
+                    "kind": involved.kind if involved else None,
+                    "name": involved.name if involved else None,
+                    "namespace": involved.namespace if involved else None,
+                },
+                "first_seen": ev.first_timestamp.isoformat() if ev.first_timestamp else None,
+                "last_seen": ts.isoformat() if ts else None,
+            })
+        return out
+
+    def describe_nodes(self) -> list[dict[str, Any]]:
+        """Richer node listing with capacity, allocatable, and conditions."""
+        nodes = self.core.list_node().items
+        out: list[dict[str, Any]] = []
+        for n in nodes:
+            status = n.status
+            conditions = []
+            for c in (status.conditions or []):
+                conditions.append({
+                    "type": c.type,
+                    "status": c.status,
+                    "reason": c.reason,
+                    "message": c.message,
+                    "last_transition": c.last_transition_time.isoformat()
+                        if c.last_transition_time else None,
+                })
+            ready = any(
+                c["type"] == "Ready" and c["status"] == "True"
+                for c in conditions
+            )
+            roles: list[str] = []
+            for label_key in (n.metadata.labels or {}):
+                if label_key.startswith("node-role.kubernetes.io/"):
+                    roles.append(label_key.split("/", 1)[1])
+            internal_ip = None
+            for addr in (status.addresses or []):
+                if addr.type == "InternalIP":
+                    internal_ip = addr.address
+                    break
+            info = status.node_info
+            out.append({
+                "name": n.metadata.name,
+                "ready": ready,
+                "roles": roles,
+                "internal_ip": internal_ip,
+                "kubelet_version": info.kubelet_version if info else None,
+                "os_image": info.os_image if info else None,
+                "kernel": info.kernel_version if info else None,
+                "container_runtime": info.container_runtime_version if info else None,
+                "capacity": dict(status.capacity or {}),
+                "allocatable": dict(status.allocatable or {}),
+                "conditions": conditions,
+                "taints": [
+                    {"key": t.key, "value": t.value, "effect": t.effect}
+                    for t in ((n.spec.taints if n.spec else None) or [])
+                ],
+                "created": n.metadata.creation_timestamp.isoformat()
+                    if n.metadata.creation_timestamp else None,
+            })
+        return out
 
 
 def get_k8s_service() -> K8sService:

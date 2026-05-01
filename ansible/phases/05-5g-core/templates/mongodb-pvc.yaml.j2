@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ mongodb_pvc_name }}
+  namespace: {{ namespace_5g }}
+  labels:
+    app: mongodb
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ mongodb_pvc_storage_class }}
+  resources:
+    requests:
+      storage: {{ mongodb_pvc_size }}

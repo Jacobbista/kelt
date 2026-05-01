@@ -14,4 +14,5 @@ def health() -> dict[str, str]:
         "mode": settings.mode,
         "runtime_source": settings.runtime_source,
         "server_time_utc": now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z",
+        "open5gs_webui_url": settings.open5gs_webui_url,
     }

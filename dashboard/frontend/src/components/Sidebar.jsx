@@ -3,6 +3,7 @@ import TimeSyncPopover from "./TimeSyncPopover";
 
 const NAV_ITEMS = [
   { id: "overview", label: "Overview", icon: "\u25A3" },
+  { id: "kubernetes", label: "Kubernetes", icon: "\u2638" },
   { id: "core", label: "5G Core", icon: "\u2B22" },
   { id: "topology", label: "Topology", icon: "\u2B95" },
   { id: "ran", label: "RAN", icon: "\u2699" },

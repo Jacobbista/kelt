@@ -14,6 +14,7 @@ from app.routers.admin import router as admin_router
 from app.routers.cluster import router as cluster_router
 from app.routers.experiments import router as experiments_router
 from app.routers.health import router as health_router
+from app.routers.kubernetes import router as kubernetes_router
 from app.routers.logs_ws import router as logs_ws_router
 from app.routers.metrics import router as metrics_router
 from app.routers.network import router as network_router
@@ -60,6 +61,7 @@ app.add_middleware(CatchAllMiddleware)
 app.include_router(health_router)
 app.include_router(admin_router)
 app.include_router(cluster_router)
+app.include_router(kubernetes_router)
 app.include_router(pods_router)
 app.include_router(logs_ws_router)
 app.include_router(topology_router)
@@ -73,3 +75,30 @@ app.include_router(ue_router)
 app.include_router(time_sync_router)
 app.include_router(exec_ws_router)
 app.include_router(experiments_router)
+
+
+@app.on_event("startup")
+def _sync_subscriber_snapshot_on_startup() -> None:
+    """Align the subscribers-snapshot ConfigMap with current MongoDB state.
+
+    Runs best-effort: any failure (Mongo down, k8s API unreachable) is logged
+    and the app continues. This catches the case where the playbook seeded
+    MongoDB but the dashboard backend was restarted afterwards, as well as
+    manual MongoDB edits performed outside the dashboard API.
+
+    See docs/architecture/subscriber-persistence.md
+    """
+    try:
+        from app.services.mongo_service import MongoService
+        mongo = MongoService()
+        if not mongo.ping():
+            log.info("subscriber snapshot startup sync: MongoDB not reachable yet, skipping")
+            return
+        subs = mongo.list_subscribers()
+        if not subs and mongo.snapshot.exists():
+            log.info("subscriber snapshot startup sync: MongoDB empty, leaving existing snapshot untouched")
+            return
+        ok = mongo.sync_snapshot()
+        log.info("subscriber snapshot startup sync: ok=%s count=%d", ok, len(subs))
+    except Exception:
+        log.exception("subscriber snapshot startup sync failed")

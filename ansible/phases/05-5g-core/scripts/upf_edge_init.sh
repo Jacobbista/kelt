@@ -19,9 +19,22 @@ fi
 if ! ip addr show dev ogstun | grep -q "10.46.0.1/16"; then
   ip addr add 10.46.0.1/16 dev ogstun || true
 fi
+# MTU 1400 on ogstun: overlay n3/n6 are 1450, GTP-U adds ~40 B of header,
+# so the UE-side IP payload must stay <= 1410; 1400 gives safety margin.
+# See docs/architecture/network-topology.md (MTU sizing and GTP-U encapsulation)
+ip link set dev ogstun mtu 1400
 ip link set ogstun up || true
 iptables -t nat -C POSTROUTING -s 10.46.0.1/16 ! -o ogstun -j MASQUERADE 2>/dev/null || \
   iptables -t nat -A POSTROUTING -s 10.46.0.1/16 ! -o ogstun -j MASQUERADE
+
+# TCP MSS clamping for UE traffic: forces remote peers to use
+# MSS 1360 (= 1400 MTU - 20 IP - 20 TCP) so TCP flows survive GTP-U
+# encapsulation without fragmentation, regardless of UE-side MTU.
+# See docs/architecture/network-topology.md (MTU sizing and GTP-U encapsulation)
+iptables -t mangle -C FORWARD -p tcp --tcp-flags SYN,RST SYN -o ogstun -j TCPMSS --set-mss 1360 2>/dev/null || \
+  iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o ogstun -j TCPMSS --set-mss 1360
+iptables -t mangle -C FORWARD -p tcp --tcp-flags SYN,RST SYN -i ogstun -j TCPMSS --set-mss 1360 2>/dev/null || \
+  iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -i ogstun -j TCPMSS --set-mss 1360
 
 # Start iperf3 server
 iperf3 -B 10.46.0.1 -s -fm &

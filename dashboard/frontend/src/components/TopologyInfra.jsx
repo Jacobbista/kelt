@@ -1,9 +1,21 @@
 import React, { useCallback, useMemo, useState } from "react";
-import { Background, Controls, Handle, Position, ReactFlow } from "@xyflow/react";
+import {
+  Background,
+  Controls,
+  Handle,
+  Position,
+  ReactFlow,
+} from "@xyflow/react";
 
-const IconK3s = ({ size = 20 }) => <img src="/icons/k3s.svg" alt="K3s" width={size} height={size} />;
-const IconKubeEdge = ({ size = 20 }) => <img src="/icons/kubeedge.svg" alt="KubeEdge" width={size} height={size} />;
-const IconAnsible = ({ size = 20 }) => <img src="/icons/ansible.svg" alt="Ansible" width={size} height={size} />;
+const IconK3s = ({ size = 20 }) => (
+  <img src="/icons/k3s.svg" alt="K3s" width={size} height={size} />
+);
+const IconKubeEdge = ({ size = 20 }) => (
+  <img src="/icons/kubeedge.svg" alt="KubeEdge" width={size} height={size} />
+);
+const IconAnsible = ({ size = 20 }) => (
+  <img src="/icons/ansible.svg" alt="Ansible" width={size} height={size} />
+);
 
 const NF_COLORS = {
   amf: { bg: "#1e1b4b", border: "#818cf8" },
@@ -21,6 +33,9 @@ const NF_COLORS = {
   ue: { bg: "#0c1a2e", border: "#2dd4bf" },
   mec: { bg: "#1c1917", border: "#f43f5e" },
 };
+
+/** Routing-only handles: edges attach but dots stay invisible. */
+const H_ROUTE = "!opacity-0 !w-1 !h-1 !border-0 !bg-transparent";
 
 const BRIDGE_COLORS = {
   N1: { border: "#38bdf8", bg: "#0c4a6e20" },
@@ -58,7 +73,9 @@ function buildGraph(topology, clusterNodes) {
     vmMap[n.name] = { ...n, role };
   }
 
-  const bridgeNodes = (topology?.nodes || []).filter((n) => n.type === "bridge");
+  const bridgeNodes = (topology?.nodes || []).filter(
+    (n) => n.type === "bridge",
+  );
   const podNodes = (topology?.nodes || []).filter((n) => n.type !== "bridge");
 
   const podsByVm = {};
@@ -68,15 +85,48 @@ function buildGraph(topology, clusterNodes) {
     podsByVm[vm].push(p);
   }
 
-  const edgeVm = vmMap.edge || vmMap[Object.keys(vmMap).find((k) => vmMap[k]?.role === "edge" || vmMap[k]?.role === "agent")];
-  const workerVm = vmMap.worker || vmMap[Object.keys(vmMap).find((k) => vmMap[k]?.role === "worker")];
-  const masterVm = vmMap.master || vmMap[Object.keys(vmMap).find((k) => vmMap[k]?.role === "control-plane" || vmMap[k]?.role === "master")];
+  const edgeVm =
+    vmMap.edge ||
+    vmMap[
+      Object.keys(vmMap).find(
+        (k) => vmMap[k]?.role === "edge" || vmMap[k]?.role === "agent",
+      )
+    ];
+  const workerVm =
+    vmMap.worker ||
+    vmMap[Object.keys(vmMap).find((k) => vmMap[k]?.role === "worker")];
+  const masterVm =
+    vmMap.master ||
+    vmMap[
+      Object.keys(vmMap).find(
+        (k) =>
+          vmMap[k]?.role === "control-plane" || vmMap[k]?.role === "master",
+      )
+    ];
 
   const COL_EDGE = 0;
-  const COL_BRIDGE = 320;
-  const COL_WORKER = 580;
-  const ROW_H = 70;
-  const BOX_H = 220;
+  const COL_BRIDGE = 300;
+  const COL_WORKER = 620;
+  const ROW_H = 76;
+  /** Ansible + Master sit above the data plane (provisioning / control). */
+  const Y_MANAGEMENT = 0;
+  const Y_CONTENT = 150;
+  /** Match VmNode worker minWidth and node card widths for horizontal alignment. */
+  const WORKER_BOX_W = 280;
+  const ANSIBLE_NODE_W = 150;
+  const MASTER_NODE_W = 130;
+  /** Worker top: Ansible attaches left; K3s API uses center (same axis as Master above). */
+  const FROM_ANSIBLE_PCT = 0.18;
+  /** Approximate card heights so Ansible/Master share a row by vertical center, not top edge. */
+  const ANSIBLE_NODE_H = 76;
+  const MASTER_NODE_H = 92;
+  /** Ansible shares the bridge column (also provisions EDGE when present); small inset so it is not flush with the worker stack. */
+  const ANSIBLE_BRIDGE_INSET = 12;
+  const ansibleX = COL_BRIDGE - ANSIBLE_BRIDGE_INSET;
+  const masterX = COL_WORKER + WORKER_BOX_W / 2 - MASTER_NODE_W / 2 - 14;
+  const masterY = Y_MANAGEMENT;
+  const ansibleY =
+    Y_MANAGEMENT + Math.round((MASTER_NODE_H - ANSIBLE_NODE_H) / 2);
 
   // ─── EDGE box ────────────────────────────────────────────
   const edgePods = podsByVm.edge || [];
@@ -89,7 +139,7 @@ function buildGraph(topology, clusterNodes) {
   if (edgeVm) {
     nodes.push({
       id: "edge",
-      position: { x: COL_EDGE, y: 0 },
+      position: { x: COL_EDGE, y: Y_CONTENT },
       type: "vmNode",
       data: {
         label: "EDGE",
@@ -107,11 +157,15 @@ function buildGraph(topology, clusterNodes) {
   // ─── Bridge nodes (on connections) ───────────────────────
   bridgeNodes.forEach((b, i) => {
     const bType = classifyBridge(b.label);
-    const vxlanPorts = (b.data?.ports || []).filter((p) => p.startsWith("vxlan"));
-    const patchPorts = (b.data?.ports || []).filter((p) => p.startsWith("patch"));
+    const vxlanPorts = (b.data?.ports || []).filter((p) =>
+      p.startsWith("vxlan"),
+    );
+    const patchPorts = (b.data?.ports || []).filter((p) =>
+      p.startsWith("patch"),
+    );
     nodes.push({
       id: b.id,
-      position: { x: COL_BRIDGE, y: i * ROW_H },
+      position: { x: COL_BRIDGE, y: Y_CONTENT + i * ROW_H },
       type: "bridgeNode",
       data: {
         name: b.label,
@@ -124,7 +178,10 @@ function buildGraph(topology, clusterNodes) {
   });
 
   // ─── WORKER box ──────────────────────────────────────────
-  const workerPods = podsByVm.worker || podsByVm[Object.keys(podsByVm).find((k) => k !== "edge")] || [];
+  const workerPods =
+    podsByVm.worker ||
+    podsByVm[Object.keys(podsByVm).find((k) => k !== "edge")] ||
+    [];
   const nfPodsData = workerPods.map((p) => ({
     label: p.label,
     type: p.type || inferNfType(p.label),
@@ -134,7 +191,7 @@ function buildGraph(topology, clusterNodes) {
   if (workerVm) {
     nodes.push({
       id: "worker",
-      position: { x: COL_WORKER, y: 0 },
+      position: { x: COL_WORKER, y: Y_CONTENT },
       type: "vmNode",
       data: {
         label: "WORKER",
@@ -145,6 +202,7 @@ function buildGraph(topology, clusterNodes) {
         podSection: "Core NFs",
         icons: ["k3s", "kubeedge"],
         iconTooltips: { k3s: "K3s worker", kubeedge: "KubeEdge CloudCore" },
+        bridgeInCount: bridgeNodes.length,
       },
     });
   }
@@ -155,10 +213,16 @@ function buildGraph(topology, clusterNodes) {
     .map((b) => b.id);
 
   if (edgeVm && bridgeIdsWithVxlan.length > 0) {
-    const vxlanCount = bridgeNodes.reduce((s, b) => s + (b.data?.ports || []).filter((p) => p.startsWith("vxlan")).length, 0);
+    const vxlanCount = bridgeNodes.reduce(
+      (s, b) =>
+        s + (b.data?.ports || []).filter((p) => p.startsWith("vxlan")).length,
+      0,
+    );
     edges.push({
       id: "e-edge-bridges",
+      type: "smoothstep",
       source: "edge",
+      sourceHandle: "vxlan-out",
       target: bridgeIdsWithVxlan[0],
       label: `VXLAN overlay (${vxlanCount} tunnels)`,
       animated: true,
@@ -169,29 +233,32 @@ function buildGraph(topology, clusterNodes) {
     for (let i = 1; i < bridgeIdsWithVxlan.length; i++) {
       edges.push({
         id: `e-edge-${bridgeIdsWithVxlan[i]}`,
+        type: "smoothstep",
         source: "edge",
+        sourceHandle: "vxlan-out",
         target: bridgeIdsWithVxlan[i],
         style: { stroke: "#818cf8", strokeWidth: 1.5, strokeDasharray: "6 4" },
       });
     }
   }
 
-  // ─── Edges: bridges → worker box ─────────────────────────
-  for (const b of bridgeNodes) {
+  // ─── Edges: bridges → worker box (one target handle per bridge on worker left) ──
+  bridgeNodes.forEach((b, i) => {
     edges.push({
       id: `e-br-${b.id}-worker`,
+      type: "simplebezier",
       source: b.id,
       target: "worker",
+      sourceHandle: "to-worker",
+      targetHandle: `br-in-${i}`,
       style: { stroke: "#6366f1", strokeWidth: 1.5 },
     });
-  }
+  });
 
-  // ─── Ansible + Master ────────────────────────────────────
-  const bottomY = Math.max(bridgeNodes.length * ROW_H, BOX_H) + 50;
-
+  // ─── Ansible + Master (management tier above VMs / bridges) ──
   nodes.push({
     id: "ansible",
-    position: { x: COL_EDGE, y: bottomY },
+    position: { x: ansibleX, y: ansibleY },
     type: "ansibleNode",
     data: {},
   });
@@ -199,23 +266,31 @@ function buildGraph(topology, clusterNodes) {
   if (masterVm) {
     nodes.push({
       id: "master",
-      position: { x: COL_WORKER, y: bottomY },
+      position: { x: masterX, y: masterY },
       type: "masterNode",
       data: { ip: masterVm.ip, status: masterVm.status },
     });
-    edges.push({
-      id: "e-ansible-edge",
-      source: "ansible",
-      target: "edge",
-      label: "provisions",
-      style: { stroke: "#ea580c", strokeWidth: 1, strokeDasharray: "5 4" },
-      labelStyle: { fill: "#ea580c", fontSize: 8 },
-      labelBgStyle: { fill: "#0f172a", fillOpacity: 0.9 },
-    });
+    if (edgeVm) {
+      edges.push({
+        id: "e-ansible-edge",
+        type: "simplebezier",
+        source: "ansible",
+        target: "edge",
+        sourceHandle: "provision-down",
+        targetHandle: "from-ansible",
+        label: "provisions",
+        style: { stroke: "#ea580c", strokeWidth: 1, strokeDasharray: "5 4" },
+        labelStyle: { fill: "#ea580c", fontSize: 8 },
+        labelBgStyle: { fill: "#0f172a", fillOpacity: 0.9 },
+      });
+    }
     edges.push({
       id: "e-ansible-worker",
+      type: "simplebezier",
       source: "ansible",
       target: "worker",
+      sourceHandle: "provision-down",
+      targetHandle: "from-ansible",
       label: "provisions",
       style: { stroke: "#ea580c", strokeWidth: 1, strokeDasharray: "5 4" },
       labelStyle: { fill: "#ea580c", fontSize: 8 },
@@ -223,8 +298,11 @@ function buildGraph(topology, clusterNodes) {
     });
     edges.push({
       id: "e-ansible-master",
+      type: "straight",
       source: "ansible",
       target: "master",
+      sourceHandle: "provision-right",
+      targetHandle: "from-ansible",
       label: "provisions",
       style: { stroke: "#ea580c", strokeWidth: 1, strokeDasharray: "5 4" },
       labelStyle: { fill: "#ea580c", fontSize: 8 },
@@ -232,8 +310,11 @@ function buildGraph(topology, clusterNodes) {
     });
     edges.push({
       id: "e-worker-master",
+      type: "straight",
       source: "worker",
       target: "master",
+      sourceHandle: "to-master",
+      targetHandle: "from-worker",
       label: "K3s API",
       style: { stroke: "#64748b", strokeWidth: 1, strokeDasharray: "5 4" },
       labelStyle: { fill: "#64748b", fontSize: 8 },
@@ -246,7 +327,11 @@ function buildGraph(topology, clusterNodes) {
 
 // ─── Node Components ─────────────────────────────────────────────
 
-const STATUS_DOT = { Running: "bg-emerald-400", Pending: "bg-amber-400 animate-pulse", Failed: "bg-rose-400" };
+const STATUS_DOT = {
+  Running: "bg-emerald-400",
+  Pending: "bg-amber-400 animate-pulse",
+  Failed: "bg-rose-400",
+};
 const ICON_MAP = { k3s: IconK3s, kubeedge: IconKubeEdge };
 
 const ROLE_STYLE = {
@@ -257,24 +342,85 @@ const ROLE_STYLE = {
 
 function getPodColor(label) {
   for (const [key, val] of Object.entries(NF_COLORS)) {
-    if ((label || "").toLowerCase().includes(key)) return { border: val.border };
+    if ((label || "").toLowerCase().includes(key))
+      return { border: val.border };
   }
   return { border: "#475569" };
+}
+
+function bridgeInHandleTopPct(i, n) {
+  if (n <= 0) return 50;
+  if (n === 1) return 50;
+  return 10 + i * (80 / (n - 1));
 }
 
 function VmNode({ data }) {
   const [expandedIcon, setExpandedIcon] = useState(null);
   const s = ROLE_STYLE[data.role] || ROLE_STYLE.worker;
   const ready = data.status === "Ready";
+  const nBr = data.role === "worker" ? data.bridgeInCount || 0 : 0;
 
   return (
-    <div className="rounded-xl border-2 shadow-xl" style={{ background: s.bg, borderColor: s.border, minWidth: data.role === "worker" ? 280 : 200, padding: 14 }}>
-      <Handle type="target" position={Position.Left} className="!w-2.5 !h-2.5 !bg-slate-400" />
-      <Handle type="source" position={Position.Right} className="!w-2.5 !h-2.5 !bg-slate-400" />
-      <Handle type="source" position={Position.Bottom} className="!w-2.5 !h-2.5 !bg-slate-400" id="bottom" />
+    <div
+      className="rounded-xl border-2 shadow-xl"
+      style={{
+        background: s.bg,
+        borderColor: s.border,
+        minWidth: data.role === "worker" ? 280 : 200,
+        padding: 14,
+      }}
+    >
+      <Handle
+        type="target"
+        position={Position.Top}
+        id="from-ansible"
+        className={H_ROUTE}
+        style={{ left: data.role === "worker" ? "18%" : "50%" }}
+      />
+      {data.role === "worker" && nBr > 0
+        ? Array.from({ length: nBr }, (_, i) => (
+            <Handle
+              key={`br-in-${i}`}
+              type="target"
+              position={Position.Left}
+              id={`br-in-${i}`}
+              className="!w-1.5 !h-1.5 !border-0 !bg-indigo-500/35"
+              style={{ top: `${bridgeInHandleTopPct(i, nBr)}%` }}
+            />
+          ))
+        : null}
+      {data.role !== "worker" && (
+        <>
+          <Handle
+            type="source"
+            position={Position.Right}
+            id="vxlan-out"
+            className={H_ROUTE}
+          />
+          <Handle
+            type="source"
+            position={Position.Bottom}
+            id="bottom"
+            className={H_ROUTE}
+          />
+        </>
+      )}
+      {data.role === "worker" && (
+        <Handle
+          type="source"
+          position={Position.Top}
+          id="to-master"
+          className={H_ROUTE}
+          style={{ left: "50%", transform: "translateX(-50%)" }}
+        />
+      )}
 
       <div className="flex items-center gap-2 mb-1.5">
-        <span className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase text-white ${s.badge}`}>{data.label}</span>
+        <span
+          className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase text-white ${s.badge}`}
+        >
+          {data.label}
+        </span>
         <div className="flex items-center gap-1 ml-auto">
           {(data.icons || []).map((key) => {
             const Icon = ICON_MAP[key];
@@ -283,7 +429,10 @@ function VmNode({ data }) {
               <div key={key} className="relative">
                 <button
                   type="button"
-                  onClick={(e) => { e.stopPropagation(); setExpandedIcon(expandedIcon === key ? null : key); }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setExpandedIcon(expandedIcon === key ? null : key);
+                  }}
                   className="flex items-center justify-center w-7 h-7 rounded-lg hover:bg-white/10 transition-colors"
                   title={data.iconTooltips?.[key]}
                 >
@@ -297,17 +446,27 @@ function VmNode({ data }) {
               </div>
             );
           })}
-          <span className={`ml-1 text-[9px] font-medium px-1.5 py-0.5 rounded ${ready ? "bg-emerald-600/30 text-emerald-400" : "bg-rose-600/30 text-rose-400"}`}>
+          <span
+            className={`ml-1 text-[9px] font-medium px-1.5 py-0.5 rounded ${ready ? "bg-emerald-600/30 text-emerald-400" : "bg-rose-600/30 text-rose-400"}`}
+          >
             {data.status || "Unknown"}
           </span>
         </div>
       </div>
 
-      {data.sublabel && <div className="text-[10px] font-mono text-slate-500 mb-2">{data.sublabel}</div>}
+      {data.sublabel && (
+        <div className="text-[10px] font-mono text-slate-500 mb-2">
+          {data.sublabel}
+        </div>
+      )}
 
       {data.pods?.length > 0 && (
         <div>
-          {data.podSection && <div className="text-[9px] uppercase tracking-wider text-slate-500 mb-1.5">{data.podSection}</div>}
+          {data.podSection && (
+            <div className="text-[9px] uppercase tracking-wider text-slate-500 mb-1.5">
+              {data.podSection}
+            </div>
+          )}
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
             {data.pods.map((p, i) => {
               const alive = p.phase === "Running";
@@ -318,7 +477,9 @@ function VmNode({ data }) {
                   className={`relative rounded-md border px-2.5 py-1 text-[10px] font-mono leading-none ${alive ? "bg-white/5" : "border-slate-700 bg-slate-800/50 text-slate-500"}`}
                   style={alive ? { borderColor: pc.border } : {}}
                 >
-                  <span className={`absolute top-0.5 right-0.5 h-1.5 w-1.5 rounded-full ${alive ? "bg-emerald-400" : "bg-slate-600"}`} />
+                  <span
+                    className={`absolute top-0.5 right-0.5 h-1.5 w-1.5 rounded-full ${alive ? "bg-emerald-400" : "bg-slate-600"}`}
+                  />
                   {p.label}
                 </span>
               );
@@ -337,29 +498,60 @@ function VmNode({ data }) {
 }
 
 function BridgeNode({ data }) {
-  const bc = BRIDGE_COLORS[data.ifaceType] || { border: "#475569", bg: "#0f172a20" };
+  const bc = BRIDGE_COLORS[data.ifaceType] || {
+    border: "#475569",
+    bg: "#0f172a20",
+  };
   return (
-    <div className="rounded-lg border px-3 py-2 shadow-md" style={{ borderColor: bc.border, background: bc.bg, minWidth: 160 }}>
-      <Handle type="target" position={Position.Left} className="!w-2 !h-2" style={{ background: bc.border }} />
-      <Handle type="source" position={Position.Right} className="!w-2 !h-2" style={{ background: bc.border }} />
+    <div
+      className="rounded-lg border px-3 py-2 shadow-md"
+      style={{ borderColor: bc.border, background: bc.bg, minWidth: 160 }}
+    >
+      <Handle type="target" position={Position.Left} className={H_ROUTE} />
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="to-worker"
+        className={H_ROUTE}
+      />
       <div className="flex items-center gap-2 mb-1">
-        <span className="font-mono text-[11px] font-semibold text-slate-200">{data.name}</span>
+        <span className="font-mono text-[11px] font-semibold text-slate-200">
+          {data.name}
+        </span>
         {data.ifaceType && (
-          <span className="rounded px-1.5 py-0.5 text-[8px] font-bold uppercase" style={{ color: bc.border, background: bc.bg, border: `1px solid ${bc.border}40` }}>
+          <span
+            className="rounded px-1.5 py-0.5 text-[8px] font-bold uppercase"
+            style={{
+              color: bc.border,
+              background: bc.bg,
+              border: `1px solid ${bc.border}40`,
+            }}
+          >
             {data.ifaceType}
           </span>
         )}
       </div>
       <div className="flex flex-wrap gap-1">
         {data.vxlanPorts.map((p) => (
-          <span key={p} className="rounded bg-indigo-600/25 px-1.5 py-0.5 text-[8px] font-mono text-indigo-300">{p}</span>
+          <span
+            key={p}
+            className="rounded bg-indigo-600/25 px-1.5 py-0.5 text-[8px] font-mono text-indigo-300"
+          >
+            {p}
+          </span>
         ))}
         {data.patchPorts.map((p) => (
-          <span key={p} className="rounded bg-amber-600/20 px-1.5 py-0.5 text-[8px] font-mono text-amber-300">{p}</span>
+          <span
+            key={p}
+            className="rounded bg-amber-600/20 px-1.5 py-0.5 text-[8px] font-mono text-amber-300"
+          >
+            {p}
+          </span>
         ))}
         {data.totalPorts > data.vxlanPorts.length + data.patchPorts.length && (
           <span className="rounded bg-slate-700/40 px-1.5 py-0.5 text-[8px] font-mono text-slate-500">
-            +{data.totalPorts - data.vxlanPorts.length - data.patchPorts.length} veth
+            +{data.totalPorts - data.vxlanPorts.length - data.patchPorts.length}{" "}
+            veth
           </span>
         )}
       </div>
@@ -369,13 +561,32 @@ function BridgeNode({ data }) {
 
 function AnsibleNodeComp() {
   return (
-    <div className="rounded-xl border-2 shadow-lg px-4 py-3" style={{ background: "#1c1917", borderColor: "#ea580c", minWidth: 130 }}>
-      <Handle type="source" position={Position.Right} className="!w-2.5 !h-2.5 !bg-orange-500" />
+    <div
+      className="rounded-xl border-2 shadow-lg px-4 py-3"
+      style={{ background: "#1c1917", borderColor: "#ea580c", minWidth: 150 }}
+    >
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        id="provision-down"
+        className={H_ROUTE}
+        style={{ left: "50%" }}
+      />
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="provision-right"
+        className={H_ROUTE}
+      />
       <div className="flex items-center gap-2">
-        <span className="rounded px-2 py-0.5 text-[9px] font-bold uppercase text-white bg-orange-600">Ansible</span>
+        <span className="rounded px-2 py-0.5 text-[9px] font-bold uppercase text-white bg-orange-600">
+          Ansible
+        </span>
         <IconAnsible size={20} />
       </div>
-      <div className="text-[9px] text-orange-300/60 mt-1">Provisions all VMs</div>
+      <div className="text-[9px] text-orange-300/60 mt-1">
+        Provisions all VMs
+      </div>
     </div>
   );
 }
@@ -383,17 +594,38 @@ function AnsibleNodeComp() {
 function MasterNodeComp({ data }) {
   const ready = data.status === "Ready";
   return (
-    <div className="rounded-xl border-2 shadow-lg px-4 py-3" style={{ background: "#1e1b4b", borderColor: "#8b5cf6", minWidth: 130 }}>
-      <Handle type="target" position={Position.Left} className="!w-2.5 !h-2.5 !bg-violet-400" />
+    <div
+      className="rounded-xl border-2 shadow-lg px-4 py-3"
+      style={{ background: "#1e1b4b", borderColor: "#8b5cf6", minWidth: 130 }}
+    >
+      <Handle
+        type="target"
+        position={Position.Left}
+        id="from-ansible"
+        className={H_ROUTE}
+      />
+      <Handle
+        type="target"
+        position={Position.Bottom}
+        id="from-worker"
+        className={H_ROUTE}
+        style={{ left: "50%", transform: "translateX(-50%)" }}
+      />
       <div className="flex items-center gap-2 mb-1">
-        <span className="rounded px-2 py-0.5 text-[9px] font-bold uppercase text-white bg-violet-600">Master</span>
+        <span className="rounded px-2 py-0.5 text-[9px] font-bold uppercase text-white bg-violet-600">
+          Master
+        </span>
         <IconK3s size={20} />
-        <span className={`ml-auto text-[8px] px-1.5 py-0.5 rounded ${ready ? "bg-emerald-600/20 text-emerald-400" : "bg-rose-600/20 text-rose-400"}`}>
+        <span
+          className={`ml-auto text-[8px] px-1.5 py-0.5 rounded ${ready ? "bg-emerald-600/20 text-emerald-400" : "bg-rose-600/20 text-rose-400"}`}
+        >
           {data.status || "Unknown"}
         </span>
       </div>
       <div className="text-[9px] font-mono text-slate-500">{data.ip}</div>
-      <div className="text-[9px] text-violet-300/60 mt-0.5">K3s control plane</div>
+      <div className="text-[9px] text-violet-300/60 mt-0.5">
+        K3s control plane
+      </div>
     </div>
   );
 }
@@ -405,7 +637,11 @@ const nodeTypes = {
   masterNode: MasterNodeComp,
 };
 
-export default function TopologyInfra({ topology, clusterNodes }) {
+export default function TopologyInfra({
+  topology,
+  clusterNodes,
+  deploymentHostLabel = "Deployment host",
+}) {
   const [selected, setSelected] = useState(null);
 
   const { nodes, edges } = useMemo(() => {
@@ -419,17 +655,24 @@ export default function TopologyInfra({ topology, clusterNodes }) {
 
   const onNodeClick = useCallback((_, node) => {
     const d = node.data;
-    if (d?.label || d?.name || d?.pods?.length) setSelected({ ...d, nodeId: node.id });
+    if (d?.label || d?.name || d?.pods?.length)
+      setSelected({ ...d, nodeId: node.id });
   }, []);
 
   return (
     <div className="h-full flex gap-3 min-h-0">
       <div className="flex-1 flex flex-col min-h-[460px] rounded-xl border-2 border-slate-600/60 bg-slate-950/50 overflow-hidden">
         <div className="flex items-center gap-2 px-4 py-2 border-b border-slate-700/50 bg-slate-900/30 flex-shrink-0">
-          <span className="text-[10px] uppercase tracking-wider text-slate-500 font-medium">Host PC</span>
+          <span className="text-[10px] uppercase tracking-wider text-slate-500 font-medium">
+            {deploymentHostLabel}
+          </span>
           <span className="text-slate-700">·</span>
-          <span className="text-[10px] text-slate-600">Local infrastructure</span>
-          <span className="ml-auto text-[10px] text-slate-600">Dashboard on host (out-of-band)</span>
+          <span className="text-[10px] text-slate-600">
+            Local infrastructure
+          </span>
+          <span className="ml-auto text-[10px] text-slate-600">
+            Dashboard (out-of-band)
+          </span>
         </div>
         <div className="flex-1 min-h-0" style={{ background: "#0f172a" }}>
           {nodes.length > 0 ? (
@@ -437,7 +680,7 @@ export default function TopologyInfra({ topology, clusterNodes }) {
               nodes={nodes}
               edges={edges}
               fitView
-              fitViewOptions={{ padding: 0.15 }}
+              fitViewOptions={{ padding: 0.22 }}
               proOptions={{ hideAttribution: true }}
               nodeTypes={nodeTypes}
               nodesDraggable
@@ -453,7 +696,10 @@ export default function TopologyInfra({ topology, clusterNodes }) {
             <div className="flex h-full items-center justify-center text-slate-500 text-sm">
               <div className="text-center">
                 <p>No cluster data available.</p>
-                <p className="text-xs mt-1">Ensure the backend can reach the cluster and OVS on the worker.</p>
+                <p className="text-xs mt-1">
+                  Ensure the backend can reach the cluster and OVS on the
+                  worker.
+                </p>
               </div>
             </div>
           )}
@@ -464,24 +710,73 @@ export default function TopologyInfra({ topology, clusterNodes }) {
         <div className="w-64 flex-shrink-0 overflow-y-auto rounded-xl border border-slate-700 bg-slate-900 p-3 text-sm">
           <div className="flex items-center justify-between mb-3">
             <span className="font-semibold text-white text-xs">Details</span>
-            <button type="button" onClick={() => setSelected(null)} className="text-slate-500 hover:text-white text-xs">×</button>
+            <button
+              type="button"
+              onClick={() => setSelected(null)}
+              className="text-slate-500 hover:text-white text-xs"
+            >
+              ×
+            </button>
           </div>
           <div className="space-y-2 text-xs">
-            {selected.label && !selected.pods && <div><span className="text-slate-500">Name</span> <span className="font-mono text-white">{selected.label}</span></div>}
-            {selected.name && <div><span className="text-slate-500">Bridge</span> <span className="font-mono text-white">{selected.name}</span></div>}
-            {selected.sublabel && <div><span className="text-slate-500">IP</span> <span className="font-mono text-slate-300">{selected.sublabel}</span></div>}
-            {selected.role && <div><span className="text-slate-500">Role</span> <span className="text-slate-300">{selected.role}</span></div>}
-            {selected.nfType && <div><span className="text-slate-500">Type</span> <span className="text-slate-300">{selected.nfType}</span></div>}
-            {selected.phase && !selected.pods && <div><span className="text-slate-500">Phase</span> <span className="text-slate-300">{selected.phase}</span></div>}
-            {selected.ifaceType && <div><span className="text-slate-500">Interface</span> <span className="text-slate-300">{selected.ifaceType}</span></div>}
+            {selected.label && !selected.pods && (
+              <div>
+                <span className="text-slate-500">Name</span>{" "}
+                <span className="font-mono text-white">{selected.label}</span>
+              </div>
+            )}
+            {selected.name && (
+              <div>
+                <span className="text-slate-500">Bridge</span>{" "}
+                <span className="font-mono text-white">{selected.name}</span>
+              </div>
+            )}
+            {selected.sublabel && (
+              <div>
+                <span className="text-slate-500">IP</span>{" "}
+                <span className="font-mono text-slate-300">
+                  {selected.sublabel}
+                </span>
+              </div>
+            )}
+            {selected.role && (
+              <div>
+                <span className="text-slate-500">Role</span>{" "}
+                <span className="text-slate-300">{selected.role}</span>
+              </div>
+            )}
+            {selected.nfType && (
+              <div>
+                <span className="text-slate-500">Type</span>{" "}
+                <span className="text-slate-300">{selected.nfType}</span>
+              </div>
+            )}
+            {selected.phase && !selected.pods && (
+              <div>
+                <span className="text-slate-500">Phase</span>{" "}
+                <span className="text-slate-300">{selected.phase}</span>
+              </div>
+            )}
+            {selected.ifaceType && (
+              <div>
+                <span className="text-slate-500">Interface</span>{" "}
+                <span className="text-slate-300">{selected.ifaceType}</span>
+              </div>
+            )}
             {selected.pods?.length > 0 && (
               <div>
-                <span className="text-slate-500 block mb-1">Pods ({selected.pods.length})</span>
+                <span className="text-slate-500 block mb-1">
+                  Pods ({selected.pods.length})
+                </span>
                 {selected.pods.map((p, i) => (
                   <div key={i} className="flex items-center gap-1.5 py-0.5">
-                    <span className={`h-1.5 w-1.5 rounded-full ${p.phase === "Running" ? "bg-emerald-400" : "bg-slate-600"}`} />
+                    <span
+                      className={`h-1.5 w-1.5 rounded-full ${p.phase === "Running" ? "bg-emerald-400" : "bg-slate-600"}`}
+                    />
                     <span className="font-mono text-slate-300">{p.label}</span>
-                    <span className="text-slate-600 text-[10px]">{p.phase}</span>
+                    <span className="text-slate-600 text-[10px]">
+                      {p.phase}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -489,13 +784,24 @@ export default function TopologyInfra({ topology, clusterNodes }) {
             {selected.vxlanPorts?.length > 0 && (
               <div>
                 <span className="text-slate-500 block mb-1">VXLAN ports</span>
-                {selected.vxlanPorts.map((p) => <div key={p} className="font-mono text-indigo-300 text-[10px]">{p}</div>)}
+                {selected.vxlanPorts.map((p) => (
+                  <div
+                    key={p}
+                    className="font-mono text-indigo-300 text-[10px]"
+                  >
+                    {p}
+                  </div>
+                ))}
               </div>
             )}
             {selected.patchPorts?.length > 0 && (
               <div>
                 <span className="text-slate-500 block mb-1">Patch ports</span>
-                {selected.patchPorts.map((p) => <div key={p} className="font-mono text-amber-300 text-[10px]">{p}</div>)}
+                {selected.patchPorts.map((p) => (
+                  <div key={p} className="font-mono text-amber-300 text-[10px]">
+                    {p}
+                  </div>
+                ))}
               </div>
             )}
           </div>

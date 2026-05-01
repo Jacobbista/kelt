@@ -212,6 +212,69 @@
   when: (item.stdout | trim) != "active"
   loop: "{{ dashboard_service_status.results }}"
 
+- name: Record active dashboard mode
+  ansible.builtin.copy:
+    dest: /home/vagrant/.dashboard-mode
+    content: "{{ dashboard_mode }}"
+    mode: "0644"
+    owner: vagrant
+    group: vagrant
+
+- name: Install dashboard mode switcher shell functions
+  ansible.builtin.blockinfile:
+    path: /home/vagrant/.bashrc
+    marker: "# {mark} DASHBOARD MODE SWITCHER"
+    block: |
+      _dashboard_switch() {
+        local target="$1"
+        local playbook=~/ansible-ro/phases/08-dashboard/playbook.yml
+        local inventory=~/ansible-ro/inventory.ini
+        local mode_file=~/.dashboard-mode
+        if [[ "$target" != "dev" && "$target" != "prod" ]]; then
+          echo "Usage: dev | prod" >&2; return 1
+        fi
+        local current="(unknown)"
+        [[ -f "$mode_file" ]] && current="$(cat "$mode_file")"
+        if [[ "$current" == "$target" ]]; then
+          echo "Dashboard is already in $target mode."; return 0
+        fi
+        echo "Dashboard mode: $current  →  $target"
+        read -rp "Confirm? [y/N] " _reply
+        [[ "$_reply" =~ ^[Yy]$ ]] || { echo "Cancelled."; return 0; }
+        ansible-playbook "$playbook" -i "$inventory" -e "dashboard_mode=$target" \
+          && echo "$target" > "$mode_file" \
+          && echo "Switched to $target mode."
+      }
+      dev()  { _dashboard_switch dev;  }
+      prod() { _dashboard_switch prod; }
+
+      # Mode prefix in PS1 — survives clear, updates after each command
+      _dashboard_mode() {
+        local m=""
+        [[ -r "$HOME/.dashboard-mode" ]] && m="$(cat "$HOME/.dashboard-mode" 2>/dev/null)"
+        printf '%s' "${m//[$'\t\r\n ']}"  # strip any stray whitespace/CRLF
+      }
+      _dashboard_ps1_prefix() {
+        case "$(_dashboard_mode)" in
+          prod) printf '\001\033[0;32m\002[dash:prod]\001\033[0m\002 ' ;;
+          dev)  printf '\001\033[0;33m\002[dash:dev]\001\033[0m\002 ' ;;
+        esac
+      }
+      _DASH_BASE_PS1="${PS1:-\u@\h:\w\$ }"
+      PS1='$(_dashboard_ps1_prefix)'"${_DASH_BASE_PS1}"
+
+      # Login banner — informational, not required to survive clear
+      _dm="$(_dashboard_mode)"
+      if [[ -n "$_dm" ]]; then
+        if [[ "$_dm" == "prod" ]]; then
+          _dm_c=$'\033[0;32m'; _dm_hint="dev"
+        else
+          _dm_c=$'\033[0;33m'; _dm_hint="prod"
+        fi
+        printf '\n  dashboard  %s\033[1m%s\033[0m  \033[2m·  type \033[0m\033[1m%s\033[0m\033[2m to switch\033[0m\n\n' "$_dm_c" "$_dm" "$_dm_hint"
+      fi
+      unset _dm _dm_c _dm_hint
+
 - name: Dashboard setup summary
   ansible.builtin.debug:
     msg: "Dashboard phase prepared and started successfully. mode={{ dashboard_mode }} source={{ dashboard_runtime_dir }}"

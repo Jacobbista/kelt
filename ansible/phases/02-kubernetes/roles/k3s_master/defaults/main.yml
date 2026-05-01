@@ -14,7 +14,10 @@ k3s_node_ip: "{{ ansible_host }}"
 cluster_cidr: "10.42.0.0/16"
 service_cidr: "10.43.0.0/16"
 flannel_backend: "vxlan"
+# local-storage intentionally NOT disabled: it ships the "local-path" StorageClass
+# and provisioner used by PVCs in this testbed (MongoDB persistence, Prometheus
+# retention). See docs/architecture/subscriber-persistence.md.
 disable_components:
-  [traefik, servicelb, cloud-controller, network-policy, local-storage]
+  [traefik, servicelb, cloud-controller, network-policy]
 kubeconfig_path: "/home/vagrant/kubeconfig"
 token_export_path: "/home/vagrant/k3s_token"

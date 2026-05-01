@@ -218,8 +218,8 @@ export const deleteUeransimUe = (name) => del(`/api/v1/ran/ueransim/ues/${name}`
 export const getNodeMetrics = () => get("/api/v1/metrics/nodes");
 export const getNfMetrics = () => get("/api/v1/metrics/nf");
 export const getMetricsOverview = () => get("/api/v1/metrics/overview");
-export const getNodeMetricsRange = (mins = 30) => get(`/api/v1/metrics/range/nodes?minutes=${mins}`);
-export const getNfMetricsRange = (mins = 30) => get(`/api/v1/metrics/range/nf?minutes=${mins}`);
+export const getNodeMetricsRange = (mins = 30, step = "60s") => get(`/api/v1/metrics/range/nodes?minutes=${mins}&step=${step}`);
+export const getNfMetricsRange = (mins = 30, step = "60s") => get(`/api/v1/metrics/range/nf?minutes=${mins}&step=${step}`);
 
 // Network Health
 export const getNetworkHealth = () => get("/api/v1/network/health");
@@ -227,13 +227,22 @@ export const runNetworkHealthCheck = () => post("/api/v1/network/health/run", {}
 export const getN6NatDiagnostics = () => get("/api/v1/network/n6-nat");
 
 // UE Monitoring
-export const getUeSummary = () => get("/api/v1/ue/summary");
+export const getUeSummary = (windowSeconds = 300) =>
+  get(`/api/v1/ue/summary?window=${windowSeconds}`);
 export const getUeEvents = (mins = 10) => get(`/api/v1/ue/events?minutes=${mins}`);
 export const getActiveUes = () => get("/api/v1/ue/active");
 export const getUeGnbs = () => get("/api/v1/ue/gnbs");
 export const getUePods = () => get("/api/v1/ue/pods");
 export const runUePing = (pod, target = "8.8.8.8") => post("/api/v1/ue/test/ping", { pod, target });
 export const runUeIperf = (pod, server = "10.45.0.1", duration = 5) => post("/api/v1/ue/test/iperf", { pod, server, duration });
+export const getNfRawLogs = (nf, tail = 100) => get(`/api/v1/ue/logs/${nf}?tail=${tail}`);
+
+// UE personalizations (dashboard-only nickname/icon, persisted in Mongo)
+export const getUePersonalizations = () => get("/api/v1/ue/personalizations");
+export const upsertUePersonalization = (imsi, { nickname, icon } = {}) =>
+  put(`/api/v1/ue/personalizations/${imsi}`, { nickname, icon });
+export const deleteUePersonalization = (imsi) =>
+  del(`/api/v1/ue/personalizations/${imsi}`);
 
 // Time Sync
 export const getTimeSync = () => get("/api/v1/time/sync");
@@ -274,3 +283,18 @@ export function buildExecWsUrl(namespace, pod, container, command = "/bin/sh") {
 // Deployment scaling
 export const scaleDeployment = (name, replicas, ns = "5g") =>
   post(`/api/v1/deployments/${name}/scale`, { replicas, namespace: ns });
+
+// Kubernetes inventory (generic cluster section, not 5G-specific)
+export const getK8sNamespaces = () => get("/api/v1/k8s/namespaces");
+export const getK8sNodesDetailed = () => get("/api/v1/k8s/nodes");
+export const getK8sPvcs = (ns) =>
+  get(`/api/v1/k8s/pvcs${ns ? `?namespace=${encodeURIComponent(ns)}` : ""}`);
+export const getK8sStorageClasses = () => get("/api/v1/k8s/storageclasses");
+export const getK8sServices = (ns) =>
+  get(`/api/v1/k8s/services${ns ? `?namespace=${encodeURIComponent(ns)}` : ""}`);
+export const getK8sEvents = (ns, limit = 200) => {
+  const params = new URLSearchParams();
+  if (ns) params.set("namespace", ns);
+  params.set("limit", String(limit));
+  return get(`/api/v1/k8s/events?${params.toString()}`);
+};

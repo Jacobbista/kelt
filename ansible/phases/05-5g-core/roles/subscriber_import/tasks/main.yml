@@ -23,6 +23,38 @@
       }}
   run_once: true
 
+# Seed the dashboard-managed subscriber snapshot ConfigMap from the repo JSON,
+# but only if it does not exist yet. Once the dashboard starts managing it,
+# playbook re-runs must not clobber UI changes.
+# See docs/architecture/subscriber-persistence.md
+- name: Look up existing subscribers-snapshot ConfigMap
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ConfigMap
+    name: subscribers-snapshot
+    namespace: 5g
+    kubeconfig: "/home/vagrant/kubeconfig"
+  register: existing_snapshot_cm
+  run_once: true
+
+- name: Seed subscribers-snapshot ConfigMap from repo JSON (first deploy only)
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "/home/vagrant/kubeconfig"
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: subscribers-snapshot
+        namespace: 5g
+        labels:
+          app.kubernetes.io/name: subscriber-snapshot
+          app.kubernetes.io/managed-by: ansible
+      data:
+        snapshot.json: "{{ {'subscribers': subs_array} | to_nice_json }}"
+  when: (existing_snapshot_cm.resources | length) == 0
+  run_once: true
+
 # Optional: wait for MongoDB to be ready (1 pod Ready with label app=mongodb)
 - name: Wait for MongoDB pod Ready
   kubernetes.core.k8s_info:

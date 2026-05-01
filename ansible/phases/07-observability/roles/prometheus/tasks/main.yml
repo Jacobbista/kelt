@@ -12,6 +12,12 @@
     state: present
     definition: "{{ lookup('template', 'prometheus-rbac.yaml.j2') | from_yaml_all | list }}"
 
+- name: Create Prometheus PVC
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig_path }}"
+    state: present
+    definition: "{{ lookup('template', 'prometheus-pvc.yaml.j2') | from_yaml }}"
+
 - name: Deploy Prometheus
   kubernetes.core.k8s:
     kubeconfig: "{{ kubeconfig_path }}"

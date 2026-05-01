@@ -8,8 +8,132 @@ import {
   getRanStatus,
   runUePing,
   runUeIperf,
+  upsertUePersonalization,
+  deleteUePersonalization,
 } from "../api";
 import Loader from "../components/Loader";
+
+const ICON_OPTIONS = [
+  { id: "phone",    glyph: "\u{1F4F1}" }, // mobile phone
+  { id: "modem",    glyph: "\u{1F4E1}" }, // satellite antenna
+  { id: "drone",    glyph: "\u{1F681}" }, // helicopter
+  { id: "camera",   glyph: "\u{1F4F7}" },
+  { id: "satellite",glyph: "\u{1F6F0}" },
+  { id: "sensor",   glyph: "\u{1F52C}" }, // microscope
+  { id: "laptop",   glyph: "\u{1F4BB}" },
+  { id: "server",   glyph: "\u{1F5A5}" },
+  { id: "iot",      glyph: "\u{1F3ED}" }, // factory
+  { id: "car",      glyph: "\u{1F697}" },
+];
+
+function iconGlyph(id) {
+  return ICON_OPTIONS.find((o) => o.id === id)?.glyph || "";
+}
+
+function formatKbps(kbps) {
+  if (kbps == null) return "-";
+  if (kbps >= 1_000_000) return `${(kbps / 1_000_000).toFixed(1)} Gbps`;
+  if (kbps >= 1000) return `${(kbps / 1000).toFixed(1)} Mbps`;
+  return `${kbps} kbps`;
+}
+
+// Client-side image constraints. Anything accepted here is resized to a
+// thumbnail before upload, so the user can drop a full-resolution photo
+// without sending megabytes to the backend.
+const IMAGE_ACCEPT_MIMES = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
+const IMAGE_SOURCE_MAX_BYTES = 5 * 1024 * 1024;
+const IMAGE_THUMBNAIL_DIM = 128;
+const IMAGE_THUMBNAIL_QUALITY = 0.85;
+
+/**
+ * Load an image file and return a square-fit thumbnail as a WebP data URL.
+ * The canvas keeps aspect ratio by center-cropping, because avatars look
+ * terrible with letterboxing.
+ */
+function fileToThumbnailDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    if (!IMAGE_ACCEPT_MIMES.includes(file.type)) {
+      reject(new Error(`Unsupported type: ${file.type || "unknown"}. Use PNG, JPEG, or WebP.`));
+      return;
+    }
+    if (file.size > IMAGE_SOURCE_MAX_BYTES) {
+      reject(new Error(`Image is ${Math.round(file.size / 1024 / 1024)} MB, max 5 MB.`));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Failed to read file"));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Failed to decode image"));
+      img.onload = () => {
+        const side = Math.min(img.naturalWidth, img.naturalHeight);
+        const sx = (img.naturalWidth - side) / 2;
+        const sy = (img.naturalHeight - side) / 2;
+        const canvas = document.createElement("canvas");
+        canvas.width = IMAGE_THUMBNAIL_DIM;
+        canvas.height = IMAGE_THUMBNAIL_DIM;
+        const ctx = canvas.getContext("2d");
+        ctx.imageSmoothingQuality = "high";
+        ctx.drawImage(img, sx, sy, side, side, 0, 0, IMAGE_THUMBNAIL_DIM, IMAGE_THUMBNAIL_DIM);
+        // Browsers that can't encode WebP fall back to JPEG automatically.
+        let dataUrl = canvas.toDataURL("image/webp", IMAGE_THUMBNAIL_QUALITY);
+        if (!dataUrl.startsWith("data:image/webp")) {
+          dataUrl = canvas.toDataURL("image/jpeg", IMAGE_THUMBNAIL_QUALITY);
+        }
+        resolve(dataUrl);
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * Deterministic color per IMSI so the fallback avatar doesn't flicker on
+ * every render.
+ */
+function avatarColor(seed) {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0;
+  const hue = Math.abs(h) % 360;
+  return `hsl(${hue} 50% 35%)`;
+}
+
+function UeAvatar({ ue, size = 28 }) {
+  const p = ue.personalization || {};
+  const dim = { width: size, height: size, minWidth: size };
+  if (p.image) {
+    return (
+      <img
+        src={p.image}
+        alt=""
+        className="rounded-full object-cover border border-slate-700 shrink-0"
+        style={dim}
+      />
+    );
+  }
+  const glyph = iconGlyph(p.icon);
+  if (glyph) {
+    return (
+      <span
+        className="inline-flex items-center justify-center rounded-full bg-slate-800 border border-slate-700 shrink-0"
+        style={{ ...dim, fontSize: size * 0.55, lineHeight: 1 }}
+      >
+        {glyph}
+      </span>
+    );
+  }
+  const seed = p.nickname || ue.imsi || "?";
+  const initial = seed.trim().charAt(0).toUpperCase() || "?";
+  return (
+    <span
+      className="inline-flex items-center justify-center rounded-full font-semibold text-white shrink-0"
+      style={{ ...dim, fontSize: size * 0.45, lineHeight: 1, background: avatarColor(seed) }}
+    >
+      {initial}
+    </span>
+  );
+}
 
 /* ── helpers ─────────────────────────────────────────────────── */
 
@@ -26,15 +150,39 @@ function StatCard({ label, value, sub, color = "text-indigo-300", onClick }) {
   );
 }
 
-const DISCONNECT_TYPES = ["gnb_disconnect", "ue_context_release", "pdu_session_rel", "ue_removed", "session_removed"];
+const DISCONNECT_TYPES = [
+  "gnb_disconnect",
+  "ue_context_release",
+  "pdu_session_rel",
+  "ue_removed",
+  "session_removed",
+  "deregistration_req",
+  "deregistration_ok",
+];
 const ERROR_TYPES = ["registration_fail", "auth_reject"];
+
+const WINDOW_OPTIONS = [
+  { label: "1m",  seconds: 60 },
+  { label: "5m",  seconds: 300 },
+  { label: "15m", seconds: 900 },
+  { label: "1h",  seconds: 3600 },
+  { label: "6h",  seconds: 21600 },
+];
+
+function windowLabel(seconds) {
+  const opt = WINDOW_OPTIONS.find((o) => o.seconds === seconds);
+  return opt ? opt.label : `${seconds}s`;
+}
 
 function EventIcon({ ev }) {
   if (ev.type === "auth_reject") {
     return <span className="inline-block h-2.5 w-2.5 rounded-full bg-rose-500" title="Auth rejected" />;
   }
+  if (ev.type === "deregistration_req" || ev.type === "deregistration_ok") {
+    return <span className="inline-block h-2 w-2 rounded-full bg-amber-400" title="Deregistration" />;
+  }
   if (ev.type === "ue_context_release" || DISCONNECT_TYPES.includes(ev.type)) {
-    return <span className="inline-block h-2 w-2 rounded-full bg-rose-400" title="Disconnect" />;
+    return <span className="inline-block h-2 w-2 rounded-full bg-rose-400" title="Detach" />;
   }
   if (ev.type === "pdu_session_rel") {
     return <span className="inline-block h-2 w-2 rounded-full bg-amber-400" title="Session released" />;
@@ -80,15 +228,37 @@ function eventKey(ev, i) {
 
 const STATUS_STYLES = {
   registered: "bg-emerald-900/40 text-emerald-400",
+  deregistering: "bg-amber-900/30 text-amber-300",
   deregistered: "bg-slate-800 text-slate-500",
   released: "bg-amber-900/30 text-amber-400",
+  failed: "bg-rose-900/30 text-rose-400",
   stale: "bg-rose-900/20 text-rose-400 italic",
 };
 
+const TERMINAL_STATUSES = new Set(["deregistered", "released", "failed", "stale"]);
+
 const EVENT_FILTERS = [
   { key: "all", label: "All" },
-  { key: "connect", label: "Connect", types: ["gnb_connect", "registration_ok", "registration_req", "pdu_session_est", "pdu_request"] },
-  { key: "disconnect", label: "Disconnect", types: [...DISCONNECT_TYPES, "registration_fail", "ue_count_change", "session_count_change"].filter((_, i, arr) => arr.indexOf(arr[i]) === i) },
+  {
+    key: "registration",
+    label: "Registration",
+    types: ["registration_req", "registration_ok", "registration_fail", "deregistration_req", "deregistration_ok"],
+  },
+  {
+    key: "session",
+    label: "Session",
+    types: ["pdu_session_est", "pdu_session_rel", "pdu_request"],
+  },
+  {
+    key: "connect",
+    label: "Attach",
+    types: ["gnb_connect", "registration_ok", "pdu_session_est"],
+  },
+  {
+    key: "disconnect",
+    label: "Detach",
+    types: DISCONNECT_TYPES,
+  },
   { key: "error", label: "Errors", types: ERROR_TYPES },
   { key: "count", label: "Counts", types: ["ue_count_change", "session_count_change"] },
 ];
@@ -114,10 +284,20 @@ export default function UEMonitoringPage() {
   const [expandedEvent, setExpandedEvent] = useState(null);
   const eventFeedRef = useRef(null);
 
+  // Counter window (seconds). 5 minutes by default; counters use PromQL
+  // increase(metric[Ns]) so tiles reflect activity in this window, not the
+  // monotonic total since AMF start.
+  const [windowSeconds, setWindowSeconds] = useState(300);
+
+  // Active UE row UI state: which IMSI is expanded, which is in edit mode.
+  const [expandedUe, setExpandedUe] = useState(null);
+  const [editingUe, setEditingUe] = useState(null);
+  const [editDraft, setEditDraft] = useState({ nickname: "", icon: "", image: "" });
+
   const refresh = useCallback(async () => {
     try {
       const [s, e, u, g, p] = await Promise.all([
-        getUeSummary(),
+        getUeSummary(windowSeconds),
         getUeEvents(10),
         getActiveUes(),
         getUeGnbs().catch(() => []),
@@ -140,7 +320,7 @@ export default function UEMonitoringPage() {
     } finally {
       setLoading(false);
     }
-  }, [testPod]);
+  }, [testPod, windowSeconds]);
 
   useEffect(() => {
     refresh();
@@ -179,6 +359,54 @@ export default function UEMonitoringPage() {
     eventFeedRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
+  function openEdit(ue) {
+    setEditingUe(ue.imsi);
+    setExpandedUe(ue.imsi);
+    setEditDraft({
+      nickname: ue.personalization?.nickname || "",
+      icon: ue.personalization?.icon || "",
+      image: ue.personalization?.image || "",
+    });
+  }
+
+  async function saveEdit(imsi) {
+    try {
+      const next = {
+        nickname: editDraft.nickname.trim() || null,
+        icon: editDraft.icon || null,
+        image: editDraft.image || null,
+      };
+      await upsertUePersonalization(imsi, {
+        nickname: next.nickname,
+        icon: next.icon,
+        // Send "" to explicitly clear a previously-saved image.
+        image: editDraft.image === "" && !next.image ? "" : next.image,
+      });
+      // Optimistically update in-place so the UI reflects the change before
+      // the next 8s poll arrives.
+      setActiveUes((prev) =>
+        prev.map((u) =>
+          u.imsi === imsi ? { ...u, personalization: next } : u,
+        ),
+      );
+      setEditingUe(null);
+    } catch (err) {
+      setError(`Failed to save personalization: ${err.message}`);
+    }
+  }
+
+  async function clearPersonalization(imsi) {
+    try {
+      await deleteUePersonalization(imsi);
+      setActiveUes((prev) =>
+        prev.map((u) => (u.imsi === imsi ? { ...u, personalization: undefined } : u)),
+      );
+      setEditingUe(null);
+    } catch (err) {
+      setError(`Failed to clear personalization: ${err.message}`);
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex min-h-[200px] items-center justify-center p-6">
@@ -194,8 +422,6 @@ export default function UEMonitoringPage() {
     : events.filter((ev) => {
         const filter = EVENT_FILTERS.find((f) => f.key === eventFilter);
         if (!filter?.types) return true;
-        // For disconnect filter, also include warning-severity count changes
-        if (eventFilter === "disconnect" && ev.severity === "warning") return true;
         return filter.types.includes(ev.type);
       });
 
@@ -269,9 +495,33 @@ export default function UEMonitoringPage() {
         />
       </div>
 
-      {/* Registration counters */}
+      {/* Registration counters — windowed rates, not cumulative totals */}
       <div className="rounded-lg border border-slate-700 bg-slate-900 p-4">
-        <h3 className="text-sm font-medium text-slate-300 mb-3">Registration Activity (cumulative)</h3>
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h3 className="text-sm font-medium text-slate-300">
+            Registration Activity
+            <span className="ml-2 text-[11px] font-normal text-slate-500">
+              last {windowLabel(windowSeconds)} &middot; via PromQL increase()
+            </span>
+          </h3>
+          <div className="flex rounded-md border border-slate-700 bg-slate-950/50 p-0.5">
+            {WINDOW_OPTIONS.map((opt) => (
+              <button
+                key={opt.seconds}
+                type="button"
+                onClick={() => setWindowSeconds(opt.seconds)}
+                className={`rounded px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                  windowSeconds === opt.seconds
+                    ? "bg-indigo-600/30 text-indigo-300"
+                    : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+                }`}
+                title={`Window size: ${opt.label}`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="grid grid-cols-3 gap-4 sm:grid-cols-6 text-center">
           <CounterCell label="Init Req" value={s.reg_init_req} />
           <CounterCell label="Init OK" value={s.reg_init_succ} ok />
@@ -288,10 +538,10 @@ export default function UEMonitoringPage() {
         </div>
       </div>
 
-      {/* Auth reject context banner */}
-      {(s.auth_reject ?? 0) > 0 && (
+      {/* Auth reject context banner — only shown when recent log events include a rejection */}
+      {events.some((e) => e.type === "auth_reject") && (
         <div className="rounded border border-rose-800/40 bg-rose-950/20 px-3 py-2 text-xs text-rose-300">
-          <strong>{s.auth_reject}</strong> authentication reject(s) detected.
+          Authentication reject detected in recent logs.
           {" "}Check the event feed below for per-UE details, or verify subscriber K/OPc keys on the Subscribers page.
           <button
             onClick={() => scrollToEvents("error")}
@@ -344,38 +594,118 @@ export default function UEMonitoringPage() {
             </span>
           )}
         </h3>
+        {(() => {
+          // Surface inconsistencies between the log-reconstructed list and
+          // Prometheus gauges. The backend already marks stale UEs, but we
+          // still flag the divergence explicitly so the operator is not
+          // misled by "all green" rows when AMF and RAN counts disagree.
+          const registeredCount = activeUes.filter(
+            (u) => u.status === "registered",
+          ).length;
+          const staleCount = activeUes.filter((u) => u.status === "stale").length;
+          const totalSessions = activeUes.reduce(
+            (acc, u) => acc + (u.sessions?.length || 0),
+            0,
+          );
+          const ranMismatch =
+            typeof s.ran_ues === "number" && s.ran_ues !== registeredCount;
+          const sessionMismatch =
+            typeof s.amf_sessions === "number" &&
+            s.amf_sessions !== totalSessions;
+          if (!ranMismatch && !sessionMismatch && staleCount === 0) return null;
+          return (
+            <div className="mb-3 rounded border border-amber-700/50 bg-amber-900/20 px-3 py-2 text-[11px] text-amber-200">
+              <div className="font-semibold">Inconsistent state detected</div>
+              <ul className="mt-1 list-disc pl-4 text-amber-100/80">
+                {ranMismatch && (
+                  <li>
+                    gNB reports{" "}
+                    <span className="font-mono">{s.ran_ues}</span> UE on-air,
+                    log shows{" "}
+                    <span className="font-mono">{registeredCount}</span>{" "}
+                    registered
+                    {staleCount > 0 && (
+                      <>
+                        {" "}
+                        (<span className="font-mono">{staleCount}</span>{" "}
+                        flagged stale)
+                      </>
+                    )}
+                    .
+                  </li>
+                )}
+                {sessionMismatch && (
+                  <li>
+                    AMF reports{" "}
+                    <span className="font-mono">{s.amf_sessions}</span>{" "}
+                    session(s), list tracks{" "}
+                    <span className="font-mono">{totalSessions}</span>. Some
+                    PDU sessions may have been released without a log line.
+                  </li>
+                )}
+              </ul>
+              <div className="mt-1 text-[10px] text-amber-100/60">
+                Likely cause: UE crash, radio drop, or forced reboot without
+                Deregistration. Open5GS will release the orphan context on its
+                own timer.
+              </div>
+            </div>
+          );
+        })()}
         {activeUes.length > 0 && (
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
                 <tr className="border-b border-slate-700 text-left text-slate-400">
-                  <th className="pb-2 pr-4">IMSI</th>
+                  <th className="pb-2 pr-2 w-6"></th>
+                  <th className="pb-2 pr-4">Device</th>
                   <th className="pb-2 pr-4">Status</th>
                   <th className="pb-2 pr-4">PDU Sessions</th>
-                  <th className="pb-2">Last Seen</th>
+                  <th className="pb-2 pr-2">Last Seen</th>
+                  <th className="pb-2 w-10"></th>
                 </tr>
               </thead>
               <tbody>
                 {activeUes.map((ue) => {
-                  const isDead = ue.status === "deregistered" || ue.status === "released" || ue.status === "stale";
+                  const isDead = TERMINAL_STATUSES.has(ue.status);
+                  const isExpanded = expandedUe === ue.imsi;
+                  const isEditing = editingUe === ue.imsi;
+                  const nickname = ue.personalization?.nickname;
                   return (
-                  <tr key={ue.imsi} className={`border-b border-slate-800${isDead ? " opacity-60" : ""}`}>
-                    <td className="py-2 pr-4 font-mono text-slate-200">
-                      {ue.imsi}
+                  <React.Fragment key={ue.imsi}>
+                  <tr
+                    className={`border-b border-slate-800${isDead ? " opacity-60" : ""} cursor-pointer hover:bg-slate-800/40`}
+                    onClick={() => setExpandedUe(isExpanded ? null : ue.imsi)}
+                  >
+                    <td className="py-2 pr-2 text-slate-500 text-center text-[10px]">
+                      {isExpanded ? "\u25BE" : "\u25B8"}
+                    </td>
+                    <td className="py-2 pr-4">
+                      <div className="flex items-center gap-2.5">
+                        <UeAvatar ue={ue} size={32} />
+                        <div>
+                          {nickname && (
+                            <div className="text-slate-200 font-medium leading-tight">{nickname}</div>
+                          )}
+                          <div className="font-mono text-[11px] text-slate-400 leading-tight">
+                            {ue.imsi}
+                          </div>
+                        </div>
+                      </div>
                     </td>
                     <td className="py-2 pr-4">
                       <span
                         className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${
                           STATUS_STYLES[ue.status] || "bg-slate-800 text-slate-500"
                         }`}
-                        title={ue.status === "stale" ? "Prometheus reports 0 active UEs" : ""}
+                        title={ue.status_reason || ""}
                       >
                         {ue.status}
                       </span>
                     </td>
                     <td className="py-2 pr-4">
-                      {ue.status === "deregistered" || ue.status === "released" || ue.status === "stale" ? (
-                        <span className="text-slate-600">—</span>
+                      {isDead ? (
+                        <span className="text-slate-600">&mdash;</span>
                       ) : ue.sessions && ue.sessions.length > 0 ? (
                         <>
                           {ue.sessions.slice(0, 3).map((sess, i) => (
@@ -396,13 +726,42 @@ export default function UEMonitoringPage() {
                           )}
                         </>
                       ) : (
-                        <span className="text-slate-600">—</span>
+                        <span className="text-slate-600">&mdash;</span>
                       )}
                     </td>
-                    <td className="py-2 text-slate-500" title={formatTs(ue.last_seen)}>
+                    <td className="py-2 pr-2 text-slate-500 text-[11px]" title={formatTs(ue.last_seen)}>
                       {relativeTime(ue.last_seen)}
                     </td>
+                    <td className="py-2 text-right">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); openEdit(ue); }}
+                        className="rounded px-1.5 py-0.5 text-[10px] text-slate-400 hover:bg-slate-700 hover:text-slate-200"
+                        title="Set nickname / icon for this UE"
+                      >
+                        Edit
+                      </button>
+                    </td>
                   </tr>
+                  {isExpanded && (
+                    <tr className="border-b border-slate-800 bg-slate-950/40">
+                      <td></td>
+                      <td colSpan={5} className="px-2 py-3">
+                        <UeDetails ue={ue} />
+                        {isEditing && (
+                          <UePersonalizationEditor
+                            draft={editDraft}
+                            onChange={setEditDraft}
+                            onSave={() => saveEdit(ue.imsi)}
+                            onClear={
+                              ue.personalization ? () => clearPersonalization(ue.imsi) : null
+                            }
+                            onCancel={() => setEditingUe(null)}
+                          />
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                  </React.Fragment>
                   );
                 })}
               </tbody>
@@ -476,6 +835,14 @@ export default function UEMonitoringPage() {
                           })()
                         : ev.detail}
                     </span>
+                    {ev.multiplicity > 1 && (
+                      <span
+                        className="shrink-0 rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-mono text-slate-400"
+                        title={`${ev.multiplicity} occurrences within a 30s window (first ${formatTs(ev.first_ts)})`}
+                      >
+                        ×{ev.multiplicity}
+                      </span>
+                    )}
                     {hasReason && (
                       <span className={`ml-auto shrink-0 text-[10px] text-slate-600 transition-transform ${isExpanded ? "rotate-90" : ""}`}>
                         &#9656;
@@ -483,8 +850,49 @@ export default function UEMonitoringPage() {
                     )}
                   </div>
                   {isExpanded && ev.reason && (
-                    <div className="ml-8 mb-1 rounded bg-slate-800/70 border border-slate-700/50 px-3 py-2 text-xs text-slate-400">
-                      <span className="text-slate-500 font-medium">Why: </span>{ev.reason}
+                    <div className="ml-8 mb-1 rounded bg-slate-800/70 border border-slate-700/50 px-3 py-2 text-xs text-slate-400 space-y-2">
+                      <div>
+                        <span className="text-slate-500 font-medium">Cause: </span>
+                        <span className={ev.type === "auth_reject" ? "text-rose-300" : ""}>{ev.reason}</span>
+                      </div>
+                      {ev.type === "auth_reject" && (
+                        <div className="text-[10px] text-slate-500 border-t border-slate-700/50 pt-1.5">
+                          {(ev.cause_code === 20 || /mac failure|K\/OPc/i.test(ev.reason)) && (
+                            <span>
+                              <strong className="text-slate-400">Debug:</strong> UE rejected the network challenge (wrong AUTN MAC).
+                              Verify that K and OPc in the Subscribers page exactly match what is burned on the SIM.
+                              If using a soft-SIM, re-burn with the correct values.
+                            </span>
+                          )}
+                          {(ev.cause_code === 21 || /synch|sqn/i.test(ev.reason)) && (
+                            <span>
+                              <strong className="text-slate-400">Debug:</strong> SIM SQN counter is ahead of the network SQN.
+                              Delete the subscriber and re-add it to reset the sequence number.
+                            </span>
+                          )}
+                          {(ev.cause_code === 3 || /not found|not provisioned|malformed/i.test(ev.reason)) && (
+                            <span>
+                              <strong className="text-slate-400">Debug:</strong> IMSI not found or subscriber data is invalid.
+                              Check the Subscribers page: the IMSI must match exactly and the JSON must be well-formed
+                              (correct slice/DNN config).
+                            </span>
+                          )}
+                          {(ev.cause_code === 11 || /plmn|mcc.*mnc/i.test(ev.reason)) && (
+                            <span>
+                              <strong className="text-slate-400">Debug:</strong> PLMN (MCC/MNC) mismatch.
+                              Subscriber config MCC/MNC must match network configuration and SIM PLMN.
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {ev.raw_log && (
+                        <div>
+                          <span className="text-slate-500 font-medium block mb-1">AMF log line:</span>
+                          <pre className="text-[10px] font-mono text-slate-500 whitespace-pre-wrap break-all rounded bg-slate-900/60 px-2 py-1.5 leading-relaxed">
+                            {ev.raw_log}
+                          </pre>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -546,21 +954,6 @@ export default function UEMonitoringPage() {
         </div>
       )}
 
-      {/* Manual commands hint for physical UE */}
-      {uePods.length === 0 && (
-        <div className="rounded-lg border border-slate-700/50 bg-slate-900/50 p-4">
-          <h3 className="text-sm font-medium text-slate-400 mb-2">
-            Connectivity Tests
-          </h3>
-          <p className="text-xs text-slate-500">
-            No UERANSIM UE pods detected. If using a physical UE dongle, run tests
-            manually from your host:
-          </p>
-          <pre className="mt-2 rounded bg-slate-950 border border-slate-700 p-2 text-xs font-mono text-amber-300">
-            {`# Ping through UE tunnel\nping -I uesimtun0 8.8.8.8\n\n# iperf3 to UPF\niperf3 -c 10.45.0.1 -t 10`}
-          </pre>
-        </div>
-      )}
     </div>
   );
 }
@@ -574,6 +967,277 @@ function CounterCell({ label, value, ok, bad }) {
     <div>
       <div className={`text-lg font-bold tabular-nums ${color}`}>{v}</div>
       <div className="text-[10px] text-slate-500">{label}</div>
+    </div>
+  );
+}
+
+function DetailRow({ label, children }) {
+  return (
+    <div className="flex items-start gap-3 text-[11px]">
+      <span className="w-28 shrink-0 text-slate-500">{label}</span>
+      <div className="flex-1 text-slate-300">{children}</div>
+    </div>
+  );
+}
+
+function UeDetails({ ue }) {
+  const plmn = ue.plmn || {};
+  const sub = ue.subscription || { configured: false };
+  const ambr = sub.ue_ambr_kbps || {};
+  return (
+    <div className="grid gap-2 md:grid-cols-2">
+      <div className="space-y-2">
+        <DetailRow label="PLMN">
+          {plmn.mcc && plmn.mnc ? (
+            <>
+              <span className="font-mono text-cyan-300">
+                MCC {plmn.mcc} &middot; MNC {plmn.mnc}
+              </span>
+              {plmn.is_test_plmn && (
+                <span className="ml-2 rounded bg-amber-900/30 px-1.5 py-0.5 text-[9px] font-semibold uppercase text-amber-300">
+                  test
+                </span>
+              )}
+            </>
+          ) : (
+            <span className="text-slate-500">-</span>
+          )}
+        </DetailRow>
+        <DetailRow label="MSIN">
+          <span className="font-mono text-slate-400">{plmn.msin || "-"}</span>
+        </DetailRow>
+        <DetailRow label="gNB">
+          <span className="font-mono text-slate-400">{ue.gnb_ip || "-"}</span>
+        </DetailRow>
+        <DetailRow label="Auth method">
+          <span className="font-mono text-slate-400">{sub.auth_method || "-"}</span>
+        </DetailRow>
+      </div>
+      <div className="space-y-2">
+        <DetailRow label="Provisioned">
+          {sub.configured ? (
+            <span className="text-emerald-400">Yes</span>
+          ) : (
+            <span className="text-rose-400">Not found in subscriber DB</span>
+          )}
+        </DetailRow>
+        <DetailRow label="UE-AMBR">
+          {ambr.uplink || ambr.downlink ? (
+            <span className="font-mono text-slate-400">
+              &uarr; {formatKbps(ambr.uplink)} &middot; &darr; {formatKbps(ambr.downlink)}
+            </span>
+          ) : (
+            <span className="text-slate-500">-</span>
+          )}
+        </DetailRow>
+        <DetailRow label="Slices">
+          {sub.slices && sub.slices.length > 0 ? (
+            <ul className="space-y-0.5">
+              {sub.slices.map((sl, i) => (
+                <li key={i} className="font-mono text-slate-400">
+                  SST {sl.sst}
+                  {sl.sd ? ` SD ${sl.sd}` : ""}
+                  {sl.default && (
+                    <span className="ml-1 rounded bg-indigo-900/40 px-1 py-0.5 text-[9px] text-indigo-300">
+                      default
+                    </span>
+                  )}
+                  {sl.dnns && sl.dnns.length > 0 && (
+                    <span className="ml-2 text-slate-500">&rarr; {sl.dnns.join(", ")}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <span className="text-slate-500">-</span>
+          )}
+        </DetailRow>
+      </div>
+    </div>
+  );
+}
+
+function ImageDropZone({ value, onChange, onError }) {
+  const inputRef = useRef(null);
+  const [dragActive, setDragActive] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  async function handleFile(file) {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const dataUrl = await fileToThumbnailDataUrl(file);
+      onChange(dataUrl);
+    } catch (err) {
+      onError?.(err.message || String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function onDrop(e) {
+    e.preventDefault();
+    setDragActive(false);
+    const f = e.dataTransfer?.files?.[0];
+    if (f) handleFile(f);
+  }
+
+  return (
+    <div>
+      <label className="block text-[10px] text-slate-500 mb-1">Image</label>
+      <div className="flex items-start gap-3">
+        <div
+          onDragEnter={(e) => { e.preventDefault(); setDragActive(true); }}
+          onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
+          onDragLeave={() => setDragActive(false)}
+          onDrop={onDrop}
+          onClick={() => inputRef.current?.click()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") inputRef.current?.click();
+          }}
+          role="button"
+          tabIndex={0}
+          className={`flex min-h-[72px] w-60 cursor-pointer flex-col items-center justify-center rounded border-2 border-dashed px-2 py-2 text-center text-[11px] transition-colors ${
+            dragActive
+              ? "border-indigo-400 bg-indigo-500/10 text-indigo-200"
+              : "border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-500"
+          }`}
+        >
+          {busy ? (
+            <span>Processing image...</span>
+          ) : value ? (
+            <>
+              <span>Click or drop to replace</span>
+              <span className="text-[10px] text-slate-500 mt-0.5">
+                Resized to {IMAGE_THUMBNAIL_DIM}x{IMAGE_THUMBNAIL_DIM} WebP
+              </span>
+            </>
+          ) : (
+            <>
+              <span>Drop image here or click to select</span>
+              <span className="text-[10px] text-slate-500 mt-0.5">
+                PNG / JPEG / WebP, max 5 MB
+              </span>
+            </>
+          )}
+          <input
+            ref={inputRef}
+            type="file"
+            accept={IMAGE_ACCEPT_MIMES.join(",")}
+            className="hidden"
+            onChange={(e) => handleFile(e.target.files?.[0])}
+          />
+        </div>
+        {value && (
+          <div className="flex flex-col items-center gap-1">
+            <img
+              src={value}
+              alt="UE avatar preview"
+              className="h-16 w-16 rounded-full border border-slate-700 object-cover"
+            />
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onChange(""); }}
+              className="text-[10px] text-rose-300 hover:text-rose-200"
+            >
+              Remove
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function UePersonalizationEditor({ draft, onChange, onSave, onClear, onCancel }) {
+  const [imageErr, setImageErr] = useState(null);
+  return (
+    <div className="mt-3 rounded border border-slate-700 bg-slate-900/70 p-3">
+      <div className="mb-2 text-[11px] font-medium text-slate-300">
+        Personalization <span className="text-slate-500">(stored in dashboard DB, per-IMSI)</span>
+      </div>
+      <div className="flex flex-wrap items-start gap-4">
+        <div>
+          <label className="block text-[10px] text-slate-500 mb-1">Nickname</label>
+          <input
+            value={draft.nickname}
+            onChange={(e) => onChange({ ...draft, nickname: e.target.value })}
+            maxLength={64}
+            placeholder="e.g. drone #1"
+            className="w-48 rounded bg-slate-800 border border-slate-700 px-2 py-1 text-xs text-slate-200"
+          />
+        </div>
+        <ImageDropZone
+          value={draft.image}
+          onChange={(image) => { setImageErr(null); onChange({ ...draft, image }); }}
+          onError={setImageErr}
+        />
+        <div>
+          <label className="block text-[10px] text-slate-500 mb-1">
+            Icon <span className="text-slate-600">(fallback when no image)</span>
+          </label>
+          <div className="flex flex-wrap gap-1">
+            <button
+              type="button"
+              onClick={() => onChange({ ...draft, icon: "" })}
+              className={`h-7 w-7 rounded border text-sm ${
+                draft.icon === ""
+                  ? "border-indigo-400 bg-indigo-600/20"
+                  : "border-slate-700 bg-slate-800 hover:border-slate-500"
+              }`}
+              title="No icon"
+            >
+              &oslash;
+            </button>
+            {ICON_OPTIONS.map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => onChange({ ...draft, icon: opt.id })}
+                className={`h-7 w-7 rounded border text-base ${
+                  draft.icon === opt.id
+                    ? "border-indigo-400 bg-indigo-600/20"
+                    : "border-slate-700 bg-slate-800 hover:border-slate-500"
+                }`}
+                title={opt.id}
+              >
+                {opt.glyph}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+      {imageErr && (
+        <div className="mt-2 rounded border border-rose-800/40 bg-rose-950/20 px-2 py-1 text-[11px] text-rose-300">
+          {imageErr}
+        </div>
+      )}
+      <div className="mt-3 flex gap-2 justify-end">
+        {onClear && (
+          <button
+            type="button"
+            onClick={onClear}
+            className="rounded bg-slate-800 px-2 py-1 text-[11px] text-rose-300 hover:bg-slate-700"
+            title="Remove personalization from DB"
+          >
+            Clear all
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded bg-slate-800 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-700"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={onSave}
+          className="rounded bg-indigo-600 px-3 py-1 text-[11px] font-medium text-white hover:bg-indigo-500"
+        >
+          Save
+        </button>
+      </div>
     </div>
   );
 }

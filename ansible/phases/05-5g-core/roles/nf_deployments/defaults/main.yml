@@ -7,6 +7,16 @@ namespace_5g: "5g"
 mongodb_image: "jacobbista/comnetsemu-5gc:latest"
 nf_image: "jacobbista/comnetsemu-5gc:latest"
 
+# MongoDB persistence
+# Use K3s default dynamic local-path provisioner so subscribers survive pod restarts.
+# See docs/architecture/subscriber-persistence.md
+mongodb_pvc_name: "mongodb-data"
+mongodb_pvc_size: "1Gi"
+mongodb_pvc_storage_class: "local-path"
+
+# Subscriber snapshot ConfigMap (see docs/architecture/subscriber-persistence.md)
+subscriber_snapshot_configmap: "subscribers-snapshot"
+
 # Network Functions definitions
 network_functions:
   # MongoDB (Database)

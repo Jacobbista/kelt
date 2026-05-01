@@ -17,5 +17,5 @@ upf:
       dev: ogstun
   metrics:
     server:
-      - address: {{ upf_edge_n4_ip }}
+      - address: 0.0.0.0
         port: 9090

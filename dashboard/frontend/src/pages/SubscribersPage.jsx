@@ -32,14 +32,14 @@ const EMPTY_SUB = {
         {
           name: "internet",
           type: 3,
-          ambr: { uplink: { value: 5, unit: 2 }, downlink: { value: 5, unit: 2 } },
-          qos: { index: 8, arp: { priority_level: 15, pre_emption_capability: 1, pre_emption_vulnerability: 1 } },
+          ambr: { uplink: { value: 1000, unit: 2 }, downlink: { value: 1000, unit: 2 } },
+          qos: { index: 9, arp: { priority_level: 15, pre_emption_capability: 1, pre_emption_vulnerability: 1 } },
           pcc_rule: [],
         },
       ],
     },
   ],
-  ambr: { uplink: { value: 1, unit: 2 }, downlink: { value: 1, unit: 2 } },
+  ambr: { uplink: { value: 1000, unit: 2 }, downlink: { value: 1000, unit: 2 } },
   schema_version: 1,
 };
 
@@ -51,7 +51,7 @@ function ambrStr(ambr) {
   return `${ambr.value} ${unit}`;
 }
 
-export default function SubscribersPage() {
+export default function SubscribersPage({ open5gsWebuiUrl = "" }) {
   const [subscribers, setSubscribers] = useState([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -128,7 +128,20 @@ export default function SubscribersPage() {
   return (
     <div>
       <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-lg font-semibold">Subscribers</h2>
+        <div className="flex items-center gap-3">
+          <h2 className="text-lg font-semibold">Subscribers</h2>
+          {open5gsWebuiUrl && (
+            <a
+              href={open5gsWebuiUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[11px] text-slate-500 hover:text-slate-300 transition-colors"
+              title="Open native Open5GS WebUI"
+            >
+              Open5GS WebUI ↗
+            </a>
+          )}
+        </div>
         <div className="flex gap-2">
           <label className="cursor-pointer rounded bg-slate-700 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-600 transition-colors">
             Import JSON
@@ -360,6 +373,9 @@ function SubscriberForm({ data, isNew, onSave, onCancel }) {
             <FormField label="SST" value={form.slice?.[0]?.sst ?? 1} onChange={(v) => setField("slice.0.sst", Number(v))} type="number" />
             <FormField label="SD" value={form.slice?.[0]?.sd || ""} onChange={(v) => setField("slice.0.sd", v)} mono />
             <FormField label="APN" value={form.slice?.[0]?.session?.[0]?.name || ""} onChange={(v) => setField("slice.0.session.0.name", v)} />
+            <FormField label="QCI" value={form.slice?.[0]?.session?.[0]?.qos?.index ?? 9} onChange={(v) => setField("slice.0.session.0.qos.index", Number(v))} type="number" />
+            <FormField label="Session UL (Mbps)" value={form.slice?.[0]?.session?.[0]?.ambr?.uplink?.value ?? 1000} onChange={(v) => setField("slice.0.session.0.ambr.uplink.value", Number(v))} type="number" />
+            <FormField label="Session DL (Mbps)" value={form.slice?.[0]?.session?.[0]?.ambr?.downlink?.value ?? 1000} onChange={(v) => setField("slice.0.session.0.ambr.downlink.value", Number(v))} type="number" />
           </div>
         </div>
       </div>

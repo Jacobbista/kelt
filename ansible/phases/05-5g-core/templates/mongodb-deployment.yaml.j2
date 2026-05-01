@@ -8,6 +8,14 @@ metadata:
     checksum/scripts: "{{ lookup('file', playbook_dir + '/scripts/mongo_webui_init.sh') | hash('sha256') }}"
 spec:
   replicas: 1
+  strategy:
+    # Recreate avoids two pods racing on the same PVC (ReadWriteOnce).
+    type: Recreate
+    # Explicit null so a strategic-merge patch strips any legacy
+    # rollingUpdate block left by a previous RollingUpdate deployment
+    # (otherwise the API rejects the patch with "Forbidden: may not be
+    # specified when strategy `type` is 'Recreate'").
+    rollingUpdate: null
   selector:
     matchLabels:
       app: mongodb
@@ -39,6 +47,8 @@ spec:
           value: "mongo"
         - name: HEALTH_CHECK_TYPE
           value: "mongo"
+        - name: SUBSCRIBER_SNAPSHOT_PATH
+          value: "/etc/subscribers-snapshot/snapshot.json"
         volumeMounts:
         - name: mongodb-data
           mountPath: /var/lib/mongodb
@@ -48,6 +58,9 @@ spec:
           mountPath: /open5gs/install/scripts
         - name: mongodb-logs
           mountPath: /open5gs/install/var/log/open5gs
+        - name: subscribers-snapshot
+          mountPath: /etc/subscribers-snapshot
+          readOnly: true
       volumes:
       - name: mongodb-config
         configMap:
@@ -58,5 +71,10 @@ spec:
       - name: mongodb-logs
         emptyDir: {}
       - name: mongodb-data
-        emptyDir: {}
-
+        persistentVolumeClaim:
+          claimName: {{ mongodb_pvc_name }}
+      - name: subscribers-snapshot
+        configMap:
+          # optional=true so the pod starts even before the subscriber_import role seeds the snapshot
+          name: {{ subscriber_snapshot_configmap }}
+          optional: true

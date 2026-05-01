@@ -8,6 +8,7 @@ import LogViewer from "./components/LogViewer";
 import PodTerminal from "./components/PodTerminal";
 import CorePage from "./pages/CorePage";
 import DiagnosticsPage from "./pages/DiagnosticsPage";
+import KubernetesPage from "./pages/KubernetesPage";
 import MetricsPage from "./pages/MetricsPage";
 import OverviewPage from "./pages/OverviewPage";
 import RanPage from "./pages/RanPage";
@@ -17,7 +18,7 @@ import UEMonitoringPage from "./pages/UEMonitoringPage";
 
 export default function App() {
   const [activePage, setActivePage] = useState("overview");
-  const [runtime, setRuntime] = useState({ mode: "unknown", runtime_source: "unknown" });
+  const [runtime, setRuntime] = useState({ mode: "unknown", runtime_source: "unknown", open5gs_webui_url: "" });
   const [logTarget, setLogTarget] = useState(null);
   const [termTarget, setTermTarget] = useState(null);
   const [expandNfType, setExpandNfType] = useState(null);
@@ -29,6 +30,7 @@ export default function App() {
         setRuntime({
           mode: (data.mode || "unknown").toLowerCase(),
           runtime_source: data.runtime_source || "unknown",
+          open5gs_webui_url: data.open5gs_webui_url || "",
         })
       )
       .catch(() => {});
@@ -71,12 +73,13 @@ export default function App() {
       {activePage === "overview" && (
         <OverviewPage onNavigateToNf={handleNavigateToNf} />
       )}
+      {activePage === "kubernetes" && <KubernetesPage />}
       {activePage === "core" && (
         <CorePage onOpenLogs={handleOpenLogs} onOpenTerminal={handleOpenTerminal} onOpenIperf3Logs={handleOpenIperf3Logs} expandNfType={expandNfType} />
       )}
       {activePage === "topology" && <TopologyPage />}
       {activePage === "ran" && <RanPage />}
-      {activePage === "subscribers" && <SubscribersPage />}
+      {activePage === "subscribers" && <SubscribersPage open5gsWebuiUrl={runtime.open5gs_webui_url} />}
       {activePage === "ue-monitoring" && <UEMonitoringPage />}
       {activePage === "diagnostics" && <DiagnosticsPage />}
       {activePage === "metrics" && <MetricsPage />}

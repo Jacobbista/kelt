@@ -120,6 +120,14 @@
     - (physical_ran_skip_bridge_check | default(false) | bool) or (physical_ran_bridge_available | default(false) | bool)
   run_once: true
 
+- name: Deploy MongoDB PersistentVolumeClaim
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    template: "{{ playbook_dir }}/templates/mongodb-pvc.yaml.j2"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
 - name: Deploy MongoDB
   kubernetes.core.k8s:
     state: present
@@ -127,6 +135,29 @@
     template: "{{ playbook_dir }}/templates/mongodb-deployment.yaml.j2"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
+  register: mongodb_deploy_result
+
+# kubernetes.core.k8s does not trigger a pod rollout when only a mounted
+# ConfigMap changes — the Deployment spec is unchanged so k8s sees no diff.
+# Patch restartedAt to force a rollout whenever Ansible detects the Deployment
+# or its ConfigMap was modified this run.
+- name: Rollout restart MongoDB if deployment or scripts changed
+  kubernetes.core.k8s:
+    state: patched
+    kubeconfig: "{{ kubeconfig_path }}"
+    api_version: apps/v1
+    kind: Deployment
+    name: mongodb
+    namespace: "{{ namespace_5g }}"
+    definition:
+      spec:
+        template:
+          metadata:
+            annotations:
+              kubectl.kubernetes.io/restartedAt: "{{ ansible_date_time.iso8601 }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: mongodb_deploy_result.changed
 
 - name: Deploy MongoDB Service
   kubernetes.core.k8s:

@@ -8,7 +8,6 @@ import json
 import logging
 import re
 import subprocess
-from datetime import datetime, timezone
 from typing import Any
 
 from app.config import settings
@@ -19,15 +18,109 @@ log = logging.getLogger(__name__)
 
 NS = "5g"
 
+
+def _parse_imsi(imsi: str) -> dict[str, Any]:
+    """Split an IMSI into MCC / MNC / MSIN.
+
+    Uses a 2-digit MNC by default (3GPP networks outside North America). No
+    operator-name lookup: in a private research testbed the PLMNs are synthetic
+    (typically 001-01 or 999-*) and a real-world MNC table would be misleading.
+    Consumers can use ``is_test_plmn`` to highlight reserved ranges.
+    """
+    if not imsi or len(imsi) < 6 or not imsi.isdigit():
+        return {"raw": imsi}
+    mcc = imsi[:3]
+    # MNC length depends on the PLMN; 3GPP allows 2 or 3 digits. Most networks
+    # use 2 digits, North America uses 3. We don't have a reliable MCC→MNC-len
+    # map, so we default to 2 but expose the raw 3-digit candidate as well.
+    mnc2 = imsi[3:5]
+    msin = imsi[5:]
+    is_test = mcc == "001" or mcc == "999"
+    return {
+        "imsi": imsi,
+        "mcc": mcc,
+        "mnc": mnc2,
+        "msin": msin,
+        "is_test_plmn": is_test,
+    }
+
+
+def _summarize_subscriber(doc: dict[str, Any]) -> dict[str, Any]:
+    """Project a subscriber document down to the fields the UE monitor shows.
+
+    Keeps the shape stable even if Open5GS extends the schema, and converts
+    AMBR to kbps so the frontend doesn't replicate the 3GPP unit table.
+    """
+    def _ambr_to_kbps(ambr: Any) -> dict[str, int] | None:
+        if not isinstance(ambr, dict):
+            return None
+        # Open5GS stores AMBR as {value, unit} where unit 1=Kbps, 2=Mbps,
+        # 3=Gbps, 4=Tbps (3GPP TS 29.274 "Bit Rate Unit").
+        unit_mult = {1: 1, 2: 1000, 3: 1_000_000, 4: 1_000_000_000}
+        out: dict[str, int] = {}
+        for direction in ("uplink", "downlink"):
+            d = ambr.get(direction) or {}
+            value = d.get("value")
+            unit = d.get("unit")
+            if isinstance(value, (int, float)) and unit in unit_mult:
+                out[direction] = int(value * unit_mult[unit])
+        return out or None
+
+    slices_out: list[dict[str, Any]] = []
+    for sl in doc.get("slice") or []:
+        if not isinstance(sl, dict):
+            continue
+        sessions = sl.get("session") or []
+        dnns: list[str] = []
+        if isinstance(sessions, list):
+            dnns = [s.get("name") for s in sessions if isinstance(s, dict) and s.get("name")]
+        slices_out.append({
+            "sst": sl.get("sst"),
+            "sd": sl.get("sd"),
+            "default": bool(sl.get("default_indicator")),
+            "dnns": dnns,
+        })
+
+    security = doc.get("security") or {}
+    auth_method = None
+    if security.get("opc"):
+        auth_method = "OPc"
+    elif security.get("op"):
+        auth_method = "OP"
+
+    return {
+        "configured": True,
+        "slices": slices_out,
+        "ue_ambr_kbps": _ambr_to_kbps(doc.get("ambr")),
+        "auth_method": auth_method,
+    }
+
 # ── AMF log patterns (Open5GS format with ANSI color codes) ────
+# Registration request: Open5GS usually prefixes with a SUCI or IMSI tag.
+# The identifier is optional — a UE may issue a request before the AMF has
+# allocated one, in which case only the action is logged.
 _RE_REG_REQ = re.compile(
-    r"Registration request",
+    r"(?:\[(?P<id>suci-[^\]]+|imsi-\d+)\][^\n]*?)?Registration request",
 )
 _RE_REG_OK = re.compile(
     r"\[imsi-(\d+)\].*Registration complete",
 )
+# Narrow match: only "Registration reject" (a real failure from the network).
+# Deregistration events are handled by dedicated patterns below and must NOT
+# collapse into registration_fail (see EVENT_FILTERS in the UI).
 _RE_REG_FAIL = re.compile(
-    r"\[imsi-(\d+)\].*(?:Registration reject|de-?registered)", re.I,
+    r"\[(?P<id>suci-[^\]]+|imsi-\d+)\].*Registration reject", re.I,
+)
+# Deregistration: UE-initiated or network-initiated.
+# Open5GS logs e.g.:
+#   "[imsi-001010000000001] UE-initiated De-registration"
+#   "[imsi-001010000000001] Deregistration request"
+#   "[imsi-001010000000001] Deregistration accept"
+_RE_DEREG_REQ = re.compile(
+    r"\[imsi-(\d+)\].*(?:UE-initiated de-?registration|Deregistration request)", re.I,
+)
+_RE_DEREG_OK = re.compile(
+    r"\[imsi-(\d+)\].*Deregistration accept", re.I,
 )
 _RE_GNB_ADDED = re.compile(
     r"gNB-N2 accepted\[([^\]]+)\]",
@@ -77,27 +170,110 @@ _RE_AMF_UE_REMOVED = re.compile(
 _RE_AMF_SESSION_REMOVED = re.compile(
     r"\[Removed\] Number of AMF-Sessions is now (\d+)",
 )
+# Open5GS emits per-IMSI release lines in several variants:
+#   "[imsi-XXX] UE Context Release Request"
+#   "[imsi-XXX] UE Context Release Complete"
+#   "[imsi-XXX] Release context reason:Radio Connection With UE Lost"
+#   "[imsi-XXX] UE-Context-Release-Complete"
+# Only the first two matched before, so releases triggered by the RAN dropping
+# the UE (signal loss, hard crash) were silently missed and the state machine
+# left the UE "registered" indefinitely. Widen the match.
 _RE_UE_CONTEXT_RELEASE = re.compile(
-    r"\[imsi-(\d+)\].*(?:UE Context Release|context released)", re.I,
+    r"\[imsi-(\d+)\].*"
+    r"(?:UE[- ]Context[- ]Release|context released|Release\s+context|ngap.*release)",
+    re.I,
 )
-_RE_AUTH_REJECT = re.compile(
-    r"\[imsi-(\d+)\].*(?:Authentication reject|authentication failure|auth[- ]?reject)", re.I,
+# "Release context reason:<cause>" carries a useful explanation we expose
+# verbatim in the UI when available.
+_RE_RELEASE_REASON = re.compile(
+    r"Release\s+context\s+reason\s*[:=]?\s*([^\n\r,]+)",
+    re.I,
 )
 
-# ── Auth failure reason mapping ───────────────────────────────
+# Matches auth reject/failure lines.
+# Open5GS uses SUCI (not IMSI) at auth phase: "[suci-0-001-01-0-0-0-MSIN]"
+# Three forms observed:
+#   "[suci-...] Authentication failure [20]"
+#   "Authentication failure(MAC failure)"   ← no identifier on this line
+#   "[suci-...] Authentication reject"
+# Also handles legacy [imsi-X] format as fallback.
+_RE_AUTH_REJECT = re.compile(
+    r"(?:\[(?P<id1>suci-[^\]]+|imsi-\d+)\][^\n]*\bauth(?:entication)?\b[^\n]*\b(?:reject|failure|fail)\b"
+    r"|\bauth(?:entication)?\b[^\n]*\b(?:reject|failure|fail)\b[^\n]*\[(?P<id2>suci-[^\]]+|imsi-\d+)\]"
+    r"|\bauth(?:entication)?\b[^\n]*\b(?:reject|failure|fail)\b)",  # no-identifier fallback
+    re.I,
+)
+
+# Open5GS logs cause code as "Authentication failure [20]" (no "cause" prefix).
+# Also handles the legacy "cause[20]" / "cause(20)" form.
+_RE_CAUSE_CODE = re.compile(
+    r"\bauth(?:entication)?\s+(?:reject|failure|fail)\s*\[(\d+)\]"
+    r"|\bcause[\[\(](\d+)[\]\)]",
+    re.I,
+)
+
+# SUCI structure: suci-{supi_type}-{mcc}-{mnc}-{ri}-{ps}-{hpki}-{scheme_out}
+# When protection scheme (ps) = 0 (null), scheme_out is the MSIN in plaintext.
+_RE_SUCI_PARTS = re.compile(
+    r"suci-(\d+)-(\d{3})-(\d{2,3})-(\d*)-(\d+)-(\d*)-([^\]\s,]+)"
+)
+
+
+def _suci_to_display(ue_id: str) -> str:
+    """Return reconstructed IMSI when SUCI uses null protection scheme, else raw tag."""
+    if not ue_id.startswith("suci-"):
+        # Already an imsi-XXXXXX tag — strip prefix
+        return ue_id.removeprefix("imsi-")
+    m = _RE_SUCI_PARTS.match(ue_id)
+    if m:
+        _, mcc, mnc, _, prot_scheme, _, scheme_out = m.groups()
+        if prot_scheme == "0":
+            return f"{mcc}{mnc}{scheme_out}"
+    return ue_id  # encrypted SUCI — return as-is
+
+# 5GMM cause codes → human-readable descriptions (3GPP TS 24.501 §9.11.3.2)
+_5GMM_CAUSES: dict[int, str] = {
+    3: "Illegal UE — IMSI not provisioned or subscriber JSON malformed",
+    6: "Illegal ME",
+    7: "5GS services not allowed",
+    11: "PLMN not allowed — MCC/MNC in subscriber does not match network",
+    12: "Tracking area not allowed",
+    15: "No suitable cells in tracking area",
+    20: "MAC failure — K/OPc mismatch (SIM key != database value)",
+    21: "Synch failure — SQN out of sync (delete and re-provision subscriber)",
+    22: "Congestion",
+    24: "Security mode rejected, unspecified",
+    26: "Non-5G authentication unacceptable",
+    27: "N1 mode not allowed",
+    31: "Redirection to EPC required",
+    71: "ngKSI already in use",
+    90: "Payload was not forwarded",
+}
+
+# Keyword fallbacks when no cause code is present
 _AUTH_FAIL_REASONS: dict[str, str] = {
-    "mac failure": "SIM auth failed (MAC mismatch — check K/OPc keys)",
-    "mac": "SIM auth failed (MAC mismatch — check K/OPc keys)",
-    "sqn failure": "Sequence number out of sync (re-provision subscriber)",
-    "sqn": "Sequence number out of sync (re-provision subscriber)",
-    "unknown": "Subscriber not found in database",
-    "not found": "Subscriber not found in database",
-    "serving network": "Serving network name mismatch",
+    "mac failure": "MAC failure — K/OPc mismatch (SIM key != database value)",
+    "mac": "MAC failure — K/OPc mismatch (SIM key != database value)",
+    "synch failure": "Synch failure — SQN out of sync (delete and re-provision subscriber)",
+    "sqn failure": "Synch failure — SQN out of sync (delete and re-provision subscriber)",
+    "sqn": "Synch failure — SQN out of sync (delete and re-provision subscriber)",
+    "unknown": "Subscriber not found in database — check IMSI and JSON format",
+    "not found": "Subscriber not found in database — check IMSI and JSON format",
+    "serving network": "Serving network name mismatch (PLMN/MCC-MNC)",
+    "illegal ue": "Illegal UE — subscriber not provisioned or JSON malformed",
 }
 
 
 def _extract_auth_reason(text: str) -> str:
-    """Map AMF log text to a human-readable auth failure explanation."""
+    """Return a human-readable auth failure explanation from AMF log text."""
+    m = _RE_CAUSE_CODE.search(text)
+    if m:
+        # _RE_CAUSE_CODE has two groups; only one will be non-None
+        raw = m.group(1) or m.group(2)
+        if raw:
+            code = int(raw)
+            desc = _5GMM_CAUSES.get(code, "unknown cause")
+            return f"5GMM Cause [{code}]: {desc}"
     lower = text.lower()
     for pattern, explanation in _AUTH_FAIL_REASONS.items():
         if pattern in lower:
@@ -105,37 +281,83 @@ def _extract_auth_reason(text: str) -> str:
     return "Check AMF logs for detailed cause"
 
 
+def _raw_excerpt(line: str) -> str:
+    """Return the log content after the K8s timestamp prefix (first token), capped at 350 chars."""
+    # K8s timestamp looks like "2024-01-01T00:00:00.000000000Z " — skip past the first space
+    idx = line.find(" ")
+    content = line[idx + 1:].strip() if idx != -1 else line.strip()
+    return content[:350]
+
+
 class UEService:
-    def __init__(self, k8s: K8sService, prom: PrometheusService) -> None:
+    def __init__(
+        self,
+        k8s: K8sService,
+        prom: PrometheusService,
+        mongo: Any | None = None,
+    ) -> None:
+        # mongo is typed as Any to avoid a hard import cycle with MongoService
+        # (the router wires the real instance); the enrichment is best-effort
+        # and silently degrades if Mongo is unavailable.
         self.k8s = k8s
         self.prom = prom
+        self.mongo = mongo
 
     # ── Prometheus summary ──────────────────────────────────────
 
-    async def get_summary(self) -> dict[str, Any]:
-        """Real-time gauge + counter snapshot from AMF/SMF Prometheus."""
-        queries = {
-            "connected_gnbs": "gnb",
-            "ran_ues": "ran_ue",
-            "amf_sessions": "amf_session",
-            "registered_subscribers": "fivegs_amffunction_rm_registeredsubnbr",
-            "reg_init_req": "fivegs_amffunction_rm_reginitreq",
-            "reg_init_succ": "fivegs_amffunction_rm_reginitsucc",
-            "reg_init_fail": "fivegs_amffunction_rm_reginitfail",
-            "reg_mobility_req": "fivegs_amffunction_rm_regmobreq",
-            "reg_mobility_succ": "fivegs_amffunction_rm_regmobsucc",
-            "reg_periodic_req": "fivegs_amffunction_rm_regperiodreq",
-            "auth_req": "fivegs_amffunction_amf_authreq",
-            "auth_reject": "fivegs_amffunction_amf_authreject",
-            "auth_fail": "fivegs_amffunction_amf_authfail",
-            "paging_req": "fivegs_amffunction_mm_paging5greq",
+    # Gauges: instantaneous state, queried as-is.
+    _SUMMARY_GAUGES: dict[str, str] = {
+        "connected_gnbs": "gnb",
+        "ran_ues": "ran_ue",
+        "amf_sessions": "amf_session",
+        "registered_subscribers": "fivegs_amffunction_rm_registeredsubnbr",
+    }
+    # Counters: monotonic totals since AMF start. Shown windowed via increase().
+    _SUMMARY_COUNTERS: dict[str, str] = {
+        "reg_init_req": "fivegs_amffunction_rm_reginitreq",
+        "reg_init_succ": "fivegs_amffunction_rm_reginitsucc",
+        "reg_init_fail": "fivegs_amffunction_rm_reginitfail",
+        "reg_mobility_req": "fivegs_amffunction_rm_regmobreq",
+        "reg_mobility_succ": "fivegs_amffunction_rm_regmobsucc",
+        "reg_periodic_req": "fivegs_amffunction_rm_regperiodreq",
+        "auth_req": "fivegs_amffunction_amf_authreq",
+        "auth_reject": "fivegs_amffunction_amf_authreject",
+        "auth_fail": "fivegs_amffunction_amf_authfail",
+        "paging_req": "fivegs_amffunction_mm_paging5greq",
+    }
+
+    async def get_summary(self, window_seconds: int = 300) -> dict[str, Any]:
+        """Snapshot of AMF/SMF Prometheus state.
+
+        Gauges are queried as instantaneous values. Counters are windowed using
+        PromQL ``increase(metric[Ns])`` so the UI displays activity over the
+        selected period instead of a monotonic total accumulated since AMF
+        process start (which grows indefinitely and is misleading for UX).
+        """
+        window_seconds = max(60, min(int(window_seconds or 300), 86400))
+        result: dict[str, Any] = {
+            "_window_seconds": window_seconds,
+            "_counter_mode": "increase",
         }
-        result: dict[str, float] = {}
-        for key, q in queries.items():
+        # Gauges (instant)
+        for key, metric in self._SUMMARY_GAUGES.items():
             try:
-                data = await self.prom.instant_query(q)
+                data = await self.prom.instant_query(metric)
                 vec = data.get("result", [])
                 result[key] = float(vec[0]["value"][1]) if vec else 0
+            except Exception:
+                result[key] = 0
+        # Counters (windowed)
+        for key, metric in self._SUMMARY_COUNTERS.items():
+            try:
+                # sum() collapses multiple series (e.g. one per AMF instance)
+                # so the tile reflects cluster-wide activity.
+                query = f"sum(increase({metric}[{window_seconds}s]))"
+                data = await self.prom.instant_query(query)
+                vec = data.get("result", [])
+                raw = float(vec[0]["value"][1]) if vec else 0.0
+                # increase() returns float; round to int for counters.
+                result[key] = int(round(raw)) if raw == raw else 0
             except Exception:
                 result[key] = 0
         return result
@@ -144,13 +366,14 @@ class UEService:
 
     def get_events(self, minutes: int = 10, tail: int = 500) -> list[dict[str, Any]]:
         """Parse recent AMF + SMF logs for UE-related events."""
+        since = minutes * 60
         events: list[dict[str, Any]] = []
-        events.extend(self._parse_amf_logs(tail))
-        events.extend(self._parse_smf_logs(tail))
+        events.extend(self._parse_amf_logs(since_seconds=since))
+        events.extend(self._parse_smf_logs(since_seconds=since))
         events.sort(key=lambda e: e.get("ts", ""), reverse=True)
         return _deduplicate_events(events)
 
-    def _read_deploy_logs(self, deploy: str, tail: int = 500) -> str:
+    def _read_deploy_logs(self, deploy: str, tail: int = 500, since_seconds: int | None = None) -> str:
         try:
             pods = self.k8s.core.list_namespaced_pod(
                 namespace=NS, label_selector=f"app={deploy}",
@@ -158,19 +381,23 @@ class UEService:
             if not pods.items:
                 return ""
             pod = pods.items[0]
-            return self.k8s.core.read_namespaced_pod_log(
+            kwargs: dict = dict(
                 name=pod.metadata.name,
                 namespace=NS,
                 container=deploy,
-                tail_lines=tail,
                 timestamps=True,
-            ) or ""
+            )
+            if since_seconds is not None:
+                kwargs["since_seconds"] = since_seconds
+            else:
+                kwargs["tail_lines"] = tail
+            return self.k8s.core.read_namespaced_pod_log(**kwargs) or ""
         except Exception as exc:
             log.debug("Failed to read %s logs: %s", deploy, exc)
             return ""
 
-    def _parse_amf_logs(self, tail: int) -> list[dict[str, Any]]:
-        raw = self._read_deploy_logs("amf", tail)
+    def _parse_amf_logs(self, tail: int = 500, since_seconds: int | None = None) -> list[dict[str, Any]]:
+        raw = self._read_deploy_logs("amf", tail=tail, since_seconds=since_seconds)
         events: list[dict[str, Any]] = []
         for line in raw.splitlines():
             ts = _extract_ts(line)
@@ -192,20 +419,45 @@ class UEService:
 
             m = _RE_REG_FAIL.search(text)
             if m:
-                detail = f"UE {m.group(1)} registration failed"
-                reason = "Network rejected registration — check subscriber provisioning"
-                if "de-register" in text.lower() or "deregister" in text.lower():
-                    detail = f"UE {m.group(1)} de-registered"
-                    reason = "UE initiated deregistration (normal shutdown or SIM removal)"
-                events.append({"ts": ts, "type": "registration_fail", "source": "amf",
-                               "severity": "warning", "imsi": m.group(1),
-                               "detail": detail, "reason": reason})
+                raw_id = m.group("id") or ""
+                imsi = _suci_to_display(raw_id) if raw_id else ""
+                events.append({
+                    "ts": ts, "type": "registration_fail", "source": "amf",
+                    "severity": "warning", "imsi": imsi,
+                    "detail": f"UE {imsi} registration rejected" if imsi else "UE registration rejected",
+                    "reason": "Network rejected Registration Request — check subscriber provisioning",
+                })
                 continue
 
-            if _RE_REG_REQ.search(text):
-                events.append({"ts": ts, "type": "registration_req", "source": "amf",
-                               "severity": "info",
-                               "detail": "Registration request received"})
+            m = _RE_DEREG_OK.search(text)
+            if m:
+                events.append({
+                    "ts": ts, "type": "deregistration_ok", "source": "amf",
+                    "severity": "info", "imsi": m.group(1),
+                    "detail": f"UE {m.group(1)} deregistration complete",
+                    "reason": "UE has been removed from AMF context (normal shutdown, SIM pulled, or network release)",
+                })
+                continue
+
+            m = _RE_DEREG_REQ.search(text)
+            if m:
+                events.append({
+                    "ts": ts, "type": "deregistration_req", "source": "amf",
+                    "severity": "info", "imsi": m.group(1),
+                    "detail": f"UE {m.group(1)} deregistration requested",
+                    "reason": "UE is disconnecting (power-off, airplane mode, or network-initiated release)",
+                })
+                continue
+
+            m = _RE_REG_REQ.search(text)
+            if m:
+                raw_id = m.group("id") or ""
+                imsi = _suci_to_display(raw_id) if raw_id else ""
+                events.append({
+                    "ts": ts, "type": "registration_req", "source": "amf",
+                    "severity": "info", "imsi": imsi,
+                    "detail": f"Registration request from {imsi}" if imsi else "Registration request received",
+                })
                 continue
 
             m = _RE_GNB_UE_ADDED.search(text)
@@ -263,25 +515,41 @@ class UEService:
 
             m = _RE_UE_CONTEXT_RELEASE.search(text)
             if m:
+                reason = "UE detached from network — power-off, signal loss, or idle timeout"
+                reason_m = _RE_RELEASE_REASON.search(text)
+                if reason_m:
+                    # Surface Open5GS's own cause string (e.g. "Radio Connection With UE Lost")
+                    reason = f"gNB reported: {reason_m.group(1).strip()}"
                 events.append({"ts": ts, "type": "ue_context_release", "source": "amf",
                                "severity": "warning", "imsi": m.group(1),
                                "detail": f"UE {m.group(1)} context released (detached)",
-                               "reason": "UE detached from network — power-off, signal loss, or idle timeout"})
+                               "reason": reason})
                 continue
 
             m = _RE_AUTH_REJECT.search(text)
             if m:
+                raw_id = m.group("id1") or m.group("id2") or ""
+                imsi = _suci_to_display(raw_id) if raw_id else ""
                 reason = _extract_auth_reason(text)
-                events.append({"ts": ts, "type": "auth_reject", "source": "amf",
-                               "severity": "error", "imsi": m.group(1),
-                               "detail": f"Authentication rejected for {m.group(1)}",
-                               "reason": reason})
+                cause_m = _RE_CAUSE_CODE.search(text)
+                ev: dict[str, Any] = {
+                    "ts": ts, "type": "auth_reject", "source": "amf",
+                    "severity": "error", "imsi": imsi,
+                    "detail": f"Authentication rejected for {imsi}" if imsi else "Authentication rejected",
+                    "reason": reason,
+                    "raw_log": _raw_excerpt(text),
+                }
+                if cause_m:
+                    raw_cause = cause_m.group(1) or cause_m.group(2)
+                    if raw_cause:
+                        ev["cause_code"] = int(raw_cause)
+                events.append(ev)
                 continue
 
         return events
 
-    def _parse_smf_logs(self, tail: int) -> list[dict[str, Any]]:
-        raw = self._read_deploy_logs("smf", tail)
+    def _parse_smf_logs(self, tail: int = 500, since_seconds: int | None = None) -> list[dict[str, Any]]:
+        raw = self._read_deploy_logs("smf", tail=tail, since_seconds=since_seconds)
         events: list[dict[str, Any]] = []
         for line in raw.splitlines():
             ts = _extract_ts(line)
@@ -343,8 +611,11 @@ class UEService:
         chronologically so that deregistration correctly clears prior sessions.
         Cross-checks with Prometheus ran_ue gauge to detect stale entries.
         """
-        # Merge AMF + SMF events and sort chronologically
-        all_events = self._parse_amf_logs(tail=1000) + self._parse_smf_logs(tail=1000)
+        # Merge AMF + SMF events over a 4-hour window to catch long-connected UEs
+        all_events = (
+            self._parse_amf_logs(since_seconds=14400)
+            + self._parse_smf_logs(since_seconds=14400)
+        )
         all_events.sort(key=lambda e: e.get("ts", ""))
 
         registered: dict[str, dict[str, Any]] = {}
@@ -362,11 +633,26 @@ class UEService:
                 entry["sessions"] = []
 
             elif ev["type"] == "registration_fail":
-                entry = registered.setdefault(imsi, {"imsi": imsi, "status": "deregistered",
+                # Network rejected the Registration Request (cause code in log).
+                # Treat as "failed" not "deregistered": the UE never made it.
+                entry = registered.setdefault(imsi, {"imsi": imsi, "status": "failed",
                                                       "last_seen": ev["ts"], "sessions": []})
-                entry["status"] = "deregistered"
+                entry["status"] = "failed"
                 entry["last_seen"] = ev["ts"]
                 entry["sessions"] = []
+
+            elif ev["type"] in ("deregistration_req", "deregistration_ok"):
+                # UE is detaching. deregistration_ok is the terminal transition;
+                # deregistration_req is intermediate (state becomes "deregistering"
+                # until the accept arrives or the context release fires).
+                terminal = ev["type"] == "deregistration_ok"
+                new_status = "deregistered" if terminal else "deregistering"
+                entry = registered.setdefault(imsi, {"imsi": imsi, "status": new_status,
+                                                      "last_seen": ev["ts"], "sessions": []})
+                entry["status"] = new_status
+                entry["last_seen"] = ev["ts"]
+                if terminal:
+                    entry["sessions"] = []
 
             elif ev["type"] == "ue_context_release":
                 entry = registered.setdefault(imsi, {"imsi": imsi, "status": "released",
@@ -379,9 +665,18 @@ class UEService:
                 entry = registered.setdefault(imsi, {"imsi": imsi, "status": "registered",
                                                       "last_seen": ev["ts"], "sessions": []})
                 ue_ip, dnn = ev.get("ue_ip", ""), ev.get("dnn", "")
-                # Avoid duplicate session entries (same IP+DNN)
-                if not any(s.get("ue_ip") == ue_ip and s.get("dnn") == dnn for s in entry["sessions"]):
-                    entry["sessions"].append({"dnn": dnn, "ue_ip": ue_ip, "ts": ev["ts"]})
+                # For a given DNN, the latest IP always replaces the previous one.
+                # This prevents stale IPs from old registration cycles accumulating
+                # alongside current sessions when the 4-hour log window spans multiple
+                # registration cycles for the same UE.
+                existing_idx = next(
+                    (i for i, s in enumerate(entry["sessions"]) if s.get("dnn") == dnn), -1
+                )
+                session_entry = {"dnn": dnn, "ue_ip": ue_ip, "ts": ev["ts"]}
+                if existing_idx >= 0:
+                    entry["sessions"][existing_idx] = session_entry
+                else:
+                    entry["sessions"].append(session_entry)
                 entry["last_seen"] = ev["ts"]
 
             elif ev["type"] == "pdu_session_rel" and ev.get("ue_ip"):
@@ -400,37 +695,112 @@ class UEService:
 
         # Safety net: force-clear sessions for terminal UEs
         for u in registered.values():
-            if u["status"] in ("deregistered", "released"):
+            if u["status"] in ("deregistered", "released", "failed"):
                 u["sessions"] = []
 
-        # Filter stale UEs: drop if last_seen older than 10 minutes
-        now = datetime.now(timezone.utc)
-        max_age_sec = 10 * 60
-        filtered = []
-        for u in registered.values():
-            try:
-                ts = u.get("last_seen", "")
-                if not ts:
-                    continue
-                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                if (now - dt).total_seconds() <= max_age_sec:
-                    filtered.append(u)
-            except Exception:
-                continue  # skip entries with unparseable timestamps
+        active = list(registered.values())
 
-        # Cross-check with Prometheus: if ran_ue=0 but we have "registered" UEs, mark stale
+        # Attach a default status_reason for terminal/transitional states so
+        # the UI can always show a human-readable tooltip on the status badge.
+        _DEFAULT_REASONS = {
+            "released": "gNB-N2 context released (idle timeout, signal loss, or power-off)",
+            "deregistered": "UE completed Deregistration",
+            "deregistering": "UE is detaching (Deregistration Request received)",
+            "failed": "Registration Request rejected by network",
+        }
+        for u in active:
+            if u["status"] in _DEFAULT_REASONS and "status_reason" not in u:
+                u["status_reason"] = _DEFAULT_REASONS[u["status"]]
+
+        # ── Reconcile with Prometheus ran_ue gauge ──────────────────
+        # The AMF keeps context for a UE until ue_context_release is fully
+        # processed. Hard UE crashes (reboot loops, SIM yanked without
+        # deregistration) leave the AMF with an orphan context while the gNB
+        # has already dropped the UE. In that state:
+        #   - log-based list → N UEs still "registered"
+        #   - ran_ue gauge   → fewer UEs actually on-air
+        # Trust the gauge: mark the N-oldest registered UEs as stale with an
+        # explicit reason. This is the source of truth for "who's live right
+        # now" and makes the inconsistency visible in the UI.
+        prom_ran_ue: int | None = None
+        prom_amf_session: int | None = None
         try:
             data = await self.prom.instant_query("ran_ue")
             vec = data.get("result", [])
-            prom_count = int(float(vec[0]["value"][1])) if vec else 0
-            if prom_count == 0:
-                for u in filtered:
-                    if u["status"] == "registered":
-                        u["status"] = "stale"
+            prom_ran_ue = int(float(vec[0]["value"][1])) if vec else 0
         except Exception:
-            pass
+            prom_ran_ue = None
+        try:
+            data = await self.prom.instant_query("amf_session")
+            vec = data.get("result", [])
+            prom_amf_session = int(float(vec[0]["value"][1])) if vec else 0
+        except Exception:
+            prom_amf_session = None
 
-        return sorted(filtered, key=lambda u: u.get("last_seen", ""), reverse=True)
+        if prom_ran_ue is not None:
+            registered_ues = [u for u in active if u["status"] == "registered"]
+            if len(registered_ues) > prom_ran_ue:
+                # Oldest last_seen first — those are the most likely to be
+                # the ones the RAN has dropped.
+                registered_ues.sort(key=lambda u: u.get("last_seen", ""))
+                excess = len(registered_ues) - prom_ran_ue
+                reason = (
+                    f"AMF retains context but gNB reports {prom_ran_ue} UE"
+                    f"{'s' if prom_ran_ue != 1 else ''} on-air "
+                    f"({len(registered_ues)} in log window). "
+                    "Likely hard crash or radio drop without Deregistration."
+                )
+                for u in registered_ues[:excess]:
+                    u["status"] = "stale"
+                    u["status_reason"] = reason
+                    # Sessions belong to an orphaned AMF context — clear them so
+                    # the UI doesn't claim the UE has live PDU sessions.
+                    u["sessions"] = []
+
+        # ── Enrichment (best-effort, never blocks the UE list) ──────
+        # 1. IMSI decoding — always cheap, no external call.
+        for u in active:
+            u["plmn"] = _parse_imsi(u.get("imsi", ""))
+
+        # 2. Subscriber config from MongoDB (slice/AMBR/DNNs/auth method).
+        # 3. Dashboard-only personalizations (nickname, icon).
+        if self.mongo is not None:
+            try:
+                personalizations = self.mongo.get_ue_personalizations_map()
+            except Exception:
+                personalizations = {}
+            for u in active:
+                imsi = u.get("imsi")
+                if not imsi:
+                    continue
+                try:
+                    doc = self.mongo.get_subscriber(imsi)
+                except Exception:
+                    doc = None
+                u["subscription"] = (
+                    _summarize_subscriber(doc) if doc else {"configured": False}
+                )
+                pers = personalizations.get(imsi)
+                if pers:
+                    u["personalization"] = {
+                        "nickname": pers.get("nickname"),
+                        "icon": pers.get("icon"),
+                    }
+
+        # 4. Attach gNB IP only when exactly one gNB is currently connected —
+        #    otherwise the mapping IMSI→gNB is ambiguous from logs alone and
+        #    showing a best-guess value would be misleading.
+        recent_gnb_ips: list[str] = []
+        for ev in all_events:
+            if ev.get("type") == "gnb_connect":
+                ip = _normalize_gnb_ip(ev.get("gnb_ip", ""))
+                if ip and ip not in recent_gnb_ips:
+                    recent_gnb_ips.append(ip)
+        if len(recent_gnb_ips) == 1:
+            for u in active:
+                u["gnb_ip"] = recent_gnb_ips[0]
+
+        return sorted(active, key=lambda u: u.get("last_seen", ""), reverse=True)
 
     # ── Open5GS infoAPI: connected gNBs (gnb_id, plmn, peer) ──────
 
@@ -529,24 +899,81 @@ def _normalize_gnb_ip(ip: str) -> str:
     return ip
 
 
-def _deduplicate_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Remove duplicate events (events are sorted newest-first, so first seen wins).
+# Event types that tend to repeat in rapid bursts during SIM retry loops or
+# AMF reconnect storms. They get collapsed into a single feed row with a
+# multiplicity counter instead of flooding the UI.
+_BURST_EVENT_TYPES = frozenset({
+    "registration_req",
+    "registration_fail",
+    "auth_reject",
+    "deregistration_req",
+    "deregistration_ok",
+    # Crashing UEs re-request PDU sessions in tight loops. Collapse those too.
+    "pdu_request",
+    "pdu_session_est",
+})
+_BURST_BUCKET_SECONDS = 30
 
-    Strategy per type:
-    - gnb_connect: keep latest per IP
-    - registration_ok/fail, auth_reject, ue_context_release: keep latest per IMSI
-    - ue_count_change, session_count_change: keep latest per (source, type)
-    - pdu_session_est: keep latest per (imsi, ue_ip, dnn)
-    - Others: keep all
+
+def _ts_bucket(ts: str, size: int) -> str:
+    """Truncate an RFC3339 timestamp to a bucket of ``size`` seconds.
+
+    Returns an empty string when ``ts`` is malformed, which disables bucketing
+    for that event (so it is never accidentally collapsed).
     """
-    seen: dict[str, set[str]] = {}
+    if not ts or len(ts) < 19:
+        return ""
+    try:
+        from datetime import datetime, timezone
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        epoch = int(dt.replace(tzinfo=timezone.utc).timestamp() if dt.tzinfo is None else dt.timestamp())
+        return str((epoch // size) * size)
+    except (ValueError, TypeError):
+        return ""
+
+
+def _deduplicate_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse noisy repeats while preserving single-shot events.
+
+    Burst types (registration retries, auth rejects, deregistration) are
+    bucketed by ``(type, imsi, 30s_bucket)`` and merged: the first occurrence
+    carries ``multiplicity``, ``first_ts`` and ``last_ts`` so the UI can render
+    a single row with a ``×N`` badge instead of N separate rows.
+
+    Non-burst types fall back to the previous "keep-latest per key" strategy
+    so recurring state-snapshots (gNB connected, UE count changes) don't spam
+    the feed either. Events are expected newest-first.
+    """
+    latest_keys: dict[str, set[str]] = {}
+    burst: dict[tuple[str, str, str], dict[str, Any]] = {}
     out: list[dict[str, Any]] = []
+
     for ev in events:
         etype = ev.get("type", "")
 
+        if etype in _BURST_EVENT_TYPES:
+            imsi = ev.get("imsi", "")
+            bucket = _ts_bucket(ev.get("ts", ""), _BURST_BUCKET_SECONDS)
+            bkey = (etype, imsi, bucket)
+            if bucket and bkey in burst:
+                agg = burst[bkey]
+                agg["multiplicity"] = agg.get("multiplicity", 1) + 1
+                ev_ts = ev.get("ts", "")
+                if ev_ts and ev_ts < agg.get("first_ts", agg.get("ts", "")):
+                    agg["first_ts"] = ev_ts
+                continue
+            enriched = dict(ev)
+            enriched["multiplicity"] = 1
+            enriched["first_ts"] = ev.get("ts", "")
+            enriched["last_ts"] = ev.get("ts", "")
+            if bucket:
+                burst[bkey] = enriched
+            out.append(enriched)
+            continue
+
         if etype == "gnb_connect":
             key = _normalize_gnb_ip(ev.get("gnb_ip", ""))
-        elif etype in ("registration_ok", "registration_fail", "auth_reject", "ue_context_release"):
+        elif etype in ("registration_ok", "ue_context_release"):
             key = ev.get("imsi", "")
         elif etype in ("ue_count_change", "session_count_change"):
             key = ev.get("source", "")
@@ -556,11 +983,11 @@ def _deduplicate_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             out.append(ev)
             continue
 
-        bucket = seen.setdefault(etype, set())
-        if key and key in bucket:
+        seen = latest_keys.setdefault(etype, set())
+        if key and key in seen:
             continue
         if key:
-            bucket.add(key)
+            seen.add(key)
         out.append(ev)
 
     return out

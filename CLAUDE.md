@@ -78,6 +78,27 @@ replicas: 0
 
 Use `# ====` section markers for major blocks in long task files.
 
+### Idempotency
+
+Every task must be safe to run multiple times without side effects. Use modules that are idempotent by design:
+
+| Need | Idempotent module |
+|------|-------------------|
+| Write a file | `copy`, `template` |
+| Insert a block into an existing file | `blockinfile` (uses `marker:` to identify and replace) |
+| Create/update a directory | `file` with `state: directory` |
+| Install packages | `apt` with `state: present` |
+| Manage systemd units | `systemd` |
+| Apply Kubernetes manifests | `kubernetes.core.k8s` |
+
+When `command` or `shell` is unavoidable, guard it with one of:
+- `creates:` — skip if a file already exists
+- `changed_when: false` — mark as never changed (read-only probes)
+- `changed_when: <condition>` — explicit change detection
+- `when:` — skip entirely if precondition is not met
+
+Never use `shell` to write files, install packages, or manage services when a dedicated module exists.
+
 ### Templates
 
 Jinja2 templates are named `<component>-<resource-type>.yaml.j2` and live in `roles/<role>/templates/`. Use Jinja2 block comments (`{# ... #}`) to explain non-obvious template logic. Reference variables from `all.yml` or role defaults — do not hardcode values in templates.
@@ -152,8 +173,7 @@ sudo k3s kubectl get pods -n 5g
 
 # Re-run a specific phase
 vagrant ssh ansible
-cd ~/ansible-work
-ansible-playbook phases/05-5g-core/playbook.yml -i inventory.ini
+ansible-playbook ~/ansible-ro/phases/05-5g-core/playbook.yml -i ~/ansible-ro/inventory.ini
 
 # Run tests
 cd tests

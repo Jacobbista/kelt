@@ -30,10 +30,18 @@ def _is_valid_hex(s: str, length: int = 32) -> bool:
         return False
 
 
+class SubscriberSchemaError(ValueError):
+    """Raised when a subscriber payload contains invalid security key values."""
+
+
 def normalize_subscriber(payload: dict[str, Any]) -> dict[str, Any]:
     """
     Merge payload with Open5GS defaults. Ensures create/update produce
     documents compatible with subscriber_import schema.
+
+    Raises SubscriberSchemaError if K, OP, or OPc values are present but malformed,
+    rather than silently discarding them (which would produce a subscriber that fails
+    authentication with no visible error).
     """
     payload = dict(payload)
     payload.pop("_id", None)
@@ -50,18 +58,35 @@ def normalize_subscriber(payload: dict[str, Any]) -> dict[str, Any]:
     if not security.get("amf"):
         security["amf"] = DEFAULT_AMF
 
-    # Normalize empty strings to None
+    # Validate K (always required — 32 hex chars)
+    k = security.get("k")
+    if k is not None:
+        k = str(k).strip()
+        if k and not _is_valid_hex(k, 32):
+            raise SubscriberSchemaError(
+                f"Invalid K value '{k[:8]}…': must be a 32-character hex string (128-bit key)"
+            )
+
+    # Validate OP / OPc — reject malformed values instead of silently dropping
     op = security.get("op")
     if op == "" or (isinstance(op, str) and not op.strip()):
         op = None
-    elif op is not None and not _is_valid_hex(str(op)):
-        op = None
+    elif op is not None:
+        op = str(op).strip()
+        if not _is_valid_hex(op, 32):
+            raise SubscriberSchemaError(
+                f"Invalid OP value '{op[:8]}…': must be a 32-character hex string"
+            )
 
     opc = security.get("opc")
     if opc == "" or (isinstance(opc, str) and not opc.strip()):
         opc = None
-    elif opc is not None and not _is_valid_hex(str(opc)):
-        opc = None
+    elif opc is not None:
+        opc = str(opc).strip()
+        if not _is_valid_hex(opc, 32):
+            raise SubscriberSchemaError(
+                f"Invalid OPc value '{opc[:8]}…': must be a 32-character hex string"
+            )
 
     # Enforce mutual exclusivity: if OPc is provided, OP must be null; if OP is provided, OPc must be null.
     if opc is not None:
@@ -69,7 +94,7 @@ def normalize_subscriber(payload: dict[str, Any]) -> dict[str, Any]:
     elif op is not None:
         opc = None
 
-    # op: default if opc is null and op not provided
+    # Fall back to default OP only when neither OP nor OPc was given
     if opc is None and not op:
         op = DEFAULT_OP
 

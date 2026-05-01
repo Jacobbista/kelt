@@ -2,9 +2,9 @@
 
 Known documentation gaps and open implementation issues. Update this file when a gap is closed or a new one is identified.
 
-**Status values:** `Missing` — does not exist · `Stub` — exists but incomplete · `Known Issue` — confirmed bug or limitation · `Planned` — acknowledged, work not yet started
+**Relationship with [roadmap.md](roadmap.md):** The roadmap sorts work by horizon (near term versus longer directions) and records out-of-scope decisions. This file assigns a discrete **status** and implementation or documentation notes for each tracked gap. The same topic often appears in both; the roadmap states **priority**, this file owns **current state**.
 
----
+**Status values:** `Missing` — does not exist · `Stub` — exists but incomplete · `Known Issue` — confirmed bug or limitation · `Planned` — acknowledged, work not yet started
 
 ## Documentation
 
@@ -23,5 +23,6 @@ Known documentation gaps and open implementation issues. Update this file when a
 | Area | Status | Notes |
 |------|--------|-------|
 | UPF-Edge CNI route conflict | Known Issue | UPF-Edge pod gets stuck in `ContainerCreating` due to a CNI route conflict on the edge node. Currently mitigated by setting `replicas: 0`. Root cause documented in [known-issues/upf-edge-cni-route-conflict.md](known-issues/upf-edge-cni-route-conflict.md). |
+| UERANSIM automated integration | Planned | Simulated-RAN automation on the edge is not actively maintained; integration work is paused. Physical gNB paths are the primary supported RAN mode until this resumes. Listed under **Near Term** in [roadmap.md](roadmap.md). |
 | CI pipeline | Missing | No automated validation of the deployment. Tests run locally only via `make` targets in `tests/`. |
 | Physical RAN hot-swap | Planned | Switching between physical and simulated RAN while the core is running is partially supported via the dashboard but not validated end-to-end. |

@@ -2,6 +2,7 @@ import time
 
 from fastapi import APIRouter, Depends, Query
 
+from app.services.k8s_service import K8sService, get_k8s_service
 from app.services.prometheus_service import PrometheusService, get_prometheus_service
 
 router = APIRouter(prefix="/api/v1/metrics", tags=["metrics"])
@@ -20,11 +21,13 @@ async def node_resources(
 @router.get("/nf")
 async def nf_resources(
     prom: PrometheusService = Depends(get_prometheus_service),
+    k8s: K8sService = Depends(get_k8s_service),
 ) -> dict:
-    cpu = await prom.nf_cpu()
-    mem = await prom.nf_memory()
+    # CPU and memory come from the Kubernetes Metrics API (same source as
+    # kubectl top pods) — does not require cAdvisor in Prometheus.
+    pod_metrics = k8s.get_pod_resource_metrics("5g")
     restarts = await prom.nf_restarts()
-    return {"cpu": cpu, "memory": mem, "restarts": restarts}
+    return {"cpu": pod_metrics["cpu"], "memory": pod_metrics["memory"], "restarts": restarts}
 
 
 @router.get("/overview")
