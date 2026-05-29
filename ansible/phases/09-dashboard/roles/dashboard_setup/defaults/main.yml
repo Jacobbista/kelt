@@ -1,0 +1,80 @@
+---
+# Read from DASHBOARD_MODE so `ansible-playbook` reruns honor the same value
+# the testbed-config tool writes to .testbed.env without needing -e.
+dashboard_mode: "{{ lookup('ansible.builtin.env', 'DASHBOARD_MODE') | default('prod', true) }}"
+dashboard_source_dir: /vagrant/dashboard
+dashboard_dev_source_dir: /vagrant/dashboard
+dashboard_work_dir: /home/vagrant/dashboard-work
+dashboard_runtime_dir: "{{ dashboard_work_dir if dashboard_mode == 'prod' else dashboard_dev_source_dir }}"
+dashboard_backend_dir: "{{ dashboard_runtime_dir }}/backend"
+dashboard_frontend_dir: "{{ dashboard_runtime_dir }}/frontend"
+
+dashboard_backend_venv: /home/vagrant/.venvs/dashboard-backend
+dashboard_bind_host: "{{ ansible_host | default('192.168.56.13') }}"
+dashboard_backend_port: 31880
+dashboard_frontend_port: 31573
+dashboard_service_user: vagrant
+dashboard_backend_service_name: dashboard-backend
+dashboard_frontend_service_name: dashboard-frontend
+dashboard_admin_token: change-me
+dashboard_allow_configmap_write: true
+
+# CORS origin enforced on direct NodePort access. Single-origin via Vite proxy
+# is the primary path so this only matters when LAN clients hit the backend
+# port directly. Comma-separated list; "*" keeps the wildcard.
+dashboard_cors_origin: "{{ lookup('ansible.builtin.env', 'DASHBOARD_CORS_ORIGIN') | default('http://localhost:5173', true) }}"
+
+dashboard_install_nodejs: true
+
+# ── Auth (Keycloak / OIDC) ─────────────────────────────────────────────
+# Single auth switch for both frontend and backend:
+# - true  => OIDC login enabled, backend JWT validation enabled
+# - false => OIDC login disabled, backend auth bypass enabled (break-glass)
+dashboard_auth_enabled: "{{ lookup('ansible.builtin.env', 'DASHBOARD_AUTH_ENABLED') | default('true', true) }}"
+# Keycloak URL reachable from the backend pod for JWKS / issuer discovery.
+# Defaults to the worker NodePort; override when Keycloak is on a separate host.
+dashboard_keycloak_url: "{{ lookup('ansible.builtin.env', 'DASHBOARD_KEYCLOAK_URL') | default('http://' ~ hostvars[groups['workers'][0]]['ansible_host'] ~ ':31910', true) }}"
+dashboard_keycloak_realm: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_REALM') | default('5g-testbed', true) }}"
+dashboard_keycloak_accepted_clients: "dashboard,dashboard-readonly"
+# Internal target used by Vite dev/preview proxy for /auth/* Keycloak requests.
+dashboard_keycloak_proxy_target: "{{ lookup('ansible.builtin.env', 'DASHBOARD_KEYCLOAK_PROXY_TARGET') | default(dashboard_keycloak_url, true) }}"
+# Path prefix when Keycloak is served behind a reverse proxy (for example
+# "/auth" if the dashboard frontend proxies /auth/* to Keycloak). Empty for
+# root-path deploys.
+dashboard_keycloak_path_prefix: "{{ lookup('ansible.builtin.env', 'DASHBOARD_KEYCLOAK_PATH_PREFIX') | default(lookup('ansible.builtin.env', 'KEYCLOAK_PATH_PREFIX') | default('', true), true) }}"
+
+# Frontend OIDC settings. The browser must reach Keycloak through whichever
+# URL the user types in their address bar, so this URL is *external*
+# (tunnel / LAN / subdomain), distinct from the backend-internal URL above.
+# Authority is the realm root (Keycloak base + optional path prefix + /realms/<realm>).
+dashboard_keycloak_external_url: "{{ lookup('ansible.builtin.env', 'DASHBOARD_KEYCLOAK_EXTERNAL_URL') | default(dashboard_keycloak_url, true) }}"
+dashboard_keycloak_client_id: "{{ lookup('ansible.builtin.env', 'DASHBOARD_KEYCLOAK_CLIENT_ID') | default('dashboard', true) }}"
+
+# ── Frontend target derived from dashboard_mode ─────────────────────────
+# Binary model:
+#   dashboard_mode=dev  → Vite dev server (HMR) running on the ansible VM
+#                         via systemd; cluster pod is torn down.
+#   dashboard_mode=prod → nginx pod in the cluster pulling a prebuilt
+#                         image from GHCR; ansible VM Vite systemd is
+#                         stopped and disabled.
+# Backend uvicorn always runs on the ansible VM either way; the cluster
+# pod reverse-proxies /api, /health, /watchdog to it and /auth to
+# Keycloak on the worker NodePort. Operator can override the derived
+# toggles with -e for ad-hoc cases (for example, run both at once for a
+# side-by-side comparison).
+dashboard_cluster_enabled: "{{ dashboard_mode == 'prod' }}"
+dashboard_frontend_host_enabled: "{{ dashboard_mode == 'dev' }}"
+dashboard_namespace: dashboard
+dashboard_frontend_image: "ghcr.io/jacobbista/dashboard-frontend:0.1.0"
+dashboard_cluster_nodeport: 31573
+dashboard_cluster_ready_retries: 12
+dashboard_cluster_ready_delay: 5
+
+# Optional external URL the prod frontend advertises as the "Open dev" link
+# target in the sidebar dev-mode indicator. Empty defaults to the LAN URL
+# of the dev frontend on the ansible VM. Operators with a separate tunnel
+# for the dev frontend (e.g. dev.example.com) can override here.
+dashboard_dev_external_url: "{{ lookup('ansible.builtin.env', 'DASHBOARD_DEV_EXTERNAL_URL') | default('', true) }}"
+
+# Watchdog tiny HTTP server port (used to restart the backend from the UI).
+dashboard_watchdog_port: 31881

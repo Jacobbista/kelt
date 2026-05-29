@@ -21,6 +21,7 @@ Environment=DASHBOARD_MONGODB_URL=mongodb://{{ worker_ip | default('192.168.56.1
 Environment=DASHBOARD_CORS_ORIGIN=http://{{ dashboard_bind_host }}:{{ dashboard_frontend_port }}
 {% if dashboard_mode == 'dev' %}
 Environment=WATCHFILES_FORCE_POLLING=1
+Environment=WATCHFILES_POLL_DELAY_MS=1000
 {% endif %}
 EnvironmentFile=-{{ dashboard_backend_dir }}/.env.runtime
 {% if dashboard_mode == 'dev' %}

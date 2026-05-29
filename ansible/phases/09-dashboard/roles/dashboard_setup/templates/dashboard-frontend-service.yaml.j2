@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: dashboard-frontend
+  namespace: {{ dashboard_namespace }}
+  labels:
+    app: dashboard-frontend
+spec:
+  selector:
+    app: dashboard-frontend
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+      nodePort: {{ dashboard_cluster_nodeport }}
+      name: http
+  type: NodePort

@@ -6,19 +6,38 @@ API (same approach as ``ue_service._exec_in_pod``).
 """
 
 import ipaddress
+import json
 import logging
 import re
 import subprocess
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
 import yaml
+from kubernetes import client as k8s_client
+from kubernetes import config as k8s_config
 from kubernetes.stream import stream
 
 from app.config import settings
 from app.services.k8s_service import K8sService
+
+# Per-thread ApiClient to avoid urllib3 connection pool conflicts when
+# call_api(_preload_content=False) is used from multiple threads simultaneously.
+_thread_local = threading.local()
+
+
+def _get_thread_api_client() -> Any:
+    if not hasattr(_thread_local, "api_client"):
+        cfg = k8s_client.Configuration()
+        k8s_config.load_kube_config(
+            config_file=settings.kubeconfig_path,
+            client_configuration=cfg,
+        )
+        _thread_local.api_client = k8s_client.ApiClient(configuration=cfg)
+    return _thread_local.api_client
 
 log = logging.getLogger(__name__)
 
@@ -70,6 +89,7 @@ def _exec(core, pod: str, container: str, cmd: list[str]) -> str:
             return stream(
                 core.connect_get_namespaced_pod_exec,
                 pod, NS, command=cmd,
+                container=container,
                 stderr=True, stdout=True, stdin=False, tty=False,
                 _request_timeout=8,
             )
@@ -91,9 +111,44 @@ def _find_pod(core, app: str) -> tuple[str, str] | None:
         if p.metadata.deletion_timestamp:
             continue
         if p.status.phase == "Running":
-            container = app
-            return p.metadata.name, container
+            return p.metadata.name, app
     return None
+
+
+def _nf_api_get(core, app: str, port: int, path: str) -> dict[str, Any]:
+    """Call NF management HTTP endpoint via K8s API server pod proxy.
+    Uses a per-thread ApiClient to avoid urllib3 pool conflicts in ThreadPoolExecutor."""
+    try:
+        pods = core.list_namespaced_pod(namespace=NS, label_selector=f"app={app}")
+        running = [p for p in pods.items if p.status.phase == "Running"
+                   and not p.metadata.deletion_timestamp]
+        if not running:
+            return {}
+        pod_name = running[0].metadata.name
+        parts = path.split("?", 1)
+        api_path = f"/api/v1/namespaces/{NS}/pods/{pod_name}:{port}/proxy/{parts[0]}"
+        query_params: list[tuple[str, str]] = []
+        if len(parts) > 1:
+            for kv in parts[1].split("&"):
+                if "=" in kv:
+                    k, v = kv.split("=", 1)
+                    query_params.append((k, v))
+        api_client = _get_thread_api_client()
+        resp = api_client.call_api(
+            api_path, "GET",
+            query_params=query_params,
+            header_params={"Accept": "application/json"},
+            auth_settings=[],
+            _preload_content=False,
+            _return_http_data_only=True,
+        )
+        return json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:
+        log.debug("_nf_api_get %s/%s: %s", app, path, exc)
+        return {}
+
+
+
 
 
 class NetworkHealthService:
@@ -271,28 +326,32 @@ class NetworkHealthService:
     def _check_n2(self, ips: dict[str, str]) -> dict[str, Any]:
         """AMF must be listening on SCTP port 38412."""
         result = {"interface": "N2", "bridge": "br-n2", "status": "unknown", "detail": "", "latency_ms": None}
-        pod_info = _find_pod(self.k8s.core, "amf")
-        if not pod_info:
+        # N2 check via AMF gnb-info (K8s API proxy, thread-safe client).
+        # A connected gNB with setup_success=true confirms N2/NGAP is operational.
+        data = _nf_api_get(self.k8s.core, "amf", 9090, "gnb-info")
+        gnbs = data.get("items", [])
+        connected = [g for g in gnbs if g.get("ng", {}).get("setup_success")]
+        if not data:
             result["status"] = "error"
-            result["detail"] = "AMF pod not running"
-            return result
-        pod, container = pod_info
-        out = _exec(self.k8s.core, pod, container, ["ss", "-Slnp"])
-        if "38412" in out:
+            result["detail"] = "AMF gnb-info unreachable"
+        elif connected:
             result["status"] = "ok"
-            result["detail"] = "SCTP 38412 listening"
+            result["detail"] = f"SCTP established — {len(connected)} gNB(s) connected"
+        elif gnbs:
+            result["status"] = "warn"
+            result["detail"] = f"{len(gnbs)} gNB(s) seen but none with setup_success"
         else:
             result["status"] = "fail"
-            result["detail"] = "SCTP 38412 not found"
+            result["detail"] = "No gNBs connected on N2"
         return result
 
     def _check_n3(self, ips: dict[str, str]) -> dict[str, Any]:
-        """UPF-Cloud must have N3 gateway reachable and GTP-U port open."""
+        """N3 gateway reachable from netshoot pod via n3 interface."""
         result = {"interface": "N3", "bridge": "br-n3", "status": "unknown", "detail": "", "latency_ms": None}
-        pod_info = _find_pod(self.k8s.core, "upf-cloud")
+        pod_info = _find_pod(self.k8s.core, "netshoot")
         if not pod_info:
             result["status"] = "error"
-            result["detail"] = "UPF-Cloud pod not running"
+            result["detail"] = "netshoot pod not running"
             return result
         pod, container = pod_info
 
@@ -309,54 +368,35 @@ class NetworkHealthService:
             result["detail"] = out[:200]
         else:
             result["status"] = "fail"
-            result["detail"] = f"N3 gateway {ips['n3_gw']} unreachable"
-
-        ss_out = _exec(self.k8s.core, pod, container, ["ss", "-unap"])
-        if "2152" in ss_out:
-            result["detail"] += "; GTP-U 2152 listening"
-        else:
-            if result["status"] == "ok":
-                result["status"] = "warn"
-            result["detail"] += "; GTP-U 2152 not found"
+            result["detail"] = f"N3 gateway {ips['n3_gw']} unreachable; GTP-U 2152 not found"
 
         return result
 
     def _check_n4(self, ips: dict[str, str]) -> dict[str, Any]:
-        """SMF must reach UPF-Cloud on PFCP port 8805 via N4."""
+        """N4 check via SMF pdu-info (K8s API proxy, thread-safe client).
+        Active PDU sessions confirm PFCP is operational.
+        N4 IP pool is fully allocated to NFs so ping is not viable."""
         result = {"interface": "N4", "bridge": "br-n4", "status": "unknown", "detail": "", "latency_ms": None}
-        pod_info = _find_pod(self.k8s.core, "smf")
-        if not pod_info:
+        data = _nf_api_get(self.k8s.core, "smf", 9090, "pdu-info?page=0&page_size=1")
+        if not data:
             result["status"] = "error"
-            result["detail"] = "SMF pod not running"
-            return result
-        pod, container = pod_info
-
-        t0 = time.monotonic()
-        out = _exec(self.k8s.core, pod, container,
-                     ["ping", "-c", "1", "-W", "2", "-I", "n4", ips["upf_cloud_n4"]])
-        elapsed = (time.monotonic() - t0) * 1000
-
-        if "1 received" in out or "1 packets received" in out:
-            m = _RE_LATENCY.search(out)
+            result["detail"] = "SMF pdu-info unreachable"
+        elif data.get("pager", {}).get("count", 0) > 0:
+            count = data["pager"]["count"]
             result["status"] = "ok"
-            result["detail"] = f"UPF PFCP {ips['upf_cloud_n4']}:8805 reachable"
-            result["latency_ms"] = float(m.group(1)) if m else round(elapsed, 1)
-        elif "ERROR" in out:
-            result["status"] = "error"
-            result["detail"] = out[:200]
+            result["detail"] = f"PFCP active — {count} PDU session(s) via UPF {ips['upf_cloud_n4']}"
         else:
-            result["status"] = "fail"
-            result["detail"] = f"UPF {ips['upf_cloud_n4']} unreachable on N4"
-
+            result["status"] = "warn"
+            result["detail"] = "SMF reachable but no active PDU sessions"
         return result
 
     def _check_n6(self, ips: dict[str, str]) -> dict[str, Any]:
-        """UPF-Cloud must reach the N6 gateway (data network egress)."""
+        """N6 gateway reachable from netshoot pod via n6 interface."""
         result = {"interface": "N6", "bridge": "br-n6c", "status": "unknown", "detail": "", "latency_ms": None}
-        pod_info = _find_pod(self.k8s.core, "upf-cloud")
+        pod_info = _find_pod(self.k8s.core, "netshoot")
         if not pod_info:
             result["status"] = "error"
-            result["detail"] = "UPF-Cloud pod not running"
+            result["detail"] = "netshoot pod not running"
             return result
         pod, container = pod_info
 

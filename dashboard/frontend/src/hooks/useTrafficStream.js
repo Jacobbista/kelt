@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8080";
+import { getCurrentAccessToken } from "../auth/AuthContext";
 
 function buildWsUrl() {
-  const url = new URL(`${API_BASE}/api/v1/ws/traffic/intensity`);
+  const url = new URL("/api/v1/ws/traffic/intensity", window.location.origin);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  const token = getCurrentAccessToken();
+  if (token) url.searchParams.set("access_token", token);
   return url.toString();
 }
 

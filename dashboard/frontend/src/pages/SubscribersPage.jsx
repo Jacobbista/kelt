@@ -51,7 +51,7 @@ function ambrStr(ambr) {
   return `${ambr.value} ${unit}`;
 }
 
-export default function SubscribersPage({ open5gsWebuiUrl = "" }) {
+export default function SubscribersPage() {
   const [subscribers, setSubscribers] = useState([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -130,17 +130,6 @@ export default function SubscribersPage({ open5gsWebuiUrl = "" }) {
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <h2 className="text-lg font-semibold">Subscribers</h2>
-          {open5gsWebuiUrl && (
-            <a
-              href={open5gsWebuiUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-[11px] text-slate-500 hover:text-slate-300 transition-colors"
-              title="Open native Open5GS WebUI"
-            >
-              Open5GS WebUI ↗
-            </a>
-          )}
         </div>
         <div className="flex gap-2">
           <label className="cursor-pointer rounded bg-slate-700 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-600 transition-colors">

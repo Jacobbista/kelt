@@ -18,9 +18,7 @@ source venv/bin/activate
 pip install -r requirements.txt -q
 export DASHBOARD_ADMIN_TOKEN="${DASHBOARD_ADMIN_TOKEN:-change-me}"
 
-echo "Backend watch: auto-restart on crash (Ctrl+C to exit)"
-while true; do
-  uvicorn app.main:app --host 0.0.0.0 --port "${PORT}" || true
-  echo "Backend exited, restarting in 3s..."
-  sleep 3
-done
+echo "Backend watch: hot-reload on source changes (Ctrl+C to exit)"
+uvicorn app.main:app --host 0.0.0.0 --port "${PORT}" \
+  --reload --reload-dir "${SOURCE_BACKEND}/app" \
+  --reload-include "*.py"

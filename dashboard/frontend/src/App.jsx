@@ -1,11 +1,14 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState } from "react";
+import { Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import { getRuntimeInfo } from "./api";
+import { AuthProvider, useAuth } from "./auth/AuthContext";
 import { OperationsProvider } from "./context/OperationsContext";
 import { useBackendHealth } from "./hooks/useBackendHealth";
 import ErrorBoundary from "./components/ErrorBoundary";
 import Layout from "./Layout";
 import LogViewer from "./components/LogViewer";
 import PodTerminal from "./components/PodTerminal";
+import CallbackPage from "./pages/CallbackPage";
 import CorePage from "./pages/CorePage";
 import DiagnosticsPage from "./pages/DiagnosticsPage";
 import KubernetesPage from "./pages/KubernetesPage";
@@ -16,29 +19,61 @@ import SubscribersPage from "./pages/SubscribersPage";
 import TopologyPage from "./pages/TopologyPage";
 import UEMonitoringPage from "./pages/UEMonitoringPage";
 
+const ROUTES = {
+  overview:       "/",
+  kubernetes:     "/kubernetes",
+  core:           "/core",
+  topology:       "/topology",
+  ran:            "/ran",
+  subscribers:    "/subscribers",
+  "ue-monitoring": "/ue-monitor",
+  diagnostics:    "/diagnostics",
+  metrics:        "/metrics",
+};
+
 export default function App() {
-  const [activePage, setActivePage] = useState("overview");
-  const [runtime, setRuntime] = useState({ mode: "unknown", runtime_source: "unknown", open5gs_webui_url: "" });
+  return (
+    <AuthProvider>
+      <AppInner />
+    </AuthProvider>
+  );
+}
+
+function AppInner() {
+  const navigate = useNavigate();
+  const auth = useAuth();
+  const [runtime, setRuntime] = useState({ mode: "unknown", runtime_source: "unknown" });
   const [logTarget, setLogTarget] = useState(null);
   const [termTarget, setTermTarget] = useState(null);
   const [expandNfType, setExpandNfType] = useState(null);
   const { unreachable: backendUnreachable, serverTime } = useBackendHealth();
 
   useEffect(() => {
+    // When auth is enabled but the user is not signed in, redirect to
+    // Keycloak immediately. The auth/callback route handles the return
+    // trip; everything else requires a token.
+    if (auth.enabled && !auth.loading && !auth.user && window.location.pathname !== "/auth/callback") {
+      auth.login();
+    }
+  }, [auth.enabled, auth.loading, auth.user, auth.login]);
+
+  useEffect(() => {
+    // Avoid firing while the auth context is still resolving an existing
+    // session; otherwise the request races the login redirect and 401s.
+    if (auth.enabled && (auth.loading || !auth.user)) return;
     getRuntimeInfo()
       .then((data) =>
         setRuntime({
           mode: (data.mode || "unknown").toLowerCase(),
           runtime_source: data.runtime_source || "unknown",
-          open5gs_webui_url: data.open5gs_webui_url || "",
         })
       )
       .catch(() => {});
-  }, []);
+  }, [auth.enabled, auth.loading, auth.user]);
 
   function handleNavigateToNf(nfType) {
     setExpandNfType(nfType);
-    setActivePage("core");
+    navigate("/core");
   }
 
   function handleOpenLogs(nf) {
@@ -60,29 +95,35 @@ export default function App() {
     });
   }
 
+  function onNavigate(id) {
+    setExpandNfType(null);
+    navigate(ROUTES[id] ?? "/");
+  }
+
   return (
     <ErrorBoundary>
     <OperationsProvider>
     <Layout
-      activePage={activePage}
-      onNavigate={(page) => { setActivePage(page); setExpandNfType(null); }}
+      onNavigate={onNavigate}
       runtime={runtime}
       serverTime={serverTime}
       backendUnreachable={backendUnreachable}
     >
-      {activePage === "overview" && (
-        <OverviewPage onNavigateToNf={handleNavigateToNf} />
-      )}
-      {activePage === "kubernetes" && <KubernetesPage />}
-      {activePage === "core" && (
-        <CorePage onOpenLogs={handleOpenLogs} onOpenTerminal={handleOpenTerminal} onOpenIperf3Logs={handleOpenIperf3Logs} expandNfType={expandNfType} />
-      )}
-      {activePage === "topology" && <TopologyPage />}
-      {activePage === "ran" && <RanPage />}
-      {activePage === "subscribers" && <SubscribersPage open5gsWebuiUrl={runtime.open5gs_webui_url} />}
-      {activePage === "ue-monitoring" && <UEMonitoringPage />}
-      {activePage === "diagnostics" && <DiagnosticsPage />}
-      {activePage === "metrics" && <MetricsPage />}
+      <Routes>
+        <Route path="/auth/callback" element={<CallbackPage />} />
+        <Route path="/" element={<OverviewPage onNavigateToNf={handleNavigateToNf} />} />
+        <Route path="/kubernetes" element={<KubernetesPage />} />
+        <Route path="/core" element={
+          <CorePage onOpenLogs={handleOpenLogs} onOpenTerminal={handleOpenTerminal} onOpenIperf3Logs={handleOpenIperf3Logs} expandNfType={expandNfType} />
+        } />
+        <Route path="/topology" element={<TopologyPage />} />
+        <Route path="/ran" element={<RanPage />} />
+        <Route path="/subscribers" element={<SubscribersPage />} />
+        <Route path="/ue-monitor" element={<UEMonitoringPage />} />
+        <Route path="/diagnostics" element={<DiagnosticsPage />} />
+        <Route path="/metrics" element={<MetricsPage />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
 
       {logTarget && (
         <LogViewer

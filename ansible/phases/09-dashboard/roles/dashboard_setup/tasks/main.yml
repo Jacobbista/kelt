@@ -108,28 +108,37 @@
       DASHBOARD_BACKEND_SERVICE_NAME={{ dashboard_backend_service_name }}
       DASHBOARD_ALLOW_CONFIGMAP_WRITE={{ dashboard_allow_configmap_write | bool | lower }}
       DASHBOARD_AUDIT_LOG_PATH={{ dashboard_backend_dir }}/logs/audit.log
+      DASHBOARD_SKIP_AUTH={{ (not (dashboard_auth_enabled | bool)) | lower }}
+      DASHBOARD_KEYCLOAK_URL={{ dashboard_keycloak_url }}
+      DASHBOARD_KEYCLOAK_REALM={{ dashboard_keycloak_realm }}
+      DASHBOARD_KEYCLOAK_ACCEPTED_CLIENTS={{ dashboard_keycloak_accepted_clients }}
+      DASHBOARD_KEYCLOAK_PATH_PREFIX={{ dashboard_keycloak_path_prefix }}
+      DASHBOARD_CORS_ORIGIN={{ dashboard_cors_origin }}
 
 - name: Create frontend environment file
   ansible.builtin.copy:
     dest: "{{ dashboard_frontend_dir }}/.env"
     mode: "0644"
     content: |
-      VITE_API_BASE=http://{{ dashboard_bind_host }}:{{ dashboard_backend_port }}
+      # Reverse-proxy target for Vite (dev) / Vite preview (prod). The browser
+      # always talks to the frontend origin; Vite forwards /api and /health to
+      # this backend. Keeps a single origin so tunnels, PNA, and mixed-content
+      # rules don't apply.
+      VITE_BACKEND_TARGET=http://127.0.0.1:{{ dashboard_backend_port }}
+      # OIDC / Keycloak. Enable once IAM (phase 08) is deployed and reachable.
+      # AUTHORITY is the realm root the browser hits, so it must be the same
+      # origin the user reaches the dashboard at (LAN, tunnel, or path-prefix).
+      VITE_AUTH_ENABLED={{ dashboard_auth_enabled | bool | lower }}
+      VITE_KEYCLOAK_PROXY_TARGET={{ dashboard_keycloak_proxy_target }}
+      VITE_KEYCLOAK_AUTHORITY={{ dashboard_keycloak_external_url }}{{ dashboard_keycloak_path_prefix }}/realms/{{ dashboard_keycloak_realm }}
+      VITE_KEYCLOAK_CLIENT_ID={{ dashboard_keycloak_client_id }}
 
 - name: Install frontend dependencies
   ansible.builtin.command:
     cmd: npm install
     chdir: "{{ dashboard_frontend_dir }}"
   changed_when: true
-
-- name: Build frontend bundle with backend URL (prod mode)
-  ansible.builtin.command:
-    cmd: npm run build
-    chdir: "{{ dashboard_frontend_dir }}"
-  environment:
-    VITE_API_BASE: "http://{{ dashboard_bind_host }}:{{ dashboard_backend_port }}"
-  changed_when: true
-  when: dashboard_mode == 'prod'
+  when: dashboard_frontend_host_enabled | bool
 
 - name: Install backend systemd service
   become: true
@@ -146,6 +155,7 @@
     dest: "/etc/systemd/system/{{ dashboard_frontend_service_name }}.service"
     mode: "0644"
   register: frontend_service_unit
+  when: dashboard_frontend_host_enabled | bool
 
 - name: Install watchdog systemd service
   become: true
@@ -159,7 +169,10 @@
   become: true
   ansible.builtin.systemd:
     daemon_reload: true
-  when: backend_service_unit.changed or frontend_service_unit.changed or watchdog_service_unit.changed
+  when: >-
+    backend_service_unit.changed or
+    (frontend_service_unit.changed | default(false)) or
+    watchdog_service_unit.changed
 
 - name: Allow dashboard user to restart backend via systemctl (for in-app recovery)
   become: true
@@ -176,12 +189,22 @@
     enabled: true
     state: started
 
-- name: Enable and start dashboard frontend service
+- name: Enable and start dashboard frontend service (dev mode)
   become: true
   ansible.builtin.systemd:
     name: "{{ dashboard_frontend_service_name }}"
     enabled: true
     state: started
+  when: dashboard_frontend_host_enabled | bool
+
+- name: Stop and disable dashboard frontend service (prod mode hands off to cluster pod)
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ dashboard_frontend_service_name }}"
+    enabled: false
+    state: stopped
+  failed_when: false
+  when: not (dashboard_frontend_host_enabled | bool)
 
 - name: Enable and start dashboard watchdog service
   become: true
@@ -200,9 +223,7 @@
   until: dashboard_service_status.stdout | trim == "active"
   retries: 20
   delay: 2
-  loop:
-    - "{{ dashboard_backend_service_name }}"
-    - "{{ dashboard_frontend_service_name }}"
+  loop: "{{ [dashboard_backend_service_name] + ([dashboard_frontend_service_name] if (dashboard_frontend_host_enabled | bool) else []) }}"
 
 - name: Fail with explicit service status if not active
   ansible.builtin.fail:
@@ -227,7 +248,7 @@
     block: |
       _dashboard_switch() {
         local target="$1"
-        local playbook=~/ansible-ro/phases/08-dashboard/playbook.yml
+        local playbook=~/ansible-ro/phases/09-dashboard/playbook.yml
         local inventory=~/ansible-ro/inventory.ini
         local mode_file=~/.dashboard-mode
         if [[ "$target" != "dev" && "$target" != "prod" ]]; then
@@ -263,17 +284,19 @@
       _DASH_BASE_PS1="${PS1:-\u@\h:\w\$ }"
       PS1='$(_dashboard_ps1_prefix)'"${_DASH_BASE_PS1}"
 
-      # Login banner — informational, not required to survive clear
-      _dm="$(_dashboard_mode)"
-      if [[ -n "$_dm" ]]; then
+      _dashboard_banner() {
+        local _dm _dm_c _dm_hint
+        _dm="$(_dashboard_mode)"
+        [[ -z "$_dm" ]] && return
         if [[ "$_dm" == "prod" ]]; then
           _dm_c=$'\033[0;32m'; _dm_hint="dev"
         else
           _dm_c=$'\033[0;33m'; _dm_hint="prod"
         fi
         printf '\n  dashboard  %s\033[1m%s\033[0m  \033[2m·  type \033[0m\033[1m%s\033[0m\033[2m to switch\033[0m\n\n' "$_dm_c" "$_dm" "$_dm_hint"
-      fi
-      unset _dm _dm_c _dm_hint
+      }
+      alias clear='clear; _dashboard_banner'
+      _dashboard_banner
 
 - name: Dashboard setup summary
   ansible.builtin.debug:
@@ -291,3 +314,116 @@
     msg:
       - "sudo systemctl status {{ dashboard_backend_service_name }}"
       - "sudo systemctl status {{ dashboard_frontend_service_name }}"
+
+# ====================================================================
+# Cluster pod (optional, additive). Provisions an nginx pod on the worker
+# serving the built dashboard bundle from a pre-published GHCR image. The
+# pod reverse-proxies /api, /health, /watchdog to the backend on the
+# ansible VM and /auth to Keycloak on the worker NodePort. Backend is not
+# moved to the cluster (no RBAC, no service account migration). Operator
+# choses which IP (ansible VM or worker) to expose externally. Tunnel
+# pattern unchanged. See docs/security/external-access.md.
+# ====================================================================
+
+- name: Ensure dashboard namespace exists
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Namespace
+    state: present
+    definition:
+      metadata:
+        name: "{{ dashboard_namespace }}"
+        labels:
+          name: "{{ dashboard_namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  when: dashboard_cluster_enabled | bool
+
+- name: Pre-pull dashboard frontend image on worker
+  ansible.builtin.command:
+    cmd: "k3s ctr -n k8s.io images pull {{ dashboard_frontend_image }}"
+  delegate_to: "{{ groups['workers'][0] }}"
+  become: true
+  run_once: true
+  changed_when: false
+  register: prepull_dashboard
+  failed_when: prepull_dashboard.rc != 0 and 'already exists' not in (prepull_dashboard.stderr | default(''))
+  when: dashboard_cluster_enabled | bool
+
+- name: Apply dashboard frontend ConfigMap (nginx.conf + env-config.js)
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    force: true
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/dashboard-frontend-configmap.yaml.j2') | from_yaml }}"
+  when: dashboard_cluster_enabled | bool
+
+- name: Apply dashboard frontend Deployment
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    force: true
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/dashboard-frontend-deployment.yaml.j2') | from_yaml }}"
+  when: dashboard_cluster_enabled | bool
+
+- name: Apply dashboard frontend Service
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/dashboard-frontend-service.yaml.j2') | from_yaml }}"
+  when: dashboard_cluster_enabled | bool
+
+- name: Wait for dashboard frontend pod ready
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: dashboard-frontend
+    namespace: "{{ dashboard_namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: dashboard_cluster_deploy
+  retries: "{{ dashboard_cluster_ready_retries }}"
+  delay: "{{ dashboard_cluster_ready_delay }}"
+  until: >-
+    dashboard_cluster_deploy.resources | length > 0 and
+    dashboard_cluster_deploy.resources[0].status.availableReplicas | default(0) >= 1
+  when: dashboard_cluster_enabled | bool
+
+- name: Dashboard cluster pod endpoint
+  ansible.builtin.debug:
+    msg:
+      - "Cluster UI: http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ dashboard_cluster_nodeport }}"
+      - "Image: {{ dashboard_frontend_image }}"
+  when: dashboard_cluster_enabled | bool
+
+# Tear down cluster pod when reverting to dev mode. Namespace is left in
+# place so manual workloads in the dashboard namespace are not affected.
+- name: Tear down dashboard cluster Deployment (dev mode)
+  kubernetes.core.k8s:
+    state: absent
+    kubeconfig: "{{ kubeconfig_path }}"
+    api_version: apps/v1
+    kind: Deployment
+    name: dashboard-frontend
+    namespace: "{{ dashboard_namespace }}"
+  when: not (dashboard_cluster_enabled | bool)
+
+- name: Tear down dashboard cluster Service (dev mode)
+  kubernetes.core.k8s:
+    state: absent
+    kubeconfig: "{{ kubeconfig_path }}"
+    api_version: v1
+    kind: Service
+    name: dashboard-frontend
+    namespace: "{{ dashboard_namespace }}"
+  when: not (dashboard_cluster_enabled | bool)
+
+- name: Tear down dashboard cluster ConfigMap (dev mode)
+  kubernetes.core.k8s:
+    state: absent
+    kubeconfig: "{{ kubeconfig_path }}"
+    api_version: v1
+    kind: ConfigMap
+    name: dashboard-frontend-config
+    namespace: "{{ dashboard_namespace }}"
+  when: not (dashboard_cluster_enabled | bool)

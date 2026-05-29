@@ -1,16 +1,19 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useLocation } from "react-router-dom";
+import { useAuth } from "../auth/AuthContext";
 import TimeSyncPopover from "./TimeSyncPopover";
+import { env } from "../runtime-env";
 
 const NAV_ITEMS = [
-  { id: "overview", label: "Overview", icon: "\u25A3" },
-  { id: "kubernetes", label: "Kubernetes", icon: "\u2638" },
-  { id: "core", label: "5G Core", icon: "\u2B22" },
-  { id: "topology", label: "Topology", icon: "\u2B95" },
-  { id: "ran", label: "RAN", icon: "\u2699" },
-  { id: "subscribers", label: "Subscribers", icon: "\u2263" },
-  { id: "ue-monitoring", label: "UE Monitor", icon: "\u25C9" },
-  { id: "diagnostics", label: "Diagnostics", icon: "\u2295" },
-  { id: "metrics", label: "Metrics", icon: "\u2261" },
+  { id: "overview",      label: "Overview",    icon: "\u25A3", path: "/"           },
+  { id: "kubernetes",    label: "Kubernetes",  icon: "\u2638", path: "/kubernetes" },
+  { id: "core",          label: "5G Core",     icon: "\u2B22", path: "/core"       },
+  { id: "topology",      label: "Topology",    icon: "\u2B95", path: "/topology"   },
+  { id: "ran",           label: "RAN",         icon: "\u2699", path: "/ran"        },
+  { id: "subscribers",   label: "Subscribers", icon: "\u2263", path: "/subscribers"},
+  { id: "ue-monitoring", label: "UE Monitor",  icon: "\u25C9", path: "/ue-monitor" },
+  { id: "diagnostics",   label: "Diagnostics", icon: "\u2295", path: "/diagnostics"},
+  { id: "metrics",       label: "Metrics",     icon: "\u2261", path: "/metrics"    },
 ];
 
 const _localFmt = new Intl.DateTimeFormat(undefined, {
@@ -44,11 +47,51 @@ function useServerClock(serverTime) {
   return display;
 }
 
-export default function Sidebar({ activePage, onNavigate, runtime, serverTime }) {
+export default function Sidebar({ onNavigate, runtime, serverTime }) {
+  const { pathname } = useLocation();
+  const auth = useAuth();
   const [showSync, setShowSync] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const clockStr = useServerClock(serverTime);
   const toggleSync = useCallback(() => setShowSync((v) => !v), []);
   const closeSync = useCallback(() => setShowSync(false), []);
+  const roleLabel = auth.roles.includes("dashboard-admin")
+    ? "role: admin"
+    : auth.roles.includes("dashboard-viewer")
+      ? "role: viewer"
+      : "role: none";
+
+  const keycloakAdminUrl = useMemo(() => {
+    const authority = env("VITE_KEYCLOAK_AUTHORITY");
+    if (!authority) return null;
+    try {
+      const u = new URL(authority);
+      const seg = u.pathname.split("/").filter(Boolean);
+      const realmsIdx = seg.indexOf("realms");
+      if (realmsIdx < 0) return null;
+      const prefix = seg.slice(0, realmsIdx).join("/");
+      // Keycloak administration privileges live in the master realm console.
+      u.pathname = `/${prefix ? `${prefix}/` : ""}admin/master/console/`;
+      u.search = "";
+      u.hash = "";
+      return u.toString();
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const handleLogout = useCallback(async () => {
+    if (loggingOut) return;
+    const ok = window.confirm("Logout from dashboard session?");
+    if (!ok) return;
+    setLoggingOut(true);
+    try {
+      await auth.logout();
+    } catch (err) {
+      console.error("Logout failed:", err);
+      setLoggingOut(false);
+    }
+  }, [auth, loggingOut]);
 
   const modeBadgeClass =
     runtime.mode === "dev"
@@ -71,7 +114,7 @@ export default function Sidebar({ activePage, onNavigate, runtime, serverTime })
             type="button"
             onClick={() => onNavigate(item.id)}
             className={`mb-1 flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors ${
-              activePage === item.id
+              pathname === item.path
                 ? "bg-indigo-600/20 text-indigo-300 font-medium"
                 : "text-slate-300 hover:bg-slate-800 hover:text-white"
             }`}
@@ -108,6 +151,18 @@ export default function Sidebar({ activePage, onNavigate, runtime, serverTime })
           Grafana (advanced)
         </a>
 
+        {keycloakAdminUrl && (
+          <a
+            href={keycloakAdminUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="mt-1 flex items-center gap-2 rounded px-2 py-1.5 text-xs text-slate-500 hover:bg-slate-800 hover:text-slate-300 transition-colors"
+          >
+            <span className="text-[10px]">&#x2197;</span>
+            IAM Admin (master)
+          </a>
+        )}
+
         <div className="mt-2 flex items-center gap-2">
           <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${modeBadgeClass}`}>
             {runtime.mode}
@@ -116,6 +171,27 @@ export default function Sidebar({ activePage, onNavigate, runtime, serverTime })
             {runtime.runtime_source}
           </span>
         </div>
+
+        {auth.enabled && auth.user && (
+          <div className="mt-2 flex items-center justify-between gap-2 border-t border-slate-800 pt-2">
+            <div className="flex flex-col">
+              <span className="truncate text-[10px] font-medium text-slate-300" title={auth.username || ""}>
+                {auth.username || "unknown-user"}
+              </span>
+              <span className="truncate text-[9px] text-slate-500" title={auth.roles.join(", ") || "no-role"}>
+                {roleLabel}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={handleLogout}
+              disabled={loggingOut}
+              className="rounded bg-slate-800 px-2 py-0.5 text-[10px] text-slate-400 hover:bg-slate-700 hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {loggingOut ? "Logging out..." : "Logout"}
+            </button>
+          </div>
+        )}
       </div>
     </aside>
   );
