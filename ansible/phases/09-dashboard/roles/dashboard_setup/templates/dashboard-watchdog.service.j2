@@ -6,6 +6,9 @@ Wants=network-online.target
 [Service]
 Type=simple
 User={{ dashboard_service_user }}
+# Shared with DASHBOARD_ADMIN_TOKEN. Frontend fetches via /api/v1/admin/watchdog-token
+# (JWT admin-gated) and stores in memory so restart still works when backend is dead.
+Environment=WATCHDOG_TOKEN={{ dashboard_admin_token }}
 ExecStart=/usr/bin/python3 {{ dashboard_backend_dir }}/watchdog.py
 Restart=always
 RestartSec=3

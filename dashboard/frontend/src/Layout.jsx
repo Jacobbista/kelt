@@ -1,16 +1,33 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
+import { useLocation } from "react-router-dom";
 import Loader from "./components/Loader";
 import Sidebar from "./components/Sidebar";
 import { useOperations } from "./context/OperationsContext";
+import { getWatchdogToken } from "./api";
 
-export default function Layout({ activePage, onNavigate, runtime, children, backendUnreachable, serverTime }) {
+export default function Layout({ onNavigate, runtime, children, backendUnreachable, serverTime }) {
   const ops = useOperations();
   const [statusExpanded, setStatusExpanded] = useState(false);
   const [serviceStatus, setServiceStatus] = useState(null);
   const [statusLoading, setStatusLoading] = useState(false);
 
-  // Watchdog runs on port 31881, independent of the backend
-  const watchdogBase = (import.meta.env.VITE_API_BASE || "http://localhost:8080").replace(/:\d+$/, ":31881");
+  // Watchdog runs on a separate port (127.0.0.1 only); Vite proxies /watchdog
+  // so it stays reachable via tunnel without exposing another origin. The
+  // watchdog requires an X-Watchdog-Token header; fetch the token while the
+  // backend is up so we can still restart it after a crash.
+  const watchdogBase = "/watchdog";
+  const watchdogTokenRef = useRef(null);
+
+  useEffect(() => {
+    if (watchdogTokenRef.current) return;
+    getWatchdogToken()
+      .then((t) => { watchdogTokenRef.current = t || null; })
+      .catch(() => { /* viewer or unauthenticated caller: restart button fails gracefully */ });
+  }, []);
+
+  const _wdHeader = () => (
+    watchdogTokenRef.current ? { "X-Watchdog-Token": watchdogTokenRef.current } : {}
+  );
 
   const fetchStatus = useCallback(async () => {
     setStatusLoading(true);
@@ -18,12 +35,12 @@ export default function Layout({ activePage, onNavigate, runtime, children, back
     try {
       const ctrl = new AbortController();
       const to = setTimeout(() => ctrl.abort(), 4000);
-      const res = await fetch(`${watchdogBase}/status`, { signal: ctrl.signal });
+      const res = await fetch(`${watchdogBase}/status`, { signal: ctrl.signal, headers: _wdHeader() });
       clearTimeout(to);
       if (!res.ok) throw new Error(`${res.status}`);
       setServiceStatus(await res.json());
     } catch {
-      setServiceStatus({ journal: "Watchdog unreachable — try restarting manually:\n  sudo systemctl restart dashboard-backend", status_output: "" });
+      setServiceStatus({ journal: "Watchdog unreachable or unauthorized — try restarting manually:\n  sudo systemctl restart dashboard-backend", status_output: "" });
     }
     setStatusLoading(false);
   }, [watchdogBase]);
@@ -32,7 +49,7 @@ export default function Layout({ activePage, onNavigate, runtime, children, back
     try {
       const ctrl = new AbortController();
       const to = setTimeout(() => ctrl.abort(), 12000);
-      await fetch(`${watchdogBase}/restart`, { method: "POST", signal: ctrl.signal });
+      await fetch(`${watchdogBase}/restart`, { method: "POST", signal: ctrl.signal, headers: _wdHeader() });
       clearTimeout(to);
     } catch { /* watchdog may be slow while systemctl runs */ }
     // Wait for backend to come back, then refresh status
@@ -40,17 +57,18 @@ export default function Layout({ activePage, onNavigate, runtime, children, back
     fetchStatus();
   }, [watchdogBase, fetchStatus]);
 
+  const { pathname } = useLocation();
+
   // Auto-dismiss completed operation when user navigates to RAN page (they see the result inline)
   useEffect(() => {
-    if (activePage === "ran" && ops.current && ops.current.status !== "running") {
+    if (pathname === "/ran" && ops.current && ops.current.status !== "running") {
       ops.dismiss();
     }
-  }, [activePage, ops.current?.status]);
+  }, [pathname, ops.current?.status]);
 
   return (
     <div className="flex min-h-screen bg-slate-950 text-slate-100">
       <Sidebar
-        activePage={activePage}
         onNavigate={onNavigate}
         runtime={runtime}
         serverTime={serverTime}
@@ -112,7 +130,7 @@ export default function Layout({ activePage, onNavigate, runtime, children, back
             )}
           </div>
         )}
-        {ops.current && activePage !== "ran" && (
+        {ops.current && pathname !== "/ran" && (
           <div className={`mb-4 flex items-center justify-between rounded-lg border px-4 py-3 text-sm ${
             ops.current.status === "running"
               ? "border-indigo-600/50 bg-indigo-950/40 text-indigo-200"

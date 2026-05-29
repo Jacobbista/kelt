@@ -181,7 +181,13 @@ function EventIcon({ ev }) {
   if (ev.type === "deregistration_req" || ev.type === "deregistration_ok") {
     return <span className="inline-block h-2 w-2 rounded-full bg-amber-400" title="Deregistration" />;
   }
-  if (ev.type === "ue_context_release" || DISCONNECT_TYPES.includes(ev.type)) {
+  if (ev.type === "ue_context_release") {
+    return <span className="inline-block h-2 w-2 rounded-full bg-amber-400" title="Went idle (CM-IDLE)" />;
+  }
+  if (ev.type === "service_request") {
+    return <span className="inline-block h-2 w-2 rounded-full bg-cyan-400" title="Returned from idle" />;
+  }
+  if (DISCONNECT_TYPES.includes(ev.type)) {
     return <span className="inline-block h-2 w-2 rounded-full bg-rose-400" title="Detach" />;
   }
   if (ev.type === "pdu_session_rel") {
@@ -228,14 +234,17 @@ function eventKey(ev, i) {
 
 const STATUS_STYLES = {
   registered: "bg-emerald-900/40 text-emerald-400",
+  idle: "bg-amber-900/30 text-amber-300",
   deregistering: "bg-amber-900/30 text-amber-300",
   deregistered: "bg-slate-800 text-slate-500",
-  released: "bg-amber-900/30 text-amber-400",
+  released: "bg-amber-900/30 text-amber-300",  // legacy alias for idle
   failed: "bg-rose-900/30 text-rose-400",
   stale: "bg-rose-900/20 text-rose-400 italic",
 };
 
-const TERMINAL_STATUSES = new Set(["deregistered", "released", "failed", "stale"]);
+// "idle" and "released" are non-terminal: UE is still registered at AMF,
+// PDU sessions survive CM-IDLE in 5G NR.
+const TERMINAL_STATUSES = new Set(["deregistered", "failed", "stale"]);
 
 const EVENT_FILTERS = [
   { key: "all", label: "All" },
@@ -252,7 +261,7 @@ const EVENT_FILTERS = [
   {
     key: "connect",
     label: "Attach",
-    types: ["gnb_connect", "registration_ok", "pdu_session_est"],
+    types: ["gnb_connect", "registration_ok", "pdu_session_est", "service_request"],
   },
   {
     key: "disconnect",
@@ -596,53 +605,20 @@ export default function UEMonitoringPage() {
         </h3>
         {(() => {
           // Surface inconsistencies between the log-reconstructed list and
-          // Prometheus gauges. The backend already marks stale UEs, but we
-          // still flag the divergence explicitly so the operator is not
-          // misled by "all green" rows when AMF and RAN counts disagree.
-          const registeredCount = activeUes.filter(
-            (u) => u.status === "registered",
-          ).length;
+          // Backend marks orphaned AMF contexts as stale via gnb-info count comparison.
+          // Prometheus ran_ue divergence during CM-IDLE transitions is a transient
+          // race condition — not shown to avoid false alarms.
           const staleCount = activeUes.filter((u) => u.status === "stale").length;
-          const totalSessions = activeUes.reduce(
-            (acc, u) => acc + (u.sessions?.length || 0),
-            0,
-          );
-          const ranMismatch =
-            typeof s.ran_ues === "number" && s.ran_ues !== registeredCount;
-          const sessionMismatch =
-            typeof s.amf_sessions === "number" &&
-            s.amf_sessions !== totalSessions;
-          if (!ranMismatch && !sessionMismatch && staleCount === 0) return null;
+          if (staleCount === 0) return null;
           return (
             <div className="mb-3 rounded border border-amber-700/50 bg-amber-900/20 px-3 py-2 text-[11px] text-amber-200">
-              <div className="font-semibold">Inconsistent state detected</div>
+              <div className="font-semibold">Stale UE context detected</div>
               <ul className="mt-1 list-disc pl-4 text-amber-100/80">
-                {ranMismatch && (
-                  <li>
-                    gNB reports{" "}
-                    <span className="font-mono">{s.ran_ues}</span> UE on-air,
-                    log shows{" "}
-                    <span className="font-mono">{registeredCount}</span>{" "}
-                    registered
-                    {staleCount > 0 && (
-                      <>
-                        {" "}
-                        (<span className="font-mono">{staleCount}</span>{" "}
-                        flagged stale)
-                      </>
-                    )}
-                    .
-                  </li>
-                )}
-                {sessionMismatch && (
-                  <li>
-                    AMF reports{" "}
-                    <span className="font-mono">{s.amf_sessions}</span>{" "}
-                    session(s), list tracks{" "}
-                    <span className="font-mono">{totalSessions}</span>. Some
-                    PDU sessions may have been released without a log line.
-                  </li>
-                )}
+                <li>
+                  <span className="font-mono">{staleCount}</span> UE
+                  {staleCount !== 1 ? "s" : ""} flagged stale — AMF retains
+                  context but gNB UE count is lower.
+                </li>
               </ul>
               <div className="mt-1 text-[10px] text-amber-100/60">
                 Likely cause: UE crash, radio drop, or forced reboot without
@@ -801,7 +777,7 @@ export default function UEMonitoringPage() {
           <div className="max-h-80 overflow-y-auto space-y-0.5">
             {filteredEvents.map((ev, i) => {
               const key = eventKey(ev, i);
-              const isDisconnect = DISCONNECT_TYPES.includes(ev.type) || ev.type === "ue_context_release";
+              const isDisconnect = DISCONNECT_TYPES.includes(ev.type);
               const isError = ERROR_TYPES.includes(ev.type);
               const isExpanded = expandedEvent === key;
               const hasReason = !!ev.reason;

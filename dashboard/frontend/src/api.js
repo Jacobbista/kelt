@@ -1,7 +1,17 @@
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8080";
+// All paths are relative — Vite dev/preview server (and nginx in prod) reverse-proxies
+// `/api` and `/health` to the backend. This avoids CORS, Private Network Access
+// blocking, and mixed-content issues when the dashboard is served via tunnel.
+const API_BASE = "";
+
+import { getCurrentAccessToken } from "./auth/AuthContext";
+
+function _authHeader() {
+  const token = getCurrentAccessToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 async function get(path) {
-  const res = await fetch(`${API_BASE}${path}`);
+  const res = await fetch(`${API_BASE}${path}`, { headers: { ..._authHeader() } });
   if (!res.ok) throw new Error(`${path} failed: ${res.status}`);
   return res.json();
 }
@@ -9,7 +19,7 @@ async function get(path) {
 async function post(path, body) {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ..._authHeader() },
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -22,7 +32,7 @@ async function post(path, body) {
 async function put(path, body) {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ..._authHeader() },
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -33,7 +43,7 @@ async function put(path, body) {
 }
 
 async function del(path) {
-  const res = await fetch(`${API_BASE}${path}`, { method: "DELETE" });
+  const res = await fetch(`${API_BASE}${path}`, { method: "DELETE", headers: { ..._authHeader() } });
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`${path} failed: ${res.status} ${text}`);
@@ -44,7 +54,7 @@ async function del(path) {
 async function patch(path, body) {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ..._authHeader() },
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -54,12 +64,18 @@ async function patch(path, body) {
   return res.json();
 }
 
-// Health
-export const getRuntimeInfo = () => get("/health");
+// Health (unauthenticated liveness probe)
+export const getHealth = () => get("/health");
+// Runtime metadata (mode, source). Unauthenticated so the shell can render
+// before the OIDC login redirect resolves.
+export const getRuntimeInfo = () => get("/api/v1/cluster/info");
 
 // Admin: restart backend via systemd
 export const restartBackend = () => post("/api/v1/admin/restart-backend", {});
 export const getServiceStatus = () => get("/api/v1/admin/service-status");
+// Returns the watchdog shared token. JWT admin-gated; caller caches in memory
+// so watchdog stays callable when backend dies.
+export const getWatchdogToken = () => get("/api/v1/admin/watchdog-token").then((j) => j.token);
 
 // Cluster
 export const getClusterSummary = () => get("/api/v1/cluster/summary");
@@ -114,10 +130,9 @@ export const enablePhysicalMode = () => post("/api/v1/ran/modes/physical/enable"
  * Resolves with the final result, rejects on error.
  */
 export async function enablePhysicalModeStream(onProgress) {
-  const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8080";
-  const res = await fetch(`${API_BASE}/api/v1/ran/modes/physical/enable/stream`, {
+  const res = await fetch(`/api/v1/ran/modes/physical/enable/stream`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ..._authHeader() },
   });
   if (!res.ok) throw new Error(`Enable failed: ${res.status}`);
   const reader = res.body.getReader();
@@ -157,10 +172,9 @@ export async function enablePhysicalModeStream(onProgress) {
  * Disable physical RAN with streaming progress. Calls onProgress for each event.
  */
 export async function disablePhysicalModeStream(onProgress) {
-  const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8080";
-  const res = await fetch(`${API_BASE}/api/v1/ran/modes/physical/disable/stream`, {
+  const res = await fetch(`/api/v1/ran/modes/physical/disable/stream`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ..._authHeader() },
   });
   if (!res.ok) throw new Error(`Disable failed: ${res.status}`);
   const reader = res.body.getReader();
@@ -252,9 +266,21 @@ export const forceTimeSync = () => post("/api/v1/time/force-sync", {});
 export const getSnifferPoints = () => get("/api/v1/sniffer/points");
 export const runPathTrace = (duration = 5) => post(`/api/v1/sniffer/trace?duration=${duration}`, {});
 
-export function buildSnifferWsUrl(pointId, { filter, count = 0, duration = 300 } = {}) {
-  const url = new URL(`${API_BASE}/api/v1/ws/sniffer/${pointId}`);
+// WS URLs derive from window.location so they follow whatever origin (and
+// scheme: ws/wss) is currently serving the frontend — Cloudflare tunnel,
+// localhost, or LAN IP. The Bearer token cannot be set as a header on
+// WebSocket upgrades from the browser, so we append it as an
+// `access_token` query parameter; the backend reads it via Query().
+function _wsUrl(path) {
+  const url = new URL(path, window.location.origin);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  const token = getCurrentAccessToken();
+  if (token) url.searchParams.set("access_token", token);
+  return url;
+}
+
+export function buildSnifferWsUrl(pointId, { filter, count = 0, duration = 300 } = {}) {
+  const url = _wsUrl(`/api/v1/ws/sniffer/${pointId}`);
   if (filter) url.searchParams.set("filter", filter);
   if (count > 0) url.searchParams.set("count", String(count));
   url.searchParams.set("duration", String(duration));
@@ -263,8 +289,7 @@ export function buildSnifferWsUrl(pointId, { filter, count = 0, duration = 300 }
 
 // Logs WebSocket
 export function buildLogsWsUrl(namespace, pod, container, opts = {}) {
-  const url = new URL(`${API_BASE}/api/v1/ws/logs/${namespace}/${pod}`);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  const url = _wsUrl(`/api/v1/ws/logs/${namespace}/${pod}`);
   if (container) url.searchParams.set("container", container);
   if (opts.tail) url.searchParams.set("tail", String(opts.tail));
   if (opts.fromStart) url.searchParams.set("from_start", "1");
@@ -273,8 +298,7 @@ export function buildLogsWsUrl(namespace, pod, container, opts = {}) {
 
 // Exec WebSocket
 export function buildExecWsUrl(namespace, pod, container, command = "/bin/sh") {
-  const url = new URL(`${API_BASE}/api/v1/ws/exec/${namespace}/${pod}`);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  const url = _wsUrl(`/api/v1/ws/exec/${namespace}/${pod}`);
   if (container) url.searchParams.set("container", container);
   if (command) url.searchParams.set("command", command);
   return url.toString();
@@ -298,3 +322,7 @@ export const getK8sEvents = (ns, limit = 200) => {
   params.set("limit", String(limit));
   return get(`/api/v1/k8s/events?${params.toString()}`);
 };
+
+// NF version management (5g-nf-platform integration)
+export const getNfVersions = () => get("/api/v1/nf/versions");
+export const getNfUpdateStreamUrl = () => "/api/v1/nf/update/stream";

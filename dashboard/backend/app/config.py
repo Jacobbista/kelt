@@ -22,7 +22,6 @@ class Settings(BaseSettings):
 
     prometheus_url: str = "http://192.168.56.11:30090"
     mongodb_url: str = "mongodb://192.168.56.11:30017/open5gs"
-    open5gs_webui_url: str = "http://192.168.56.11:31769"
 
     admin_token: str = "change-me"
     allow_configmap_write: bool = False
@@ -37,6 +36,21 @@ class Settings(BaseSettings):
     subscriber_snapshot_namespace: str = "5g"
     subscriber_snapshot_configmap: str = "subscribers-snapshot"
     subscriber_snapshot_key: str = "snapshot.json"
+
+    # ── Keycloak / OIDC ────────────────────────────────────────────────
+    # Set skip_auth=True until phase 08 (IAM) is deployed and the realm is
+    # reachable. When True, requests bypass JWT validation and behave as
+    # dashboard-admin. See docs/security/iam.md.
+    skip_auth: bool = True
+    keycloak_url: str = "http://keycloak.iam.svc.cluster.local:8080"
+    keycloak_realm: str = "5g-testbed"
+    # Client IDs accepted in the JWT "azp" / "aud" claims. The browser
+    # dashboard issues tokens for "dashboard"; the read-only service
+    # account issues tokens for "dashboard-readonly".
+    keycloak_accepted_clients: str = "dashboard,dashboard-readonly"
+    # Optional path prefix when Keycloak is served under a reverse proxy
+    # (for example "/auth"). Leave empty for root-path deploys.
+    keycloak_path_prefix: str = ""
 
     def ensure_audit_dir(self) -> None:
         Path(self.audit_log_path).parent.mkdir(parents=True, exist_ok=True)

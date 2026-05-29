@@ -82,7 +82,7 @@ graph TB
 | Dashboard UI | http://192.168.56.13:31573 | Web interface |
 | Dashboard API | http://192.168.56.13:31880/docs | FastAPI interactive docs (Swagger) |
 
-The dashboard is deployed automatically in **Phase 8** and starts immediately after provisioning. No additional setup is required to access it after `vagrant up`.
+The dashboard is deployed automatically in **Phase 9** and starts immediately after provisioning. No additional setup is required to access it after `vagrant up`.
 
 ## Security Model
 
@@ -103,20 +103,20 @@ Remote command output is size-capped and subject to a timeout.
 
 ## Deployment
 
-### Automatic (Phase 8)
+### Automatic (Phase 9)
 
 The dashboard is installed and started automatically by `vagrant up`. To re-deploy or reconcile:
 
 ```bash
 vagrant ssh ansible
 cd ~/ansible-ro
-ansible-playbook phases/08-dashboard/playbook.yml
+ansible-playbook phases/09-dashboard/playbook.yml
 ```
 
 ### Development mode (live reload)
 
 ```bash
-ansible-playbook phases/08-dashboard/playbook.yml -e dashboard_mode=dev
+ansible-playbook phases/09-dashboard/playbook.yml -e dashboard_mode=dev
 ```
 
 In `dev` mode, services run from `/vagrant/dashboard` with backend auto-restart and frontend polling for changes. Useful when developing the dashboard itself.
@@ -173,4 +173,4 @@ See [Dashboard Modules](modules.md) for full details on each module.
 - [Dashboard Modules](modules.md) — detailed feature description for each of the 7 modules
 - [API Reference](api-reference.md) — full REST and WebSocket endpoint listing
 - [RAN Modes](../deployment/ran-modes-dashboard.md) — how to switch between physical and simulated RAN
-- [Deployment Phases](../deployment/phases.md#phase-8-dashboard-control-plane) — Phase 8 detail
+- [Deployment Phases](../deployment/phases.md#phase-9-dashboard-control-plane) — Phase 9 detail

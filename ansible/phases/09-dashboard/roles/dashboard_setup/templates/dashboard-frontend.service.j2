@@ -8,7 +8,11 @@ Type=simple
 User={{ dashboard_service_user }}
 WorkingDirectory={{ dashboard_frontend_dir }}
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
-Environment=VITE_API_BASE=http://{{ dashboard_bind_host }}:{{ dashboard_backend_port }}
+Environment=VITE_BACKEND_TARGET=http://127.0.0.1:{{ dashboard_backend_port }}
+Environment=VITE_AUTH_ENABLED={{ dashboard_auth_enabled | bool | lower }}
+Environment=VITE_KEYCLOAK_PROXY_TARGET={{ dashboard_keycloak_proxy_target }}
+Environment=VITE_KEYCLOAK_AUTHORITY={{ dashboard_keycloak_external_url }}{{ dashboard_keycloak_path_prefix }}/realms/{{ dashboard_keycloak_realm }}
+Environment=VITE_KEYCLOAK_CLIENT_ID={{ dashboard_keycloak_client_id }}
 {% if dashboard_mode == 'dev' %}
 Environment=CHOKIDAR_USEPOLLING=1
 Environment=WATCHPACK_POLLING=true

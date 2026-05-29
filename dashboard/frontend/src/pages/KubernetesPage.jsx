@@ -363,16 +363,22 @@ export default function KubernetesPage() {
   const [events, setEvents] = useState([]);
 
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
   const [refreshedAt, setRefreshedAt] = useState(null);
+  const [refreshFeedback, setRefreshFeedback] = useState("idle");
 
   const tabUsesNamespace = useMemo(
     () => ["storage", "services", "events"].includes(tab),
     [tab],
   );
 
-  async function refresh() {
+  async function refresh(source = "auto") {
     setError(null);
+    if (source === "manual") {
+      setRefreshing(true);
+      setRefreshFeedback("loading");
+    }
     try {
       const loaders = [
         getK8sNamespaces().then(setNamespaces),
@@ -390,15 +396,26 @@ export default function KubernetesPage() {
       }
       await Promise.all(loaders);
       setRefreshedAt(new Date());
+      if (source === "manual") setRefreshFeedback("success");
     } catch (e) {
       setError(e.message || String(e));
+      if (source === "manual") setRefreshFeedback("error");
     } finally {
+      if (source === "manual") {
+        setRefreshing(false);
+      }
       setLoading(false);
     }
   }
 
-  useInterval(() => { refresh(); }, REFRESH_MS);
-  useEffect(() => { setLoading(true); refresh(); /* eslint-disable-next-line */ }, [tab, namespace]);
+  useEffect(() => {
+    if (!["success", "error"].includes(refreshFeedback)) return undefined;
+    const id = setTimeout(() => setRefreshFeedback("idle"), 2500);
+    return () => clearTimeout(id);
+  }, [refreshFeedback]);
+
+  useInterval(() => { refresh("auto"); }, REFRESH_MS);
+  useEffect(() => { setLoading(true); refresh("auto"); /* eslint-disable-next-line */ }, [tab, namespace]);
 
   return (
     <div className="space-y-4">
@@ -416,10 +433,23 @@ export default function KubernetesPage() {
           <TabBar tab={tab} onTab={setTab} />
           <button
             type="button"
-            onClick={refresh}
-            className="rounded-md border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800"
+            onClick={() => refresh("manual")}
+            disabled={refreshing}
+            className={`rounded-md border px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-60 ${
+              refreshFeedback === "success"
+                ? "border-emerald-700 bg-emerald-900/30 text-emerald-200"
+                : refreshFeedback === "error"
+                  ? "border-rose-700 bg-rose-900/30 text-rose-200"
+                  : "border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800"
+            }`}
           >
-            Refresh
+            {refreshing || refreshFeedback === "loading"
+              ? "Refreshing..."
+              : refreshFeedback === "success"
+                ? "Refreshed"
+                : refreshFeedback === "error"
+                  ? "Refresh failed"
+                  : "Refresh"}
           </button>
         </div>
       </header>

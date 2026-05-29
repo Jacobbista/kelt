@@ -2,42 +2,49 @@
 """Tiny standalone HTTP server (port 31881) that can restart the backend.
 
 Runs as a separate systemd service so it stays alive even when the main
-dashboard-backend is hung or crashed.  Endpoints:
+dashboard-backend is hung or crashed. Endpoints:
 
   GET  /status   — systemctl status + journalctl for dashboard-backend
   POST /restart  — systemctl restart dashboard-backend
+
+Auth model: binds to 127.0.0.1 so only requests proxied through the local
+Vite frontend reach it (the Vite proxy in turn is reachable from LAN/tunnel).
+Both endpoints require header `X-Watchdog-Token: <WATCHDOG_TOKEN>`; the
+token is provisioned via systemd Environment from the same value as
+DASHBOARD_ADMIN_TOKEN. The frontend fetches the token from the
+authenticated admin router and caches it in memory so it can still
+restart the backend after a crash. See docs/security/iam.md.
 """
 
 import http.server
 import json
+import os
 import subprocess
-import sys
 
 PORT = 31881
+BIND = "127.0.0.1"
 BACKEND_SERVICE = "dashboard-backend"
+WATCHDOG_TOKEN = os.environ.get("WATCHDOG_TOKEN", "")
 
 
 class WatchdogHandler(http.server.BaseHTTPRequestHandler):
-    def _cors(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-
     def _json(self, code, data):
         body = json.dumps(data).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
-        self._cors()
         self.end_headers()
         self.wfile.write(body)
 
-    def do_OPTIONS(self):
-        self.send_response(204)
-        self._cors()
-        self.end_headers()
+    def _authorized(self) -> bool:
+        if not WATCHDOG_TOKEN:
+            return False
+        return self.headers.get("X-Watchdog-Token") == WATCHDOG_TOKEN
 
     def do_GET(self):
         if self.path == "/status":
+            if not self._authorized():
+                self._json(401, {"error": "unauthorized"})
+                return
             result = {"service": BACKEND_SERVICE}
             try:
                 proc = subprocess.run(
@@ -63,6 +70,9 @@ class WatchdogHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path == "/restart":
+            if not self._authorized():
+                self._json(401, {"error": "unauthorized"})
+                return
             try:
                 subprocess.run(
                     ["sudo", "systemctl", "restart", BACKEND_SERVICE],
@@ -75,13 +85,12 @@ class WatchdogHandler(http.server.BaseHTTPRequestHandler):
             self._json(404, {"error": "not found"})
 
     def log_message(self, fmt, *args):
-        # Quiet unless error
         pass
 
 
 def main():
-    server = http.server.HTTPServer(("0.0.0.0", PORT), WatchdogHandler)
-    print(f"[watchdog] listening on :{PORT}", flush=True)
+    server = http.server.HTTPServer((BIND, PORT), WatchdogHandler)
+    print(f"[watchdog] listening on {BIND}:{PORT}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

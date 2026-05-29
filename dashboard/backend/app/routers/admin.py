@@ -4,13 +4,24 @@ import logging
 import subprocess
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 
+from app.auth import require_admin
 from app.config import settings
 from app.services.audit import write_audit
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 log = logging.getLogger(__name__)
+
+
+@router.get("/watchdog-token")
+def watchdog_token(_=Depends(require_admin)) -> dict[str, str]:
+    """Return the watchdog shared secret to authenticated admin callers.
+
+    The frontend caches the value in memory so it can authenticate against
+    the local watchdog process even while the backend itself is down.
+    """
+    return {"token": settings.admin_token}
 
 
 @router.post("/restart-backend")

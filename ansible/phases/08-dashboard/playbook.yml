@@ -1,8 +1,0 @@
----
-# Run: ansible-playbook ansible/phases/08-dashboard/playbook.yml [-e dashboard_mode=dev]
-# dashboard_mode: prod (default) | dev
-- name: Phase 08 - Dashboard Setup
-  hosts: control
-  gather_facts: true
-  roles:
-    - role: dashboard_setup

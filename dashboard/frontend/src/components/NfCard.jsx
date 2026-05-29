@@ -40,7 +40,7 @@ function timeSince(isoString) {
   return `${days}d ${hours % 24}h`;
 }
 
-export default function NfCard({ nf, onRestart, onOpenLogs, onOpenTerminal, onOpenIperf3Logs, expanded, onToggle, isRestarting }) {
+export default function NfCard({ nf, onRestart, onOpenLogs, onOpenTerminal, onOpenIperf3Logs, expanded, onToggle, isRestarting, versionInfo, onUpdate }) {
   const [confirmRestart, setConfirmRestart] = useState(false);
   const [details, setDetails] = useState(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
@@ -74,6 +74,32 @@ export default function NfCard({ nf, onRestart, onOpenLogs, onOpenTerminal, onOp
           <span className="rounded bg-amber-900/40 px-1.5 py-0.5 text-[10px] font-medium text-amber-300 animate-pulse">
             restarting...
           </span>
+        )}
+        {versionInfo && versionInfo.deployed && (
+          versionInfo.up_to_date ? (
+            <span
+              className="rounded bg-emerald-900/30 px-1.5 py-0.5 text-[10px] font-mono text-emerald-400"
+              title={versionInfo.deployed_image}
+            >
+              {versionInfo.deployed_tag}
+            </span>
+          ) : versionInfo.available_tag ? (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onUpdate?.(versionInfo.available_tag); }}
+              className="rounded bg-amber-900/40 px-1.5 py-0.5 text-[10px] font-mono text-amber-300 hover:bg-amber-800/50"
+              title={`Update available: ${versionInfo.available_image}`}
+            >
+              {versionInfo.deployed_tag} → {versionInfo.available_tag}
+            </button>
+          ) : (
+            <span
+              className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-mono text-slate-500"
+              title={versionInfo.deployed_image}
+            >
+              {versionInfo.deployed_tag}
+            </span>
+          )
         )}
         <span className="ml-auto flex items-center gap-3 text-xs text-slate-500">
           <span className="font-mono text-slate-400">{nf.pod_ip || "—"}</span>

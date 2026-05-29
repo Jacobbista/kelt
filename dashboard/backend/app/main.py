@@ -6,9 +6,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.auth import require_admin, require_viewer_or_admin
 from app.config import settings
 from app.routers.admin import router as admin_router
 from app.routers.cluster import router as cluster_router
@@ -27,6 +28,7 @@ from app.routers.traffic import router as traffic_router
 from app.routers.time_sync import router as time_sync_router
 from app.routers.exec_ws import router as exec_ws_router
 from app.routers.ue import router as ue_router
+from app.routers.nf import router as nf_router
 
 log = logging.getLogger(__name__)
 
@@ -49,32 +51,60 @@ class CatchAllMiddleware(BaseHTTPMiddleware):
             return Response(content=body, status_code=500, media_type="application/json")
 
 
+# Single-origin via Vite proxy means browser CORS preflights never reach the
+# backend in normal operation. The allow-list still matters for direct
+# NodePort access (LAN debugging, curl). Comma-separated origins via
+# DASHBOARD_CORS_ORIGIN, or "*" to keep the wildcard.
+_cors_origins = (
+    ["*"] if settings.cors_origin.strip() == "*"
+    else [o.strip() for o in settings.cors_origin.split(",") if o.strip()]
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 app.add_middleware(CatchAllMiddleware)
 
+# Auth dependency groups. The full role-to-endpoint matrix is documented in
+# docs/security/iam.md. While settings.skip_auth is True (default until phase
+# 08 IAM is wired into production), require_* deps return a synthetic admin
+# so the dashboard remains operable.
+_viewer = [Depends(require_viewer_or_admin)]
+_admin = [Depends(require_admin)]
+
+# Unauthenticated: liveness probes (browser useBackendHealth, watchdog) and
+# the legacy admin lane gated by DASHBOARD_ADMIN_TOKEN.
 app.include_router(health_router)
 app.include_router(admin_router)
-app.include_router(cluster_router)
-app.include_router(kubernetes_router)
-app.include_router(pods_router)
-app.include_router(logs_ws_router)
-app.include_router(topology_router)
-app.include_router(network_router)
-app.include_router(subscribers_router)
-app.include_router(metrics_router)
-app.include_router(ran_router)
-app.include_router(sniffer_router)
-app.include_router(traffic_router)
-app.include_router(ue_router)
-app.include_router(time_sync_router)
-app.include_router(exec_ws_router)
-app.include_router(experiments_router)
+
+# Viewer-or-admin: cluster/NF status, pod metadata, log streaming, metrics.
+app.include_router(cluster_router,     dependencies=_viewer)
+app.include_router(kubernetes_router,  dependencies=_viewer)
+app.include_router(pods_router,        dependencies=_viewer)
+app.include_router(logs_ws_router,     dependencies=_viewer)
+app.include_router(topology_router,    dependencies=_viewer)
+app.include_router(network_router,     dependencies=_viewer)
+app.include_router(metrics_router,     dependencies=_viewer)
+app.include_router(traffic_router,     dependencies=_viewer)
+app.include_router(ue_router,          dependencies=_viewer)
+app.include_router(time_sync_router,   dependencies=_viewer)
+app.include_router(experiments_router, dependencies=_viewer)
+
+# Admin-only: privileged actions with cluster-wide blast radius.
+# - subscribers: read access also gated because the records contain K and OPc
+#                (5G AKA crypto roots). Viewer must not see them.
+# - nf:          update/stream triggers an ansible-playbook subprocess.
+# - ran:         physical-mode enable/disable runs node-level network reconfig.
+# - sniffer:     packet capture inside privileged UPF pod.
+# - exec_ws:     pod shell.
+app.include_router(subscribers_router, dependencies=_admin)
+app.include_router(nf_router,          dependencies=_admin)
+app.include_router(ran_router,         dependencies=_admin)
+app.include_router(sniffer_router,     dependencies=_admin)
+app.include_router(exec_ws_router,     dependencies=_admin)
 
 
 @app.on_event("startup")

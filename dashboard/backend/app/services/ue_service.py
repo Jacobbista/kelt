@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import subprocess
+from datetime import datetime, timezone
 from typing import Any
 
 from app.config import settings
@@ -140,7 +141,8 @@ _RE_AMF_UE_SUPI = re.compile(
 
 # ── SMF log patterns ────────────────────────────────────────────
 _RE_SMF_PDU_EST = re.compile(
-    r"UE SUPI\[imsi-(\d+)\]\s+DNN\[([^\]]*)\]\s+IPv4\[([^\]]*)\]",
+    # Open5GS SMF may insert S-NSSAI[...] between DNN and IPv4; use .*? to skip
+    r"UE SUPI\[imsi-(\d+)\].*?DNN\[([^\]]*)\].*?IPv4\[([^\]]*)\]",
 )
 _RE_SMF_SESSION_ADDED = re.compile(
     r"\[Added\] Number of SMF-Sessions is now (\d+)",
@@ -158,6 +160,14 @@ _RE_SMF_UE_ADDED = re.compile(
 )
 _RE_SMF_UE_REMOVED = re.compile(
     r"\[Removed\] Number of SMF-UEs is now (\d+)",
+)
+
+# ── UPF log patterns ────────────────────────────────────────────
+_RE_UPF_SESSION_ADDED = re.compile(
+    r"\[Added\] Number of UPF-Sessions is now (\d+)",
+)
+_RE_UPF_SESSION_REMOVED = re.compile(
+    r"\[Removed\] Number of UPF-Sessions is now (\d+)",
 )
 
 # ── AMF disconnect / failure patterns ─────────────────────────
@@ -187,6 +197,13 @@ _RE_UE_CONTEXT_RELEASE = re.compile(
 # verbatim in the UI when available.
 _RE_RELEASE_REASON = re.compile(
     r"Release\s+context\s+reason\s*[:=]?\s*([^\n\r,]+)",
+    re.I,
+)
+# Real UEs return from CM-IDLE via Service Request — no new Registration OK is
+# emitted. Detect the Service Request so the state machine can promote the UE
+# from "idle" back to "registered".
+_RE_SERVICE_REQ = re.compile(
+    r"\[imsi-(\d+)\].*\bService\s*Request\b",
     re.I,
 )
 
@@ -302,6 +319,10 @@ class UEService:
         self.k8s = k8s
         self.prom = prom
         self.mongo = mongo
+        # Last-seen cache: AMF /ue-info has no activity timestamp, so we record
+        # "now" each time a UE appears as CM-CONNECTED and freeze the value
+        # otherwise. Survives across polls within a process lifetime.
+        self._last_seen_cache: dict[str, str] = {}
 
     # ── Prometheus summary ──────────────────────────────────────
 
@@ -365,11 +386,12 @@ class UEService:
     # ── Log-based event parsing ─────────────────────────────────
 
     def get_events(self, minutes: int = 10, tail: int = 500) -> list[dict[str, Any]]:
-        """Parse recent AMF + SMF logs for UE-related events."""
+        """Parse recent AMF + SMF + UPF logs for UE-related events."""
         since = minutes * 60
         events: list[dict[str, Any]] = []
         events.extend(self._parse_amf_logs(since_seconds=since))
         events.extend(self._parse_smf_logs(since_seconds=since))
+        events.extend(self._parse_upf_logs(since_seconds=since))
         events.sort(key=lambda e: e.get("ts", ""), reverse=True)
         return _deduplicate_events(events)
 
@@ -386,12 +408,18 @@ class UEService:
                 namespace=NS,
                 container=deploy,
                 timestamps=True,
+                # _preload_content=False returns raw bytes, avoiding the SDK's
+                # strict UTF-8 decode which crashes on invalid ANSI escape bytes
+                # emitted by Open5GS in DEBUG/TRACE log mode.
+                _preload_content=False,
             )
             if since_seconds is not None:
                 kwargs["since_seconds"] = since_seconds
             else:
                 kwargs["tail_lines"] = tail
-            return self.k8s.core.read_namespaced_pod_log(**kwargs) or ""
+            resp = self.k8s.core.read_namespaced_pod_log(**kwargs)
+            raw = resp.read()
+            return raw.decode("utf-8", errors="replace")
         except Exception as exc:
             log.debug("Failed to read %s logs: %s", deploy, exc)
             return ""
@@ -515,15 +543,22 @@ class UEService:
 
             m = _RE_UE_CONTEXT_RELEASE.search(text)
             if m:
-                reason = "UE detached from network — power-off, signal loss, or idle timeout"
+                reason = "UE entered CM-IDLE — N2 context released, registration retained"
                 reason_m = _RE_RELEASE_REASON.search(text)
                 if reason_m:
                     # Surface Open5GS's own cause string (e.g. "Radio Connection With UE Lost")
                     reason = f"gNB reported: {reason_m.group(1).strip()}"
                 events.append({"ts": ts, "type": "ue_context_release", "source": "amf",
-                               "severity": "warning", "imsi": m.group(1),
-                               "detail": f"UE {m.group(1)} context released (detached)",
+                               "severity": "info", "imsi": m.group(1),
+                               "detail": f"UE {m.group(1)} went idle (N2 released)",
                                "reason": reason})
+                continue
+
+            m = _RE_SERVICE_REQ.search(text)
+            if m:
+                events.append({"ts": ts, "type": "service_request", "source": "amf",
+                               "severity": "info", "imsi": m.group(1),
+                               "detail": f"UE {m.group(1)} service request (returning from idle)"})
                 continue
 
             m = _RE_AUTH_REJECT.search(text)
@@ -601,169 +636,107 @@ class UEService:
                                "reason": "A UE was removed from SMF — session cleanup"})
         return events
 
+    def _parse_upf_logs(self, tail: int = 200, since_seconds: int | None = None) -> list[dict[str, Any]]:
+        raw = self._read_deploy_logs("upf-cloud", tail=tail, since_seconds=since_seconds)
+        events: list[dict[str, Any]] = []
+        for line in raw.splitlines():
+            ts = _extract_ts(line)
+            text = _strip_ansi(line)
+            m = _RE_UPF_SESSION_ADDED.search(text)
+            if m:
+                events.append({"ts": ts, "type": "session_count_change", "source": "upf",
+                               "severity": "info",
+                               "detail": f"UPF session count now {m.group(1)}"})
+                continue
+            m = _RE_UPF_SESSION_REMOVED.search(text)
+            if m:
+                events.append({"ts": ts, "type": "session_count_change", "source": "upf",
+                               "severity": "warning",
+                               "detail": f"UPF session count decreased to {m.group(1)}",
+                               "reason": "A UPF GTP-U session was removed"})
+        return events
+
     # ── Active UE list ──────────────────────────────────────────
 
     async def get_active_ues(self) -> list[dict[str, Any]]:
-        """Build an active-UE list by cross-referencing log events.
+        """Build active-UE list from AMF /ue-info + SMF /pdu-info management APIs."""
+        amf_ues = self._get_amf_ues()
 
-        Since Open5GS stores sessions in memory (not MongoDB), we reconstruct
-        state from recent AMF/SMF log entries.  Events are merged and sorted
-        chronologically so that deregistration correctly clears prior sessions.
-        Cross-checks with Prometheus ran_ue gauge to detect stale entries.
-        """
-        # Merge AMF + SMF events over a 4-hour window to catch long-connected UEs
-        all_events = (
-            self._parse_amf_logs(since_seconds=14400)
-            + self._parse_smf_logs(since_seconds=14400)
-        )
-        all_events.sort(key=lambda e: e.get("ts", ""))
-
-        registered: dict[str, dict[str, Any]] = {}
-        for ev in all_events:
-            imsi = ev.get("imsi")
+        # Build PSI whitelist per IMSI from AMF (authoritative). SMF may keep
+        # ghost sessions when a UE deregisters without proper PDU release;
+        # AMF tracks the true current PSIs, so we filter SMF results against it.
+        psi_filter: dict[str, set[int]] = {}
+        for ue in amf_ues:
+            imsi = ue.get("supi", "").removeprefix("imsi-")
             if not imsi:
                 continue
+            psi_filter[imsi] = {
+                p.get("psi") for p in (ue.get("pdu_sessions") or [])
+                if isinstance(p, dict) and p.get("psi") is not None
+            }
 
-            if ev["type"] == "registration_ok":
-                entry = registered.setdefault(imsi, {"imsi": imsi, "status": "registered",
-                                                      "last_seen": ev["ts"], "sessions": []})
-                entry["status"] = "registered"
-                entry["last_seen"] = ev["ts"]
-                # New registration clears stale sessions from previous lifecycle
-                entry["sessions"] = []
+        pdu_by_imsi = self._get_pdu_by_imsi(psi_filter)
 
-            elif ev["type"] == "registration_fail":
-                # Network rejected the Registration Request (cause code in log).
-                # Treat as "failed" not "deregistered": the UE never made it.
-                entry = registered.setdefault(imsi, {"imsi": imsi, "status": "failed",
-                                                      "last_seen": ev["ts"], "sessions": []})
-                entry["status"] = "failed"
-                entry["last_seen"] = ev["ts"]
-                entry["sessions"] = []
+        now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        active: list[dict[str, Any]] = []
+        for ue in amf_ues:
+            imsi = ue.get("supi", "").removeprefix("imsi-")
+            if not imsi:
+                continue
+            cm = ue.get("cm_state", "")
+            status = "registered" if cm == "connected" else "idle"
+            if status == "registered":
+                self._last_seen_cache[imsi] = now_iso
+            gnb_info = ue.get("gnb") or {}
+            nr_tai = (ue.get("location") or {}).get("nr_tai") or {}
+            active.append({
+                "imsi": imsi,
+                "status": status,
+                "last_seen": self._last_seen_cache.get(imsi, ""),
+                "sessions": pdu_by_imsi.get(imsi, []),
+                "cm_state": cm,
+                "gnb_id": gnb_info.get("gnb_id"),
+                "tac": nr_tai.get("tac"),
+                "plmn": _parse_imsi(imsi),
+            })
 
-            elif ev["type"] in ("deregistration_req", "deregistration_ok"):
-                # UE is detaching. deregistration_ok is the terminal transition;
-                # deregistration_req is intermediate (state becomes "deregistering"
-                # until the accept arrives or the context release fires).
-                terminal = ev["type"] == "deregistration_ok"
-                new_status = "deregistered" if terminal else "deregistering"
-                entry = registered.setdefault(imsi, {"imsi": imsi, "status": new_status,
-                                                      "last_seen": ev["ts"], "sessions": []})
-                entry["status"] = new_status
-                entry["last_seen"] = ev["ts"]
-                if terminal:
-                    entry["sessions"] = []
-
-            elif ev["type"] == "ue_context_release":
-                entry = registered.setdefault(imsi, {"imsi": imsi, "status": "released",
-                                                      "last_seen": ev["ts"], "sessions": []})
-                entry["status"] = "released"
-                entry["sessions"] = []
-                entry["last_seen"] = ev["ts"]
-
-            elif ev["type"] == "pdu_session_est":
-                entry = registered.setdefault(imsi, {"imsi": imsi, "status": "registered",
-                                                      "last_seen": ev["ts"], "sessions": []})
-                ue_ip, dnn = ev.get("ue_ip", ""), ev.get("dnn", "")
-                # For a given DNN, the latest IP always replaces the previous one.
-                # This prevents stale IPs from old registration cycles accumulating
-                # alongside current sessions when the 4-hour log window spans multiple
-                # registration cycles for the same UE.
-                existing_idx = next(
-                    (i for i, s in enumerate(entry["sessions"]) if s.get("dnn") == dnn), -1
-                )
-                session_entry = {"dnn": dnn, "ue_ip": ue_ip, "ts": ev["ts"]}
-                if existing_idx >= 0:
-                    entry["sessions"][existing_idx] = session_entry
-                else:
-                    entry["sessions"].append(session_entry)
-                entry["last_seen"] = ev["ts"]
-
-            elif ev["type"] == "pdu_session_rel" and ev.get("ue_ip"):
-                ue_ip_rel = ev["ue_ip"]
-                dnn_rel = (ev.get("dnn") or "").split(":")[0]
-                if imsi in registered:
-                    sessions = registered[imsi]["sessions"]
-                    for i in range(len(sessions) - 1, -1, -1):
-                        s_dnn = (sessions[i].get("dnn") or "").split(":")[0]
-                        ip_match = sessions[i].get("ue_ip") == ue_ip_rel
-                        dnn_match = not dnn_rel or s_dnn == dnn_rel or dnn_rel in s_dnn or s_dnn in dnn_rel
-                        if ip_match and dnn_match:
-                            sessions.pop(i)
-                            break
-                    registered[imsi]["last_seen"] = ev["ts"]
-
-        # Safety net: force-clear sessions for terminal UEs
-        for u in registered.values():
-            if u["status"] in ("deregistered", "released", "failed"):
+        # Stale detection: AMF CM-CONNECTED count vs gNB num_connected_ues.
+        gnb_list = self.get_gnb_info()
+        gnb_ue_count = sum(g.get("num_connected_ues", 0) for g in gnb_list)
+        connected = [u for u in active if u["status"] == "registered"]
+        if gnb_list and gnb_ue_count < len(connected):
+            connected.sort(key=lambda u: u.get("last_seen", ""))
+            excess = len(connected) - gnb_ue_count
+            reason = (
+                f"AMF reports {len(connected)} CM-CONNECTED UE"
+                f"{'s' if len(connected) != 1 else ''} "
+                f"but gNB reports {gnb_ue_count}. "
+                "Likely hard crash or radio drop without Deregistration."
+            )
+            for u in connected[:excess]:
+                u["status"] = "stale"
+                u["status_reason"] = reason
                 u["sessions"] = []
 
-        active = list(registered.values())
+        # Attach gNB peer IP when exactly one gNB is connected.
+        if len(gnb_list) == 1:
+            peer = gnb_list[0].get("peer", "")
+            if peer.startswith("["):
+                gnb_ip = peer[1:peer.find("]")]
+            else:
+                gnb_ip = peer.split(":")[0]
+            if gnb_ip:
+                for u in active:
+                    u["gnb_ip"] = gnb_ip
 
-        # Attach a default status_reason for terminal/transitional states so
-        # the UI can always show a human-readable tooltip on the status badge.
         _DEFAULT_REASONS = {
-            "released": "gNB-N2 context released (idle timeout, signal loss, or power-off)",
-            "deregistered": "UE completed Deregistration",
-            "deregistering": "UE is detaching (Deregistration Request received)",
-            "failed": "Registration Request rejected by network",
+            "idle": "UE entered CM-IDLE — N2 context released, registration and PDU sessions retained",
+            "stale": "AMF context present but gNB UE count is lower — likely orphaned context",
         }
         for u in active:
             if u["status"] in _DEFAULT_REASONS and "status_reason" not in u:
                 u["status_reason"] = _DEFAULT_REASONS[u["status"]]
 
-        # ── Reconcile with Prometheus ran_ue gauge ──────────────────
-        # The AMF keeps context for a UE until ue_context_release is fully
-        # processed. Hard UE crashes (reboot loops, SIM yanked without
-        # deregistration) leave the AMF with an orphan context while the gNB
-        # has already dropped the UE. In that state:
-        #   - log-based list → N UEs still "registered"
-        #   - ran_ue gauge   → fewer UEs actually on-air
-        # Trust the gauge: mark the N-oldest registered UEs as stale with an
-        # explicit reason. This is the source of truth for "who's live right
-        # now" and makes the inconsistency visible in the UI.
-        prom_ran_ue: int | None = None
-        prom_amf_session: int | None = None
-        try:
-            data = await self.prom.instant_query("ran_ue")
-            vec = data.get("result", [])
-            prom_ran_ue = int(float(vec[0]["value"][1])) if vec else 0
-        except Exception:
-            prom_ran_ue = None
-        try:
-            data = await self.prom.instant_query("amf_session")
-            vec = data.get("result", [])
-            prom_amf_session = int(float(vec[0]["value"][1])) if vec else 0
-        except Exception:
-            prom_amf_session = None
-
-        if prom_ran_ue is not None:
-            registered_ues = [u for u in active if u["status"] == "registered"]
-            if len(registered_ues) > prom_ran_ue:
-                # Oldest last_seen first — those are the most likely to be
-                # the ones the RAN has dropped.
-                registered_ues.sort(key=lambda u: u.get("last_seen", ""))
-                excess = len(registered_ues) - prom_ran_ue
-                reason = (
-                    f"AMF retains context but gNB reports {prom_ran_ue} UE"
-                    f"{'s' if prom_ran_ue != 1 else ''} on-air "
-                    f"({len(registered_ues)} in log window). "
-                    "Likely hard crash or radio drop without Deregistration."
-                )
-                for u in registered_ues[:excess]:
-                    u["status"] = "stale"
-                    u["status_reason"] = reason
-                    # Sessions belong to an orphaned AMF context — clear them so
-                    # the UI doesn't claim the UE has live PDU sessions.
-                    u["sessions"] = []
-
-        # ── Enrichment (best-effort, never blocks the UE list) ──────
-        # 1. IMSI decoding — always cheap, no external call.
-        for u in active:
-            u["plmn"] = _parse_imsi(u.get("imsi", ""))
-
-        # 2. Subscriber config from MongoDB (slice/AMBR/DNNs/auth method).
-        # 3. Dashboard-only personalizations (nickname, icon).
         if self.mongo is not None:
             try:
                 personalizations = self.mongo.get_ue_personalizations_map()
@@ -777,9 +750,7 @@ class UEService:
                     doc = self.mongo.get_subscriber(imsi)
                 except Exception:
                     doc = None
-                u["subscription"] = (
-                    _summarize_subscriber(doc) if doc else {"configured": False}
-                )
+                u["subscription"] = _summarize_subscriber(doc) if doc else {"configured": False}
                 pers = personalizations.get(imsi)
                 if pers:
                     u["personalization"] = {
@@ -787,56 +758,126 @@ class UEService:
                         "icon": pers.get("icon"),
                     }
 
-        # 4. Attach gNB IP only when exactly one gNB is currently connected —
-        #    otherwise the mapping IMSI→gNB is ambiguous from logs alone and
-        #    showing a best-guess value would be misleading.
-        recent_gnb_ips: list[str] = []
-        for ev in all_events:
-            if ev.get("type") == "gnb_connect":
-                ip = _normalize_gnb_ip(ev.get("gnb_ip", ""))
-                if ip and ip not in recent_gnb_ips:
-                    recent_gnb_ips.append(ip)
-        if len(recent_gnb_ips) == 1:
-            for u in active:
-                u["gnb_ip"] = recent_gnb_ips[0]
+        return sorted(active, key=lambda u: u.get("imsi", ""))
 
-        return sorted(active, key=lambda u: u.get("last_seen", ""), reverse=True)
+    # ── Open5GS management APIs (Open5GS 2.7.7+) ───────────────────
+    # Use K8s API server pod proxy instead of exec+curl — avoids stdout/stderr
+    # mixing issues with kubernetes stream() and doesn't require curl in the image.
+    # Proxy URL: /api/v1/namespaces/{ns}/pods/{name}:{port}/proxy/{path}
+
+    def _nf_api_get(self, app_label: str, port: int, path: str) -> dict[str, Any]:
+        """Call an NF management HTTP endpoint via K8s API server pod proxy.
+
+        Uses api_client.call_api() directly so query params are passed as a
+        separate list — connect_get_namespaced_pod_proxy_with_path URL-encodes
+        '?' and '&' inside the path parameter, breaking query strings.
+        """
+        try:
+            pods = self.k8s.core.list_namespaced_pod(
+                namespace=NS, label_selector=f"app={app_label}",
+            )
+            if not pods.items:
+                return {}
+            pod_name = pods.items[0].metadata.name
+
+            parts = path.split("?", 1)
+            api_path = f"/api/v1/namespaces/{NS}/pods/{pod_name}:{port}/proxy/{parts[0]}"
+            query_params: list[tuple[str, str]] = []
+            if len(parts) > 1:
+                for kv in parts[1].split("&"):
+                    if "=" in kv:
+                        k, v = kv.split("=", 1)
+                        query_params.append((k, v))
+
+            api_client = self.k8s.core.api_client
+            # _preload_content=False returns raw urllib3 HTTPResponse, bypassing
+            # the client's JSON→Python-repr deserialisation that corrupts the body.
+            resp = api_client.call_api(
+                api_path, "GET",
+                query_params=query_params,
+                header_params={"Accept": "application/json"},
+                auth_settings=[],
+                _preload_content=False,
+                _return_http_data_only=True,
+            )
+            return json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:
+            log.warning("_nf_api_get %s/%s failed: %s", app_label, path, exc)
+            return {}
+
+    def _get_amf_ues(self) -> list[dict[str, Any]]:
+        """Fetch all registered UEs from AMF /ue-info with pagination."""
+        items: list[dict[str, Any]] = []
+        page, page_size = 0, 100
+        while True:
+            data = self._nf_api_get("amf", 9090, f"ue-info?page={page}&page_size={page_size}")
+            batch = data.get("items", [])
+            items.extend(batch)
+            if len(items) >= data.get("pager", {}).get("count", 0) or not batch:
+                break
+            page += 1
+        return items
+
+    def _get_pdu_by_imsi(
+        self,
+        psi_filter: dict[str, set[int]] | None = None,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Fetch active PDU sessions from SMF /pdu-info, keyed by IMSI.
+
+        When psi_filter is supplied, only sessions whose PSI is in the AMF
+        whitelist for that IMSI are returned. Drops SMF ghost sessions left
+        over from improper deregistration.
+        """
+        items: list[dict[str, Any]] = []
+        page, page_size = 0, 100
+        while True:
+            data = self._nf_api_get("smf", 9090, f"pdu-info?page={page}&page_size={page_size}")
+            batch = data.get("items", [])
+            items.extend(batch)
+            if len(items) >= data.get("pager", {}).get("count", 0) or not batch:
+                break
+            page += 1
+        by_imsi: dict[str, list[dict[str, Any]]] = {}
+        for item in items:
+            imsi = item.get("supi", "").removeprefix("imsi-")
+            if not imsi:
+                continue
+            allowed = psi_filter.get(imsi) if psi_filter is not None else None
+            by_imsi[imsi] = [
+                {
+                    "psi":       pdu.get("psi"),
+                    "dnn":       pdu.get("dnn", ""),
+                    "ue_ip":     pdu.get("ipv4", ""),
+                    "pdu_state": pdu.get("pdu_state", ""),
+                    "snssai":    pdu.get("snssai", {}),
+                    "ts":        "",
+                }
+                for pdu in item.get("pdu", [])
+                if pdu.get("pdu_state") != "inactive"
+                and (allowed is None or pdu.get("psi") in allowed)
+            ]
+        return by_imsi
 
     # ── Open5GS infoAPI: connected gNBs (gnb_id, plmn, peer) ──────
 
     def get_gnb_info(self) -> list[dict[str, Any]]:
-        """Fetch connected gNBs from AMF infoAPI (gnb_id, plmn, peer, num_connected_ues).
-        Requires Open5GS built with infoAPI (main branch). Returns [] on failure."""
-        try:
-            pods = self.k8s.core.list_namespaced_pod(
-                namespace=NS, label_selector="app=amf",
-            )
-            if not pods.items:
-                return []
-            pod_name = pods.items[0].metadata.name
-            cmd = ["sh", "-c", "curl -s -m 5 http://127.0.0.1:9090/gnb-info 2>/dev/null || wget -qO- --timeout=5 http://127.0.0.1:9090/gnb-info 2>/dev/null || echo '{}'"]
-            result = self._exec_in_pod(pod_name, cmd)
-            if result.get("exit_code") != 0 or not result.get("stdout"):
-                return []
-            data = json.loads(result["stdout"])
-            items = data.get("items", data.get("gnbs", []))
-            if not isinstance(items, list):
-                return []
-            out = []
-            for g in items:
-                peer = ""
-                if isinstance(g.get("ng"), dict) and isinstance(g["ng"].get("sctp"), dict):
-                    peer = g["ng"]["sctp"].get("peer", "")
-                out.append({
-                    "gnb_id": g.get("gnb_id"),
-                    "plmn": g.get("plmn", ""),
-                    "peer": peer,
-                    "num_connected_ues": g.get("num_connected_ues", 0),
-                })
-            return out
-        except Exception as exc:
-            log.debug("get_gnb_info failed: %s", exc)
+        """Fetch connected gNBs from AMF /gnb-info via K8s pod proxy."""
+        data = self._nf_api_get("amf", 9090, "gnb-info")
+        items = data.get("items", [])
+        if not isinstance(items, list):
             return []
+        out = []
+        for g in items:
+            peer = ""
+            if isinstance(g.get("ng"), dict) and isinstance(g["ng"].get("sctp"), dict):
+                peer = g["ng"]["sctp"].get("peer", "")
+            out.append({
+                "gnb_id": g.get("gnb_id"),
+                "plmn": g.get("plmn", ""),
+                "peer": peer,
+                "num_connected_ues": g.get("num_connected_ues", 0),
+            })
+        return out
 
     # ── UERANSIM UE pods ────────────────────────────────────────
 
@@ -973,7 +1014,7 @@ def _deduplicate_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
         if etype == "gnb_connect":
             key = _normalize_gnb_ip(ev.get("gnb_ip", ""))
-        elif etype in ("registration_ok", "ue_context_release"):
+        elif etype in ("registration_ok", "ue_context_release", "service_request"):
             key = ev.get("imsi", "")
         elif etype in ("ue_count_change", "session_count_change"):
             key = ev.get("source", "")

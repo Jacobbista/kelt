@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
 
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8080";
 const POLL_INTERVAL_MS = 5000;
 const RETRY_WHEN_DOWN_MS = 2000;
 const FETCH_TIMEOUT_MS = 5000;
@@ -19,7 +18,7 @@ export function useBackendHealth() {
     const ctrl = new AbortController();
     const to = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
     try {
-      const res = await fetch(`${API_BASE}/health`, {
+      const res = await fetch(`/health`, {
         method: "GET",
         signal: ctrl.signal,
       });

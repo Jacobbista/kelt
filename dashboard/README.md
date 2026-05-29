@@ -97,20 +97,20 @@ On `ansible` VM:
 
 ## Runtime mode
 
-The dashboard is deployed and started automatically by Phase 8.
+The dashboard is deployed and started automatically by Phase 9.
 
 ### Prepare/reconcile via dedicated phase
 
 ```bash
 cd ~/ansible-ro
-ansible-playbook phases/08-dashboard/playbook.yml
+ansible-playbook phases/09-dashboard/playbook.yml
 ```
 
 ### Development mode (live reload)
 
 ```bash
 cd ~/ansible-ro
-ansible-playbook phases/08-dashboard/playbook.yml -e dashboard_mode=dev
+ansible-playbook phases/09-dashboard/playbook.yml -e dashboard_mode=dev
 ```
 
 Mode behavior:
