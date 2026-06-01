@@ -23,7 +23,7 @@ spec:
       containers:
         - name: dashboard-frontend
           image: {{ dashboard_frontend_image }}
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           ports:
             - containerPort: 8080
               name: http

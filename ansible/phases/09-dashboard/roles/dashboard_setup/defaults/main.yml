@@ -69,7 +69,7 @@ dashboard_keycloak_client_id: "{{ lookup('ansible.builtin.env', 'DASHBOARD_KEYCL
 dashboard_cluster_enabled: "{{ lookup('ansible.builtin.env', 'DASHBOARD_CLUSTER_ENABLED') | default('true', true) | bool }}"
 dashboard_dev_enabled: "{{ lookup('ansible.builtin.env', 'DASHBOARD_DEV_ENABLED') | default('false', true) | bool }}"
 dashboard_namespace: dashboard
-dashboard_frontend_image: "ghcr.io/jacobbista/dashboard-frontend:0.1.0"
+dashboard_frontend_image: "ghcr.io/jacobbista/dashboard-frontend:latest"
 dashboard_cluster_nodeport: 31573
 dashboard_cluster_ready_retries: 12
 dashboard_cluster_ready_delay: 5

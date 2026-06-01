@@ -295,6 +295,18 @@
     definition: "{{ lookup('template', role_path + '/templates/dashboard-frontend-service.yaml.j2') | from_yaml }}"
   when: dashboard_cluster_enabled | bool
 
+# Image tag is mutable (:latest) so the Deployment manifest hash does not
+# change when CI publishes a new digest. A rollout restart is required
+# to make kubelet honor imagePullPolicy: Always and pull the fresh image.
+- name: Rollout restart dashboard frontend Deployment
+  ansible.builtin.command:
+    cmd: >-
+      k3s kubectl -n {{ dashboard_namespace }} rollout restart deploy/dashboard-frontend
+  delegate_to: "{{ groups['masters'][0] }}"
+  become: true
+  changed_when: true
+  when: dashboard_cluster_enabled | bool
+
 - name: Wait for dashboard frontend pod ready
   kubernetes.core.k8s_info:
     api_version: apps/v1
