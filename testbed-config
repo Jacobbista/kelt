@@ -19,6 +19,7 @@ DEFAULT_KEYCLOAK_PATH_PREFIX=""
 DEFAULT_DASHBOARD_KEYCLOAK_EXTERNAL_URL=""
 DEFAULT_DASHBOARD_KEYCLOAK_PATH_PREFIX=""
 DEFAULT_DASHBOARD_EXTERNAL_ORIGIN=""
+DEFAULT_DASHBOARD_DEV_EXTERNAL_URL=""
 DEFAULT_POSITIONING_DEMO_EXTERNAL_ORIGIN=""
 DEFAULT_KEYCLOAK_ADMIN_PASSWORD=""
 DEFAULT_CAMARA_CLIENT_SECRET=""
@@ -37,6 +38,7 @@ load_config() {
   DASHBOARD_KEYCLOAK_EXTERNAL_URL="${DEFAULT_DASHBOARD_KEYCLOAK_EXTERNAL_URL}"
   DASHBOARD_KEYCLOAK_PATH_PREFIX="${DEFAULT_DASHBOARD_KEYCLOAK_PATH_PREFIX}"
   DASHBOARD_EXTERNAL_ORIGIN="${DEFAULT_DASHBOARD_EXTERNAL_ORIGIN}"
+  DASHBOARD_DEV_EXTERNAL_URL="${DEFAULT_DASHBOARD_DEV_EXTERNAL_URL}"
   POSITIONING_DEMO_EXTERNAL_ORIGIN="${DEFAULT_POSITIONING_DEMO_EXTERNAL_ORIGIN}"
   KEYCLOAK_ADMIN_PASSWORD="${DEFAULT_KEYCLOAK_ADMIN_PASSWORD}"
   CAMARA_CLIENT_SECRET="${DEFAULT_CAMARA_CLIENT_SECRET}"
@@ -57,6 +59,7 @@ load_config() {
         DASHBOARD_KEYCLOAK_EXTERNAL_URL) DASHBOARD_KEYCLOAK_EXTERNAL_URL="$value" ;;
         DASHBOARD_KEYCLOAK_PATH_PREFIX) DASHBOARD_KEYCLOAK_PATH_PREFIX="$value" ;;
         DASHBOARD_EXTERNAL_ORIGIN) DASHBOARD_EXTERNAL_ORIGIN="$value" ;;
+        DASHBOARD_DEV_EXTERNAL_URL) DASHBOARD_DEV_EXTERNAL_URL="$value" ;;
         POSITIONING_DEMO_EXTERNAL_ORIGIN) POSITIONING_DEMO_EXTERNAL_ORIGIN="$value" ;;
         # Legacy fallback: migrate old .testbed.env secret to .testbed.secrets.
         KEYCLOAK_ADMIN_PASSWORD) KEYCLOAK_ADMIN_PASSWORD="$value" ;;
@@ -90,6 +93,7 @@ KEYCLOAK_PATH_PREFIX=${KEYCLOAK_PATH_PREFIX}
 DASHBOARD_KEYCLOAK_EXTERNAL_URL=${DASHBOARD_KEYCLOAK_EXTERNAL_URL}
 DASHBOARD_KEYCLOAK_PATH_PREFIX=${DASHBOARD_KEYCLOAK_PATH_PREFIX}
 DASHBOARD_EXTERNAL_ORIGIN=${DASHBOARD_EXTERNAL_ORIGIN}
+DASHBOARD_DEV_EXTERNAL_URL=${DASHBOARD_DEV_EXTERNAL_URL}
 POSITIONING_DEMO_EXTERNAL_ORIGIN=${POSITIONING_DEMO_EXTERNAL_ORIGIN}
 EOF
   echo "Configuration saved to .testbed.env"
@@ -343,6 +347,10 @@ show_status() {
   [[ "${DASHBOARD_AUTH_ENABLED}" == "true" ]] && auth_label="enabled" || auth_label="disabled"
   local secrets_label
   secrets_label="$(count_configured_secrets)/3"
+  local prod_url_label
+  prod_url_label="${DASHBOARD_EXTERNAL_ORIGIN:-unset}"
+  local dev_url_label
+  dev_url_label="${DASHBOARD_DEV_EXTERNAL_URL:-unset}"
 
   if $HAS_GUM; then
     gum style --border rounded --padding "1 2" --border-foreground 39 \
@@ -354,6 +362,8 @@ show_status() {
       "UERANSIM:  ${ueransim_label}" \
       "RAN:       ${ran_label}" \
       "Dev front: ${DASHBOARD_DEV_ENABLED}" \
+      "Prod URL:  ${prod_url_label}" \
+      "Dev URL:   ${dev_url_label}" \
       "Auth:      ${auth_label}" \
       "IAM admin: ${iam_admin_label}" \
       "Secrets:   ${secrets_label}"
@@ -367,6 +377,8 @@ show_status() {
     echo "  UERANSIM:  ${ueransim_label}"
     echo "  RAN:       ${ran_label}"
     echo "  Dev front: ${DASHBOARD_DEV_ENABLED}"
+    echo "  Prod URL:  ${prod_url_label}"
+    echo "  Dev URL:   ${dev_url_label}"
     echo "  Auth:      ${auth_label}"
     echo "  IAM admin: ${iam_admin_label}"
     echo "  Secrets:   ${secrets_label}"
@@ -540,6 +552,7 @@ do_set_keycloak_external_url() {
 
 do_auth_network() {
   local action="${1:-}"
+  local arg="${2:-}"
   if [[ -z "$action" ]]; then
     if ! $HAS_GUM; then
       echo "Usage: $0 auth-network status|mode|auth|origin|positioning-origin|prefix|keycloak-url|preset-cloudflare"
@@ -564,6 +577,7 @@ do_auth_network() {
       echo "DASHBOARD_KEYCLOAK_EXTERNAL_URL=${DASHBOARD_KEYCLOAK_EXTERNAL_URL}"
       echo "DASHBOARD_KEYCLOAK_PATH_PREFIX=${DASHBOARD_KEYCLOAK_PATH_PREFIX}"
       echo "DASHBOARD_EXTERNAL_ORIGIN=${DASHBOARD_EXTERNAL_ORIGIN}"
+      echo "DASHBOARD_DEV_EXTERNAL_URL=${DASHBOARD_DEV_EXTERNAL_URL}"
       echo "POSITIONING_DEMO_EXTERNAL_ORIGIN=${POSITIONING_DEMO_EXTERNAL_ORIGIN}"
       ;;
     "Toggle dashboard dev frontend (true/false)"|dev)
@@ -585,17 +599,24 @@ do_auth_network() {
       do_set_keycloak_external_url
       ;;
     "Apply cloudflare-style preset"|preset-cloudflare)
-      local domain
-      if $HAS_GUM; then
-        domain="$(gum input --placeholder "core.example.com")"
-      else
-        read -rp "Public domain (without scheme): " domain
+      local domain="$arg"
+      if [[ -z "$domain" ]]; then
+        if $HAS_GUM; then
+          domain="$(gum input --placeholder "core.example.com")"
+        else
+          read -rp "Public domain (without scheme): " domain
+        fi
+      fi
+      if [[ -z "$domain" ]]; then
+        echo "Domain required."
+        return 1
       fi
       DASHBOARD_AUTH_ENABLED="true"
       KEYCLOAK_PATH_PREFIX="/auth"
       DASHBOARD_KEYCLOAK_PATH_PREFIX="/auth"
       DASHBOARD_KEYCLOAK_EXTERNAL_URL="https://${domain}"
       DASHBOARD_EXTERNAL_ORIGIN="https://${domain}"
+      DASHBOARD_DEV_EXTERNAL_URL="https://dev.${domain}"
       POSITIONING_DEMO_EXTERNAL_ORIGIN="https://${domain}"
       save_config
       echo "Applied preset for https://${domain}"
@@ -651,7 +672,7 @@ do_up() {
     return 0
   fi
   (
-    export TESTBED_PROFILE EDGE_ENABLED DEPLOY_MODE PHYSICAL_RAN_ENABLED PHYSICAL_RAN_BRIDGE DASHBOARD_DEV_ENABLED DASHBOARD_AUTH_ENABLED KEYCLOAK_PATH_PREFIX DASHBOARD_KEYCLOAK_EXTERNAL_URL DASHBOARD_KEYCLOAK_PATH_PREFIX DASHBOARD_EXTERNAL_ORIGIN POSITIONING_DEMO_EXTERNAL_ORIGIN KEYCLOAK_ADMIN_PASSWORD CAMARA_CLIENT_SECRET DASHBOARD_READONLY_SECRET
+    export TESTBED_PROFILE EDGE_ENABLED DEPLOY_MODE PHYSICAL_RAN_ENABLED PHYSICAL_RAN_BRIDGE DASHBOARD_DEV_ENABLED DASHBOARD_AUTH_ENABLED KEYCLOAK_PATH_PREFIX DASHBOARD_KEYCLOAK_EXTERNAL_URL DASHBOARD_KEYCLOAK_PATH_PREFIX DASHBOARD_EXTERNAL_ORIGIN DASHBOARD_DEV_EXTERNAL_URL POSITIONING_DEMO_EXTERNAL_ORIGIN KEYCLOAK_ADMIN_PASSWORD CAMARA_CLIENT_SECRET DASHBOARD_READONLY_SECRET
     cd "$SCRIPT_DIR"
     vagrant up
   )
@@ -665,7 +686,7 @@ do_provision() {
   fi
   ensure_required_secrets_for_provision || return 1
   (
-    export TESTBED_PROFILE EDGE_ENABLED DEPLOY_MODE PHYSICAL_RAN_ENABLED PHYSICAL_RAN_BRIDGE DASHBOARD_DEV_ENABLED DASHBOARD_AUTH_ENABLED KEYCLOAK_PATH_PREFIX DASHBOARD_KEYCLOAK_EXTERNAL_URL DASHBOARD_KEYCLOAK_PATH_PREFIX DASHBOARD_EXTERNAL_ORIGIN POSITIONING_DEMO_EXTERNAL_ORIGIN KEYCLOAK_ADMIN_PASSWORD CAMARA_CLIENT_SECRET DASHBOARD_READONLY_SECRET
+    export TESTBED_PROFILE EDGE_ENABLED DEPLOY_MODE PHYSICAL_RAN_ENABLED PHYSICAL_RAN_BRIDGE DASHBOARD_DEV_ENABLED DASHBOARD_AUTH_ENABLED KEYCLOAK_PATH_PREFIX DASHBOARD_KEYCLOAK_EXTERNAL_URL DASHBOARD_KEYCLOAK_PATH_PREFIX DASHBOARD_EXTERNAL_ORIGIN DASHBOARD_DEV_EXTERNAL_URL POSITIONING_DEMO_EXTERNAL_ORIGIN KEYCLOAK_ADMIN_PASSWORD CAMARA_CLIENT_SECRET DASHBOARD_READONLY_SECRET
     cd "$SCRIPT_DIR"
     if worker_needs_ran_reload; then
       echo "Applying PHYSICAL_RAN_BRIDGE=${PHYSICAL_RAN_BRIDGE} to worker via vagrant reload..."
@@ -837,7 +858,7 @@ main() {
     secrets)
       do_secrets "${2:-}" ;;
     auth-network)
-      do_auth_network "${2:-}" ;;
+      do_auth_network "${2:-}" "${3:-}" ;;
     dashboard-dev)
       do_set_dashboard_dev_enabled "${2:-}" ;;
     dashboard-auth)
@@ -864,6 +885,7 @@ main() {
       echo "export DASHBOARD_KEYCLOAK_EXTERNAL_URL=${DASHBOARD_KEYCLOAK_EXTERNAL_URL}"
       echo "export DASHBOARD_KEYCLOAK_PATH_PREFIX=${DASHBOARD_KEYCLOAK_PATH_PREFIX}"
       echo "export DASHBOARD_EXTERNAL_ORIGIN=${DASHBOARD_EXTERNAL_ORIGIN}"
+      echo "export DASHBOARD_DEV_EXTERNAL_URL=${DASHBOARD_DEV_EXTERNAL_URL}"
       echo "export POSITIONING_DEMO_EXTERNAL_ORIGIN=${POSITIONING_DEMO_EXTERNAL_ORIGIN}"
       echo "# Secrets are stored in .testbed.secrets:"
       echo "#   KEYCLOAK_ADMIN_PASSWORD"
