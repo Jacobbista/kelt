@@ -14,10 +14,20 @@ import { env } from "../runtime-env";
 // backend runs with DASHBOARD_SKIP_AUTH=true.
 export const AUTH_ENABLED = env("VITE_AUTH_ENABLED", "false") === "true";
 
-// Authority is the realm root. Examples:
-//   http://<host>:31910/realms/5g-testbed
-//   https://core.example.com/auth/realms/5g-testbed   (path-prefix layout)
-const AUTHORITY = env("VITE_KEYCLOAK_AUTHORITY");
+// Authority is the realm root. The dashboard ships under two domains
+// (prod cluster pod, opt-in dev frontend) so the authority must be
+// same-origin per request, otherwise the browser fights a cross-origin
+// .well-known/openid-configuration fetch behind Cloudflare Access. The
+// SPA reverse proxies /auth/ to Keycloak on its own origin (nginx in the
+// cluster pod, Vite proxy in dev), so derive the realm URL from
+// window.location.origin plus the operator-defined prefix and realm.
+//
+// VITE_KEYCLOAK_AUTHORITY still honored as an explicit override for
+// deployments that pin a single Keycloak hostname across many origins.
+const PATH_PREFIX = env("VITE_KEYCLOAK_PATH_PREFIX", "");
+const REALM = env("VITE_KEYCLOAK_REALM", "5g-testbed");
+const AUTHORITY = env("VITE_KEYCLOAK_AUTHORITY")
+  || `${typeof window !== "undefined" ? window.location.origin : ""}${PATH_PREFIX}/realms/${REALM}`;
 const CLIENT_ID = env("VITE_KEYCLOAK_CLIENT_ID", "dashboard");
 
 function buildUserManager() {

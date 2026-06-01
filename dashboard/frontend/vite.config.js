@@ -29,6 +29,19 @@ const allowedHosts = process.env.VITE_ALLOWED_HOSTS
   ? process.env.VITE_ALLOWED_HOSTS.split(",")
   : true;
 
+// HMR through a public tunnel needs the browser to reach the dev server
+// over wss on the public port. VITE_HMR_HOST should be set to the public
+// hostname (for example dev.example.com) when the dev frontend is
+// fronted by a reverse proxy. Falls back to Vite defaults for direct
+// LAN access where the public host equals the listener.
+const hmr = process.env.VITE_HMR_HOST
+  ? {
+      host: process.env.VITE_HMR_HOST,
+      protocol: process.env.VITE_HMR_PROTOCOL || "wss",
+      clientPort: Number(process.env.VITE_HMR_CLIENT_PORT || 443),
+    }
+  : undefined;
+
 export default defineConfig({
   plugins: [react()],
   resolve: {
@@ -43,6 +56,7 @@ export default defineConfig({
     port: 5173,
     allowedHosts,
     proxy,
+    hmr,
     watch: {
       usePolling: true,
       interval: 1000,
