@@ -40,6 +40,14 @@ data:
         proxy_pass http://{{ hostvars[groups['control'][0]]['ansible_host'] }}:{{ dashboard_watchdog_port }}/;
       }
 
+      # The OIDC client redirects the browser back to /auth/callback after
+      # Keycloak login. That path is a React route, not a Keycloak endpoint,
+      # so it must fall through to the SPA. Exact match wins over the prefix
+      # /auth/ block below in nginx matching order.
+      location = /auth/callback {
+        try_files $uri /index.html;
+      }
+
       # Keycloak lives behind the worker NodePort; same-origin proxy avoids
       # CORS and mixed-content issues when the dashboard is fronted by a
       # tunnel or external reverse proxy.
