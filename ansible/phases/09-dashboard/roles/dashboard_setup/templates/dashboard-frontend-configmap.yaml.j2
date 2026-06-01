@@ -7,7 +7,9 @@ data:
   env-config.js: |
     window.__ENV__ = {
       VITE_AUTH_ENABLED: "{{ dashboard_auth_enabled | bool | lower }}",
-      VITE_KEYCLOAK_AUTHORITY: "{{ dashboard_keycloak_external_url }}{{ dashboard_keycloak_path_prefix }}/realms/{{ dashboard_keycloak_realm }}",
+      VITE_KEYCLOAK_AUTHORITY: "",
+      VITE_KEYCLOAK_PATH_PREFIX: "{{ dashboard_keycloak_path_prefix }}",
+      VITE_KEYCLOAK_REALM: "{{ dashboard_keycloak_realm }}",
       VITE_KEYCLOAK_CLIENT_ID: "{{ dashboard_keycloak_client_id }}",
       DASHBOARD_DEV_EXTERNAL_URL: "{{ dashboard_dev_external_url if dashboard_dev_external_url else 'http://' ~ hostvars[groups['control'][0]]['ansible_host'] ~ ':' ~ dashboard_frontend_port }}"
     };

@@ -11,8 +11,17 @@ Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=VITE_BACKEND_TARGET=http://127.0.0.1:{{ dashboard_backend_port }}
 Environment=VITE_AUTH_ENABLED={{ dashboard_auth_enabled | bool | lower }}
 Environment=VITE_KEYCLOAK_PROXY_TARGET={{ dashboard_keycloak_proxy_target }}
-Environment=VITE_KEYCLOAK_AUTHORITY={{ dashboard_keycloak_external_url }}{{ dashboard_keycloak_path_prefix }}/realms/{{ dashboard_keycloak_realm }}
+Environment=VITE_KEYCLOAK_PATH_PREFIX={{ dashboard_keycloak_path_prefix }}
+Environment=VITE_KEYCLOAK_REALM={{ dashboard_keycloak_realm }}
 Environment=VITE_KEYCLOAK_CLIENT_ID={{ dashboard_keycloak_client_id }}
+# HMR over a public tunnel. When DASHBOARD_DEV_EXTERNAL_URL is set, the
+# browser reaches the dev server through that hostname over wss/443.
+# Empty URL means LAN-only access where Vite defaults work fine.
+{% if dashboard_dev_external_url %}
+Environment=VITE_HMR_HOST={{ dashboard_dev_external_url | regex_replace('^https?://', '') | regex_replace('/.*$', '') }}
+Environment=VITE_HMR_PROTOCOL={{ 'wss' if dashboard_dev_external_url.startswith('https://') else 'ws' }}
+Environment=VITE_HMR_CLIENT_PORT={{ '443' if dashboard_dev_external_url.startswith('https://') else '80' }}
+{% endif %}
 # Unit is only installed when dashboard_dev_enabled=true, so the dev
 # server (HMR) is the only mode this service runs.
 Environment=CHOKIDAR_USEPOLLING=1
