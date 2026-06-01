@@ -1,13 +1,12 @@
 ---
-# Read from DASHBOARD_MODE so `ansible-playbook` reruns honor the same value
-# the testbed-config tool writes to .testbed.env without needing -e.
-dashboard_mode: "{{ lookup('ansible.builtin.env', 'DASHBOARD_MODE') | default('prod', true) }}"
+# Backend reads from a rsync work copy so source edits do not crash an
+# active session; the dev Vite frontend reads from the live source mount
+# so HMR works.
 dashboard_source_dir: /vagrant/dashboard
 dashboard_dev_source_dir: /vagrant/dashboard
 dashboard_work_dir: /home/vagrant/dashboard-work
-dashboard_runtime_dir: "{{ dashboard_work_dir if dashboard_mode == 'prod' else dashboard_dev_source_dir }}"
-dashboard_backend_dir: "{{ dashboard_runtime_dir }}/backend"
-dashboard_frontend_dir: "{{ dashboard_runtime_dir }}/frontend"
+dashboard_backend_dir: "{{ dashboard_work_dir }}/backend"
+dashboard_frontend_dir: "{{ dashboard_dev_source_dir }}/frontend"
 
 dashboard_backend_venv: /home/vagrant/.venvs/dashboard-backend
 dashboard_bind_host: "{{ ansible_host | default('192.168.56.13') }}"
@@ -50,20 +49,25 @@ dashboard_keycloak_path_prefix: "{{ lookup('ansible.builtin.env', 'DASHBOARD_KEY
 dashboard_keycloak_external_url: "{{ lookup('ansible.builtin.env', 'DASHBOARD_KEYCLOAK_EXTERNAL_URL') | default(dashboard_keycloak_url, true) }}"
 dashboard_keycloak_client_id: "{{ lookup('ansible.builtin.env', 'DASHBOARD_KEYCLOAK_CLIENT_ID') | default('dashboard', true) }}"
 
-# ── Frontend target derived from dashboard_mode ─────────────────────────
-# Binary model:
-#   dashboard_mode=dev  → Vite dev server (HMR) running on the ansible VM
-#                         via systemd; cluster pod is torn down.
-#   dashboard_mode=prod → nginx pod in the cluster pulling a prebuilt
-#                         image from GHCR; ansible VM Vite systemd is
-#                         stopped and disabled.
-# Backend uvicorn always runs on the ansible VM either way; the cluster
-# pod reverse-proxies /api, /health, /watchdog to it and /auth to
-# Keycloak on the worker NodePort. Operator can override the derived
-# toggles with -e for ad-hoc cases (for example, run both at once for a
-# side-by-side comparison).
-dashboard_cluster_enabled: "{{ dashboard_mode == 'prod' }}"
-dashboard_frontend_host_enabled: "{{ dashboard_mode == 'dev' }}"
+# ── Frontend targets (cluster baseline + optional dev) ─────────────────
+# Two independent toggles, NOT mutually exclusive:
+#
+#   dashboard_cluster_enabled (default true)
+#     Cluster pod is the baseline production frontend on the worker
+#     NodePort. Always provisioned unless explicitly disabled.
+#
+#   dashboard_dev_enabled (default false)
+#     Vite dev server (HMR) on the ansible VM, opt-in for active
+#     development. Coexists with the cluster pod on a different IP
+#     (ansible VM port 31573 vs worker NodePort 31573). Eventually
+#     toggled from the prod frontend UI; for now the operator enables
+#     it via testbed-config (gum) or -e dashboard_dev_enabled=true.
+#
+# Backend uvicorn always runs on the ansible VM. The cluster pod
+# reverse-proxies /api, /health, /watchdog to it and /auth to Keycloak
+# on the worker NodePort.
+dashboard_cluster_enabled: "{{ lookup('ansible.builtin.env', 'DASHBOARD_CLUSTER_ENABLED') | default('true', true) | bool }}"
+dashboard_dev_enabled: "{{ lookup('ansible.builtin.env', 'DASHBOARD_DEV_ENABLED') | default('false', true) | bool }}"
 dashboard_namespace: dashboard
 dashboard_frontend_image: "ghcr.io/jacobbista/dashboard-frontend:0.1.0"
 dashboard_cluster_nodeport: 31573

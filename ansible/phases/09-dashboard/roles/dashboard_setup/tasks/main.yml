@@ -1,9 +1,8 @@
 ---
-- name: Validate dashboard mode
-  ansible.builtin.assert:
-    that:
-      - dashboard_mode in ['prod', 'dev']
-    fail_msg: "Invalid dashboard_mode='{{ dashboard_mode }}'. Allowed values: prod, dev."
+# Backend + cluster pod are baseline. Vite dev frontend is opt-in via
+# dashboard_dev_enabled. The two frontends coexist on different IPs
+# (cluster pod = worker NodePort, Vite dev = ansible VM port) so no
+# port conflict and either can be reached at any time.
 
 - name: Ensure system prerequisites
   become: true
@@ -46,14 +45,11 @@
     mode: "0600"
     content: "{{ _dashboard_kubeconfig.content | b64decode | regex_replace('https://127\\.0\\.0\\.1:6443', 'https://' + hostvars[groups['masters'][0]]['ansible_host'] + ':6443') }}"
 
-- name: Stop dashboard services before redeployment
+- name: Stop dashboard backend before redeployment
   become: true
   ansible.builtin.systemd:
-    name: "{{ item }}"
+    name: "{{ dashboard_backend_service_name }}"
     state: stopped
-  loop:
-    - "{{ dashboard_backend_service_name }}"
-    - "{{ dashboard_frontend_service_name }}"
   failed_when: false
 
 - name: Ensure dashboard work directory exists
@@ -61,7 +57,6 @@
     path: "{{ dashboard_work_dir }}"
     state: directory
     mode: "0755"
-  when: dashboard_mode == 'prod'
 
 - name: Sync dashboard sources from ansible-ro to writable workspace
   ansible.builtin.command:
@@ -72,7 +67,6 @@
       "{{ dashboard_source_dir }}/"
       "{{ dashboard_work_dir }}/"
   changed_when: true
-  when: dashboard_mode == 'prod'
 
 - name: Ensure dashboard launcher scripts are executable
   ansible.builtin.file:
@@ -81,7 +75,6 @@
   loop:
     - "{{ dashboard_work_dir }}/run-backend.sh"
     - "{{ dashboard_work_dir }}/run-frontend.sh"
-  when: dashboard_mode == 'prod'
 
 - name: Ensure shared backend venv parent exists
   ansible.builtin.file:
@@ -106,6 +99,7 @@
     content: |
       DASHBOARD_ADMIN_TOKEN={{ dashboard_admin_token }}
       DASHBOARD_BACKEND_SERVICE_NAME={{ dashboard_backend_service_name }}
+      DASHBOARD_FRONTEND_SERVICE_NAME={{ dashboard_frontend_service_name }}
       DASHBOARD_ALLOW_CONFIGMAP_WRITE={{ dashboard_allow_configmap_write | bool | lower }}
       DASHBOARD_AUDIT_LOG_PATH={{ dashboard_backend_dir }}/logs/audit.log
       DASHBOARD_SKIP_AUTH={{ (not (dashboard_auth_enabled | bool)) | lower }}
@@ -114,31 +108,30 @@
       DASHBOARD_KEYCLOAK_ACCEPTED_CLIENTS={{ dashboard_keycloak_accepted_clients }}
       DASHBOARD_KEYCLOAK_PATH_PREFIX={{ dashboard_keycloak_path_prefix }}
       DASHBOARD_CORS_ORIGIN={{ dashboard_cors_origin }}
+      DASHBOARD_DEV_EXTERNAL_URL={{ dashboard_dev_external_url }}
 
-- name: Create frontend environment file
+- name: Create frontend environment file (used by Vite dev only)
   ansible.builtin.copy:
     dest: "{{ dashboard_frontend_dir }}/.env"
     mode: "0644"
     content: |
-      # Reverse-proxy target for Vite (dev) / Vite preview (prod). The browser
-      # always talks to the frontend origin; Vite forwards /api and /health to
-      # this backend. Keeps a single origin so tunnels, PNA, and mixed-content
-      # rules don't apply.
+      # Reverse-proxy targets for Vite dev. The browser hits the dev frontend
+      # origin (ansible VM NodePort) and Vite forwards /api, /health, /auth
+      # to these targets. Cluster pod uses its own nginx.conf delivered via
+      # ConfigMap, so this file is irrelevant in the prod path.
       VITE_BACKEND_TARGET=http://127.0.0.1:{{ dashboard_backend_port }}
-      # OIDC / Keycloak. Enable once IAM (phase 08) is deployed and reachable.
-      # AUTHORITY is the realm root the browser hits, so it must be the same
-      # origin the user reaches the dashboard at (LAN, tunnel, or path-prefix).
       VITE_AUTH_ENABLED={{ dashboard_auth_enabled | bool | lower }}
       VITE_KEYCLOAK_PROXY_TARGET={{ dashboard_keycloak_proxy_target }}
       VITE_KEYCLOAK_AUTHORITY={{ dashboard_keycloak_external_url }}{{ dashboard_keycloak_path_prefix }}/realms/{{ dashboard_keycloak_realm }}
       VITE_KEYCLOAK_CLIENT_ID={{ dashboard_keycloak_client_id }}
+  when: dashboard_dev_enabled | bool
 
 - name: Install frontend dependencies
   ansible.builtin.command:
     cmd: npm install
     chdir: "{{ dashboard_frontend_dir }}"
   changed_when: true
-  when: dashboard_frontend_host_enabled | bool
+  when: dashboard_dev_enabled | bool
 
 - name: Install backend systemd service
   become: true
@@ -148,14 +141,14 @@
     mode: "0644"
   register: backend_service_unit
 
-- name: Install frontend systemd service
+- name: Install frontend systemd service (dev only)
   become: true
   ansible.builtin.template:
     src: dashboard-frontend.service.j2
     dest: "/etc/systemd/system/{{ dashboard_frontend_service_name }}.service"
     mode: "0644"
   register: frontend_service_unit
-  when: dashboard_frontend_host_enabled | bool
+  when: dashboard_dev_enabled | bool
 
 - name: Install watchdog systemd service
   become: true
@@ -174,13 +167,26 @@
     (frontend_service_unit.changed | default(false)) or
     watchdog_service_unit.changed
 
-- name: Allow dashboard user to restart backend via systemctl (for in-app recovery)
+- name: Allow dashboard user to restart backend via systemctl (in-app recovery)
   become: true
   ansible.builtin.copy:
     dest: "/etc/sudoers.d/dashboard-backend-restart"
     mode: "0440"
     content: |
       {{ dashboard_service_user }} ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart {{ dashboard_backend_service_name }}
+
+# Sudoers rule scoped to the dev frontend systemd unit only. Lets the
+# backend toggle the Vite dev server from the prod UI (DevModeIndicator
+# in the sidebar) without giving up arbitrary sudo on the ansible VM.
+- name: Allow dashboard user to start/stop dev frontend via systemctl
+  become: true
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/dashboard-dev-frontend-control"
+    mode: "0440"
+    content: |
+      {{ dashboard_service_user }} ALL=(ALL) NOPASSWD: /usr/bin/systemctl start {{ dashboard_frontend_service_name }}
+      {{ dashboard_service_user }} ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop {{ dashboard_frontend_service_name }}
+      {{ dashboard_service_user }} ALL=(ALL) NOPASSWD: /usr/bin/systemctl is-active {{ dashboard_frontend_service_name }}
 
 - name: Enable and start dashboard backend service
   become: true
@@ -189,22 +195,21 @@
     enabled: true
     state: started
 
-- name: Enable and start dashboard frontend service (dev mode)
+- name: Enable and start dashboard dev frontend service
   become: true
   ansible.builtin.systemd:
     name: "{{ dashboard_frontend_service_name }}"
     enabled: true
     state: started
-  when: dashboard_frontend_host_enabled | bool
+  when: dashboard_dev_enabled | bool
 
-- name: Stop and disable dashboard frontend service (prod mode hands off to cluster pod)
+- name: Stop dashboard dev frontend service (opt-out)
   become: true
   ansible.builtin.systemd:
     name: "{{ dashboard_frontend_service_name }}"
-    enabled: false
     state: stopped
   failed_when: false
-  when: not (dashboard_frontend_host_enabled | bool)
+  when: not (dashboard_dev_enabled | bool)
 
 - name: Enable and start dashboard watchdog service
   become: true
@@ -223,7 +228,7 @@
   until: dashboard_service_status.stdout | trim == "active"
   retries: 20
   delay: 2
-  loop: "{{ [dashboard_backend_service_name] + ([dashboard_frontend_service_name] if (dashboard_frontend_host_enabled | bool) else []) }}"
+  loop: "{{ [dashboard_backend_service_name] + ([dashboard_frontend_service_name] if (dashboard_dev_enabled | bool) else []) }}"
 
 - name: Fail with explicit service status if not active
   ansible.builtin.fail:
@@ -233,96 +238,12 @@
   when: (item.stdout | trim) != "active"
   loop: "{{ dashboard_service_status.results }}"
 
-- name: Record active dashboard mode
-  ansible.builtin.copy:
-    dest: /home/vagrant/.dashboard-mode
-    content: "{{ dashboard_mode }}"
-    mode: "0644"
-    owner: vagrant
-    group: vagrant
-
-- name: Install dashboard mode switcher shell functions
-  ansible.builtin.blockinfile:
-    path: /home/vagrant/.bashrc
-    marker: "# {mark} DASHBOARD MODE SWITCHER"
-    block: |
-      _dashboard_switch() {
-        local target="$1"
-        local playbook=~/ansible-ro/phases/09-dashboard/playbook.yml
-        local inventory=~/ansible-ro/inventory.ini
-        local mode_file=~/.dashboard-mode
-        if [[ "$target" != "dev" && "$target" != "prod" ]]; then
-          echo "Usage: dev | prod" >&2; return 1
-        fi
-        local current="(unknown)"
-        [[ -f "$mode_file" ]] && current="$(cat "$mode_file")"
-        if [[ "$current" == "$target" ]]; then
-          echo "Dashboard is already in $target mode."; return 0
-        fi
-        echo "Dashboard mode: $current  →  $target"
-        read -rp "Confirm? [y/N] " _reply
-        [[ "$_reply" =~ ^[Yy]$ ]] || { echo "Cancelled."; return 0; }
-        ansible-playbook "$playbook" -i "$inventory" -e "dashboard_mode=$target" \
-          && echo "$target" > "$mode_file" \
-          && echo "Switched to $target mode."
-      }
-      dev()  { _dashboard_switch dev;  }
-      prod() { _dashboard_switch prod; }
-
-      # Mode prefix in PS1 — survives clear, updates after each command
-      _dashboard_mode() {
-        local m=""
-        [[ -r "$HOME/.dashboard-mode" ]] && m="$(cat "$HOME/.dashboard-mode" 2>/dev/null)"
-        printf '%s' "${m//[$'\t\r\n ']}"  # strip any stray whitespace/CRLF
-      }
-      _dashboard_ps1_prefix() {
-        case "$(_dashboard_mode)" in
-          prod) printf '\001\033[0;32m\002[dash:prod]\001\033[0m\002 ' ;;
-          dev)  printf '\001\033[0;33m\002[dash:dev]\001\033[0m\002 ' ;;
-        esac
-      }
-      _DASH_BASE_PS1="${PS1:-\u@\h:\w\$ }"
-      PS1='$(_dashboard_ps1_prefix)'"${_DASH_BASE_PS1}"
-
-      _dashboard_banner() {
-        local _dm _dm_c _dm_hint
-        _dm="$(_dashboard_mode)"
-        [[ -z "$_dm" ]] && return
-        if [[ "$_dm" == "prod" ]]; then
-          _dm_c=$'\033[0;32m'; _dm_hint="dev"
-        else
-          _dm_c=$'\033[0;33m'; _dm_hint="prod"
-        fi
-        printf '\n  dashboard  %s\033[1m%s\033[0m  \033[2m·  type \033[0m\033[1m%s\033[0m\033[2m to switch\033[0m\n\n' "$_dm_c" "$_dm" "$_dm_hint"
-      }
-      alias clear='clear; _dashboard_banner'
-      _dashboard_banner
-
-- name: Dashboard setup summary
-  ansible.builtin.debug:
-    msg: "Dashboard phase prepared and started successfully. mode={{ dashboard_mode }} source={{ dashboard_runtime_dir }}"
-
-- name: Dashboard endpoints
-  ansible.builtin.debug:
-    msg:
-      - "UI: http://{{ dashboard_bind_host }}:{{ dashboard_frontend_port }}"
-      - "API: http://{{ dashboard_bind_host }}:{{ dashboard_backend_port }}"
-      - "API docs: http://{{ dashboard_bind_host }}:{{ dashboard_backend_port }}/docs"
-
-- name: Dashboard service commands
-  ansible.builtin.debug:
-    msg:
-      - "sudo systemctl status {{ dashboard_backend_service_name }}"
-      - "sudo systemctl status {{ dashboard_frontend_service_name }}"
-
 # ====================================================================
-# Cluster pod (optional, additive). Provisions an nginx pod on the worker
-# serving the built dashboard bundle from a pre-published GHCR image. The
-# pod reverse-proxies /api, /health, /watchdog to the backend on the
-# ansible VM and /auth to Keycloak on the worker NodePort. Backend is not
-# moved to the cluster (no RBAC, no service account migration). Operator
-# choses which IP (ansible VM or worker) to expose externally. Tunnel
-# pattern unchanged. See docs/security/external-access.md.
+# Cluster pod baseline. Always provisioned unless explicitly disabled via
+# dashboard_cluster_enabled=false. Pulls the prebuilt frontend image from
+# GHCR and reverse-proxies /api, /health, /watchdog to the backend on the
+# ansible VM and /auth to Keycloak on the worker NodePort. Backend stays
+# on the ansible VM, no cluster RBAC migration needed.
 # ====================================================================
 
 - name: Ensure dashboard namespace exists
@@ -389,16 +310,9 @@
     dashboard_cluster_deploy.resources[0].status.availableReplicas | default(0) >= 1
   when: dashboard_cluster_enabled | bool
 
-- name: Dashboard cluster pod endpoint
-  ansible.builtin.debug:
-    msg:
-      - "Cluster UI: http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ dashboard_cluster_nodeport }}"
-      - "Image: {{ dashboard_frontend_image }}"
-  when: dashboard_cluster_enabled | bool
-
-# Tear down cluster pod when reverting to dev mode. Namespace is left in
-# place so manual workloads in the dashboard namespace are not affected.
-- name: Tear down dashboard cluster Deployment (dev mode)
+# Tear down cluster pod resources when explicitly disabled. Namespace is
+# left in place to avoid disturbing manually created workloads.
+- name: Tear down dashboard cluster Deployment
   kubernetes.core.k8s:
     state: absent
     kubeconfig: "{{ kubeconfig_path }}"
@@ -408,7 +322,7 @@
     namespace: "{{ dashboard_namespace }}"
   when: not (dashboard_cluster_enabled | bool)
 
-- name: Tear down dashboard cluster Service (dev mode)
+- name: Tear down dashboard cluster Service
   kubernetes.core.k8s:
     state: absent
     kubeconfig: "{{ kubeconfig_path }}"
@@ -418,7 +332,7 @@
     namespace: "{{ dashboard_namespace }}"
   when: not (dashboard_cluster_enabled | bool)
 
-- name: Tear down dashboard cluster ConfigMap (dev mode)
+- name: Tear down dashboard cluster ConfigMap
   kubernetes.core.k8s:
     state: absent
     kubeconfig: "{{ kubeconfig_path }}"
@@ -427,3 +341,11 @@
     name: dashboard-frontend-config
     namespace: "{{ dashboard_namespace }}"
   when: not (dashboard_cluster_enabled | bool)
+
+- name: Dashboard endpoints
+  ansible.builtin.debug:
+    msg:
+      - "Cluster UI (prod):     http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ dashboard_cluster_nodeport }}  (cluster_enabled={{ dashboard_cluster_enabled }})"
+      - "Vite dev UI:           http://{{ dashboard_bind_host }}:{{ dashboard_frontend_port }}  (dev_enabled={{ dashboard_dev_enabled }})"
+      - "Backend API:           http://{{ dashboard_bind_host }}:{{ dashboard_backend_port }}"
+      - "Backend API docs:      http://{{ dashboard_bind_host }}:{{ dashboard_backend_port }}/docs"

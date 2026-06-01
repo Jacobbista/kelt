@@ -13,6 +13,7 @@ from app.auth import require_admin, require_viewer_or_admin
 from app.config import settings
 from app.routers.admin import router as admin_router
 from app.routers.cluster import router as cluster_router
+from app.routers.dev_frontend import router as dev_frontend_router
 from app.routers.experiments import router as experiments_router
 from app.routers.health import router as health_router
 from app.routers.kubernetes import router as kubernetes_router
@@ -79,6 +80,11 @@ _admin = [Depends(require_admin)]
 # the legacy admin lane gated by DASHBOARD_ADMIN_TOKEN.
 app.include_router(health_router)
 app.include_router(admin_router)
+
+# Dev frontend control: lets the prod UI toggle the opt-in Vite dev
+# frontend. Admin-gated; the scoped sudoers rule is installed by phase
+# 09 and only covers start/stop/is-active on the dashboard-frontend unit.
+app.include_router(dev_frontend_router, dependencies=_admin)
 
 # Viewer-or-admin: cluster/NF status, pod metadata, log streaming, metrics.
 app.include_router(cluster_router,     dependencies=_viewer)

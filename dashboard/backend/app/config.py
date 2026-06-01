@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     admin_token: str = "change-me"
     allow_configmap_write: bool = False
     backend_service_name: str = "dashboard-backend"
+    frontend_service_name: str = "dashboard-frontend"
+    # Optional external URL the dev frontend is reachable at. Used by the
+    # prod UI to render an "Open dev" link. Empty leaves the link to
+    # window.__ENV__.DASHBOARD_DEV_EXTERNAL_URL on the browser side.
+    dev_external_url: str = ""
 
     audit_log_path: str = "logs/audit.log"
     cors_origin: str = "http://localhost:5173"

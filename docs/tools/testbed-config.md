@@ -1,6 +1,6 @@
 # testbed-config
 
-`testbed-config` is an interactive CLI tool for configuring the testbed before deployment. It manages deployment profiles, edge VM toggle, physical RAN bridge selection, and other parameters — persisting them to `.testbed.env` so that `vagrant up` and Ansible provisioning pick them up automatically.
+`testbed-config` is an interactive CLI tool for configuring the testbed before deployment. It manages deployment profiles, edge VM toggle, physical RAN bridge selection, IAM/CAMARA secret material, and other parameters, persisting non-secret values to `.testbed.env` and secrets to `.testbed.secrets`.
 
 > **Optional dependency**: Install [gum](https://github.com/charmbracelet/gum) (Charm) for a polished TUI experience with styled menus and confirmations. Without gum, the tool falls back to basic `select`/`read` prompts.
 
@@ -31,7 +31,7 @@ graph LR
     VF -->|"passes extra-vars"| ANS
 ```
 
-The tool writes configuration to `.testbed.env` (gitignored). The Vagrantfile reads this file at startup to determine which VMs to create and how to allocate resources. Environment variables set in the shell take precedence over `.testbed.env` values.
+The tool writes non-secret configuration to `.testbed.env` and writes IAM bootstrap secret material to `.testbed.secrets` (both gitignored). The Vagrantfile reads both files at startup to determine which VMs to create and how to allocate resources. Environment variables set in the shell take precedence over file values.
 
 ## Requirements
 
@@ -69,7 +69,7 @@ Launches a TUI menu (with gum) or a numbered menu (without gum):
   │  Edge VM:   disabled             │
   │  Deploy:    core_only            │
   │  RAN:       disabled             │
-  │  Dashboard: prod                 │
+  │  Dev front: false                │
   ╰──────────────────────────────────╯
 
   > Set deployment profile
@@ -101,6 +101,12 @@ Launches a TUI menu (with gum) or a numbered menu (without gum):
 | `set-profile` | `laptop` \| `server` | Set deployment profile. Server disables edge by default |
 | `edge` | `on` \| `off` | Enable or disable the edge VM |
 | `ran` | `<nic>` \| `disable` | Set physical RAN bridge interface, or disable |
+| `auth-network` | `status` \| `dev` \| `auth` \| `origin` \| `positioning-origin` \| `prefix` \| `keycloak-url` \| `preset-cloudflare` | Configure auth/domain/path non-secret values. With gum and no args, opens a guided wizard. |
+| `dashboard-dev` | `true` \| `false` | Toggle the opt-in Vite dev frontend on the ansible VM, persisted as `DASHBOARD_DEV_ENABLED` in `.testbed.env`. The cluster pod is the always-on baseline. |
+| `dashboard-auth` | `enabled` \| `disabled` | Set `DASHBOARD_AUTH_ENABLED` persisted in `.testbed.env`. |
+| `iam-admin-password` | `[password]` \| `--clear` | Set or clear Keycloak admin bootstrap password stored in `.testbed.secrets`. With gum and no args, opens a guided chooser (`auto-generate`, `manual`, `clear`). |
+| `secrets` | `generate-missing` \| `manual` \| `rotate` \| `status` \| `clear` | Manage IAM/CAMARA secrets in `.testbed.secrets`. With gum and no args, opens a guided wizard. |
+| `run-phase` | `[phase-dir]` | Run a single phase playbook (`phases/<phase-dir>/playbook.yml`) via the ansible VM. Automatically loads `/vagrant/.testbed.env` and `/vagrant/.testbed.secrets` before execution. |
 | `up` | — | Run `vagrant up` with current configuration (confirms first) |
 | `provision` | — | Run `vagrant provision ansible` (confirms first) |
 | `env` | — | Print `export` commands for current config (for `eval`) |
@@ -135,11 +141,40 @@ Setting `server` automatically disables edge. Setting `laptop` automatically ena
 
 When `PHYSICAL_RAN_ENABLED=true` and `PHYSICAL_RAN_BRIDGE` differs from the NIC currently applied to the worker VM, `testbed-config provision` reloads the worker before running Ansible so the bridged adapter is actually attached.
 
+### IAM/CAMARA Secrets
+
+`iam-admin-password` sets only `KEYCLOAK_ADMIN_PASSWORD`. The `secrets` command manages all secret keys used by phase 08 and phase 10:
+
+- `KEYCLOAK_ADMIN_PASSWORD`
+- `CAMARA_CLIENT_SECRET`
+- `DASHBOARD_READONLY_SECRET`
+
+In gum mode, `./testbed-config secrets` opens a guided wizard. During `testbed-config provision`, if one or more secrets are missing, the tool asks whether to auto-generate missing values, open the wizard, or abort.
+
+### Auth/Network Non-Secret Settings
+
+`auth-network` manages non-secret values in `.testbed.env` that control public auth routing and URL alignment:
+
+- `DASHBOARD_DEV_ENABLED`
+- `DASHBOARD_AUTH_ENABLED`
+- `KEYCLOAK_PATH_PREFIX`
+- `DASHBOARD_KEYCLOAK_EXTERNAL_URL`
+- `DASHBOARD_KEYCLOAK_PATH_PREFIX`
+- `DASHBOARD_EXTERNAL_ORIGIN`
+- `POSITIONING_DEMO_EXTERNAL_ORIGIN`
+
+The `preset-cloudflare` action asks for a public domain and applies a single-origin profile (`https://<domain>`, `/auth`, auth enabled). The dev frontend toggle is orthogonal to this preset and stays under explicit operator control.
+
+The dashboard frontend has two targets, controlled independently:
+
+- `dashboard_cluster_enabled` (default `true`) keeps the prebuilt nginx pod on the worker as the baseline production frontend.
+- `dashboard_dev_enabled` (default `false`) provisions an optional Vite dev server on the ansible VM with hot reload. Toggleable from the prod UI sidebar (`DevModeIndicator`) once the phase has run at least once.
+
 ---
 
 ## Configuration File
 
-The tool persists all settings to `.testbed.env` in the project root:
+The tool persists non-secret settings to `.testbed.env` in the project root:
 
 ```bash
 # Generated by testbed-config — do not edit manually
@@ -148,7 +183,22 @@ EDGE_ENABLED=false
 DEPLOY_MODE=core_only
 PHYSICAL_RAN_ENABLED=false
 PHYSICAL_RAN_BRIDGE=
-DASHBOARD_MODE=prod
+DASHBOARD_DEV_ENABLED=false
+DASHBOARD_AUTH_ENABLED=true
+KEYCLOAK_PATH_PREFIX=
+DASHBOARD_KEYCLOAK_EXTERNAL_URL=
+DASHBOARD_KEYCLOAK_PATH_PREFIX=
+DASHBOARD_EXTERNAL_ORIGIN=
+POSITIONING_DEMO_EXTERNAL_ORIGIN=
+```
+
+Secret values are stored separately in `.testbed.secrets`:
+
+```bash
+# Generated by testbed-config — secrets
+KEYCLOAK_ADMIN_PASSWORD=<generated-or-user-supplied>
+CAMARA_CLIENT_SECRET=<generated-or-user-supplied>
+DASHBOARD_READONLY_SECRET=<generated-or-user-supplied>
 ```
 
 ### Precedence
