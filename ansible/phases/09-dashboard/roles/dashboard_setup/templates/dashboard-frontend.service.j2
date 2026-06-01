@@ -13,13 +13,11 @@ Environment=VITE_AUTH_ENABLED={{ dashboard_auth_enabled | bool | lower }}
 Environment=VITE_KEYCLOAK_PROXY_TARGET={{ dashboard_keycloak_proxy_target }}
 Environment=VITE_KEYCLOAK_AUTHORITY={{ dashboard_keycloak_external_url }}{{ dashboard_keycloak_path_prefix }}/realms/{{ dashboard_keycloak_realm }}
 Environment=VITE_KEYCLOAK_CLIENT_ID={{ dashboard_keycloak_client_id }}
-{% if dashboard_mode == 'dev' %}
+# Unit is only installed when dashboard_dev_enabled=true, so the dev
+# server (HMR) is the only mode this service runs.
 Environment=CHOKIDAR_USEPOLLING=1
 Environment=WATCHPACK_POLLING=true
 ExecStart=/usr/bin/npm run dev -- --host 0.0.0.0 --port {{ dashboard_frontend_port }}
-{% else %}
-ExecStart=/usr/bin/npm run preview -- --host 0.0.0.0 --port {{ dashboard_frontend_port }}
-{% endif %}
 Restart=always
 RestartSec=3
 TimeoutStopSec=10

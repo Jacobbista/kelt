@@ -1,6 +1,7 @@
 ---
-# Run: ansible-playbook ansible/phases/09-dashboard/playbook.yml [-e dashboard_mode=dev]
-# dashboard_mode: prod (default) | dev
+# Run: ansible-playbook ansible/phases/09-dashboard/playbook.yml
+#   [-e dashboard_dev_enabled=true]   opt-in Vite dev frontend on ansible VM
+#   [-e dashboard_cluster_enabled=false]   disable baseline cluster pod
 - name: Phase 09 - Dashboard Setup
   hosts: control
   gather_facts: true

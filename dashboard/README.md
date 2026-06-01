@@ -106,21 +106,27 @@ cd ~/ansible-ro
 ansible-playbook phases/09-dashboard/playbook.yml
 ```
 
-### Development mode (live reload)
+### Development mode (Vite HMR on ansible VM)
 
 ```bash
 cd ~/ansible-ro
-ansible-playbook phases/09-dashboard/playbook.yml -e dashboard_mode=dev
+ansible-playbook phases/09-dashboard/playbook.yml -e dashboard_dev_enabled=true
 ```
 
-Mode behavior:
+Targets:
 
-- `prod` (default): services run from `/home/vagrant/dashboard-work`
-- `dev`: services run from `/vagrant/dashboard` with backend/frontend reload enabled
+- Cluster pod (`dashboard_cluster_enabled=true`, default): nginx pod on the
+  worker NodePort 31573 serving the prebuilt frontend bundle.
+- Vite dev (`dashboard_dev_enabled=true`, opt-in): systemd `dashboard-frontend`
+  on the ansible VM reading the live `/vagrant/dashboard` mount with HMR.
+
+Both targets coexist on different IPs; the prod sidebar widget toggles the
+dev unit through `/api/v1/dev-frontend/{status,enable,disable}`.
 
 Access:
 
-- UI: `http://<ansible-ip>:31573`
+- Cluster UI: `http://<worker-ip>:31573`
+- Dev UI (when enabled): `http://<ansible-ip>:31573`
 - API docs: `http://<ansible-ip>:31880/docs`
 
 Systemd services:
