@@ -103,6 +103,8 @@ Never use `shell` to write files, install packages, or manage services when a de
 
 Jinja2 templates are named `<component>-<resource-type>.yaml.j2` and live in `roles/<role>/templates/`. Use Jinja2 block comments (`{# ... #}`) to explain non-obvious template logic. Reference variables from `all.yml` or role defaults — do not hardcode values in templates.
 
+After editing a role's defaults or removing a variable, dry-render every `*.j2` in that role's `templates/` with `StrictUndefined` against the role's `defaults/main.yml`. This surfaces stale references before they fail at deploy time.
+
 ---
 
 ## KubeEdge Constraints

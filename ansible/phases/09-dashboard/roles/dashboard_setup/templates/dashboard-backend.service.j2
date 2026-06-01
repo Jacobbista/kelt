@@ -9,7 +9,7 @@ User={{ dashboard_service_user }}
 WorkingDirectory={{ dashboard_backend_dir }}
 Environment=PATH={{ dashboard_backend_venv }}/bin:/usr/local/bin:/usr/bin:/bin
 Environment=DASHBOARD_APP_ENV=prod
-Environment=DASHBOARD_RUNTIME_SOURCE={{ dashboard_runtime_dir }}
+Environment=DASHBOARD_RUNTIME_SOURCE={{ dashboard_backend_dir }}
 Environment=DASHBOARD_HOST=0.0.0.0
 Environment=DASHBOARD_PORT={{ dashboard_backend_port }}
 Environment=DASHBOARD_KUBECONFIG_PATH={{ kubeconfig_path | default('/vagrant/tests/kubeconfig') }}
