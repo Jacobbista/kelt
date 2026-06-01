@@ -77,6 +77,12 @@ export const getServiceStatus = () => get("/api/v1/admin/service-status");
 // so watchdog stays callable when backend dies.
 export const getWatchdogToken = () => get("/api/v1/admin/watchdog-token").then((j) => j.token);
 
+// Dev frontend control. The cluster pod is the baseline; the Vite dev
+// frontend on the ansible VM is an opt-in extra toggled from here.
+export const getDevFrontendStatus = () => get("/api/v1/dev-frontend/status");
+export const enableDevFrontend = () => post("/api/v1/dev-frontend/enable", {});
+export const disableDevFrontend = () => post("/api/v1/dev-frontend/disable", {});
+
 // Cluster
 export const getClusterSummary = () => get("/api/v1/cluster/summary");
 export const getNfStatus = () => get("/api/v1/nf/status");

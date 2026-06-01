@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import { useLocation } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import TimeSyncPopover from "./TimeSyncPopover";
+import DevModeIndicator from "./DevModeIndicator";
 import { env } from "../runtime-env";
 
 const NAV_ITEMS = [
@@ -171,6 +172,8 @@ export default function Sidebar({ onNavigate, runtime, serverTime }) {
             {runtime.runtime_source}
           </span>
         </div>
+
+        <DevModeIndicator />
 
         {auth.enabled && auth.user && (
           <div className="mt-2 flex items-center justify-between gap-2 border-t border-slate-800 pt-2">
