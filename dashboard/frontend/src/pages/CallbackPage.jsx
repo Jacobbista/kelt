@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { getUserManager } from "../auth/oidc";
 
@@ -10,8 +10,15 @@ import { getUserManager } from "../auth/oidc";
 export default function CallbackPage() {
   const navigate = useNavigate();
   const [error, setError] = useState(null);
+  // React.StrictMode runs effects twice in development. The second call to
+  // signinRedirectCallback redeems an already-consumed authorization code
+  // and Keycloak returns 400 invalid_grant. Module-level ref guarantees a
+  // single exchange across both mount passes.
+  const inFlightRef = useRef(false);
 
   useEffect(() => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     const um = getUserManager();
     if (!um) {
       navigate("/", { replace: true });

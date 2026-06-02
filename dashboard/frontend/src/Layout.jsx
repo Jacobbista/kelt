@@ -3,10 +3,12 @@ import { useLocation } from "react-router-dom";
 import Loader from "./components/Loader";
 import Sidebar from "./components/Sidebar";
 import { useOperations } from "./context/OperationsContext";
+import { useAuth } from "./auth/AuthContext";
 import { getWatchdogToken } from "./api";
 
 export default function Layout({ onNavigate, runtime, children, backendUnreachable, serverTime }) {
   const ops = useOperations();
+  const auth = useAuth();
   const [statusExpanded, setStatusExpanded] = useState(false);
   const [serviceStatus, setServiceStatus] = useState(null);
   const [statusLoading, setStatusLoading] = useState(false);
@@ -14,16 +16,19 @@ export default function Layout({ onNavigate, runtime, children, backendUnreachab
   // Watchdog runs on a separate port (127.0.0.1 only); Vite proxies /watchdog
   // so it stays reachable via tunnel without exposing another origin. The
   // watchdog requires an X-Watchdog-Token header; fetch the token while the
-  // backend is up so we can still restart it after a crash.
+  // backend is up so we can still restart it after a crash. Gate behind the
+  // auth context resolving a user, otherwise the very first render fires the
+  // request before any Bearer token is attached and the backend returns 401.
   const watchdogBase = "/watchdog";
   const watchdogTokenRef = useRef(null);
 
   useEffect(() => {
     if (watchdogTokenRef.current) return;
+    if (auth.enabled && (auth.loading || !auth.user)) return;
     getWatchdogToken()
       .then((t) => { watchdogTokenRef.current = t || null; })
       .catch(() => { /* viewer or unauthenticated caller: restart button fails gracefully */ });
-  }, []);
+  }, [auth.enabled, auth.loading, auth.user]);
 
   const _wdHeader = () => (
     watchdogTokenRef.current ? { "X-Watchdog-Token": watchdogTokenRef.current } : {}
