@@ -116,12 +116,15 @@
     mode: "0644"
     content: |
       # Reverse-proxy targets for Vite dev. The browser hits the dev frontend
-      # origin (ansible VM NodePort) and Vite forwards /api, /health, /auth
-      # to these targets. Cluster pod uses its own nginx.conf delivered via
-      # ConfigMap, so this file is irrelevant in the prod path.
+      # origin (ansible VM NodePort) and Vite forwards /api, /health to the
+      # local backend. Auth flows directly to the canonical Keycloak origin:
+      # any same-origin proxy would crash on KC_HOSTNAME-pinned form actions
+      # the same way the demo SPA did (see docs/security/iam.md). Cluster pod
+      # uses its own nginx.conf delivered via ConfigMap, so this file is
+      # irrelevant in the prod path.
+      VITE_FRONTEND_MODE=dev
       VITE_BACKEND_TARGET=http://127.0.0.1:{{ dashboard_backend_port }}
       VITE_AUTH_ENABLED={{ dashboard_auth_enabled | bool | lower }}
-      VITE_KEYCLOAK_PROXY_TARGET={{ dashboard_keycloak_proxy_target }}
       VITE_KEYCLOAK_AUTHORITY={{ dashboard_keycloak_external_url }}{{ dashboard_keycloak_path_prefix }}/realms/{{ dashboard_keycloak_realm }}
       VITE_KEYCLOAK_CLIENT_ID={{ dashboard_keycloak_client_id }}
   when: dashboard_dev_enabled | bool

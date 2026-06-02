@@ -34,13 +34,25 @@ const allowedHosts = process.env.VITE_ALLOWED_HOSTS
 // hostname (for example dev.example.com) when the dev frontend is
 // fronted by a reverse proxy. Falls back to Vite defaults for direct
 // LAN access where the public host equals the listener.
-const hmr = process.env.VITE_HMR_HOST
-  ? {
-      host: process.env.VITE_HMR_HOST,
-      protocol: process.env.VITE_HMR_PROTOCOL || "wss",
-      clientPort: Number(process.env.VITE_HMR_CLIENT_PORT || 443),
-    }
-  : undefined;
+//
+// VITE_HMR_DISABLED=1 fully disables the HMR client. Use when the proxy
+// in front of the dev server does not pass through WebSocket upgrades
+// (some Zero-Trust configurations). The dev server still works, only
+// auto-reload on file change is lost.
+const hmr = process.env.VITE_HMR_DISABLED === "1"
+  ? false
+  : process.env.VITE_HMR_HOST
+    ? {
+        host: process.env.VITE_HMR_HOST,
+        protocol: process.env.VITE_HMR_PROTOCOL || "wss",
+        clientPort: Number(process.env.VITE_HMR_CLIENT_PORT || 443),
+        // VITE_HMR_PATH moves the HMR WebSocket off the root path so an
+        // upstream Zero-Trust policy can bypass auth for just that path
+        // (root usually carries the SPA auth gate). Leave unset to use
+        // Vite default of "/".
+        ...(process.env.VITE_HMR_PATH ? { path: process.env.VITE_HMR_PATH } : {}),
+      }
+    : undefined;
 
 export default defineConfig({
   plugins: [react()],

@@ -80,5 +80,19 @@ dashboard_cluster_ready_delay: 5
 # for the dev frontend (e.g. dev.example.com) can override here.
 dashboard_dev_external_url: "{{ lookup('ansible.builtin.env', 'DASHBOARD_DEV_EXTERNAL_URL') | default('', true) }}"
 
+# HMR over a tunnel can be fragile if the reverse proxy / Zero-Trust
+# layer does not pass through WebSocket upgrades on the dev origin. The
+# default keeps HMR on (dev without HMR loses most of its value); set
+# DASHBOARD_DEV_HMR_ENABLED=false to opt out and silence the periodic
+# reload when the operator cannot make the upstream WS-friendly.
+dashboard_dev_hmr_enabled: "{{ lookup('ansible.builtin.env', 'DASHBOARD_DEV_HMR_ENABLED') | default('true', true) }}"
+
+# Optional path the Vite HMR WebSocket listens on. Empty = Vite default
+# of "/" which collides with the SPA auth gate on tunneled deployments.
+# Set to a unique path (e.g. /__vite_hmr) and add a matching Zero-Trust
+# bypass policy on the upstream so the WebSocket upgrade is not blocked
+# by Access. Ignored when HMR is disabled.
+dashboard_dev_hmr_path: "{{ lookup('ansible.builtin.env', 'DASHBOARD_DEV_HMR_PATH') | default('', true) }}"
+
 # Watchdog tiny HTTP server port (used to restart the backend from the UI).
 dashboard_watchdog_port: 31881

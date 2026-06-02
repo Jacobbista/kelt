@@ -6,6 +6,7 @@ metadata:
 data:
   env-config.js: |
     window.__ENV__ = {
+      VITE_FRONTEND_MODE: "prod",
       VITE_AUTH_ENABLED: "{{ dashboard_auth_enabled | bool | lower }}",
       VITE_KEYCLOAK_AUTHORITY: "",
       VITE_KEYCLOAK_PATH_PREFIX: "{{ dashboard_keycloak_path_prefix }}",

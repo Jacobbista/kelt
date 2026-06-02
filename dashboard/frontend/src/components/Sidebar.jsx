@@ -4,6 +4,7 @@ import { useAuth } from "../auth/AuthContext";
 import TimeSyncPopover from "./TimeSyncPopover";
 import DevModeIndicator from "./DevModeIndicator";
 import { env } from "../runtime-env";
+import { KEYCLOAK_AUTHORITY } from "../auth/oidc";
 
 const NAV_ITEMS = [
   { id: "overview",      label: "Overview",    icon: "\u25A3", path: "/"           },
@@ -63,10 +64,9 @@ export default function Sidebar({ onNavigate, runtime, serverTime }) {
       : "role: none";
 
   const keycloakAdminUrl = useMemo(() => {
-    const authority = env("VITE_KEYCLOAK_AUTHORITY");
-    if (!authority) return null;
+    if (!KEYCLOAK_AUTHORITY) return null;
     try {
-      const u = new URL(authority);
+      const u = new URL(KEYCLOAK_AUTHORITY);
       const seg = u.pathname.split("/").filter(Boolean);
       const realmsIdx = seg.indexOf("realms");
       if (realmsIdx < 0) return null;
@@ -94,10 +94,15 @@ export default function Sidebar({ onNavigate, runtime, serverTime }) {
     }
   }, [auth, loggingOut]);
 
+  // Frontend mode is set at the frontend layer, not the backend. The cluster
+  // nginx pod injects VITE_FRONTEND_MODE=prod via env-config.js; the Vite dev
+  // server injects VITE_FRONTEND_MODE=dev via .env. Falls back to the backend
+  // runtime.mode when the frontend variable is unset (older bundles).
+  const frontendMode = (env("VITE_FRONTEND_MODE") || runtime.mode || "unknown").toLowerCase();
   const modeBadgeClass =
-    runtime.mode === "dev"
+    frontendMode === "dev"
       ? "bg-amber-600 text-amber-50"
-      : runtime.mode === "prod"
+      : frontendMode === "prod"
         ? "bg-emerald-600 text-emerald-50"
         : "bg-slate-600 text-slate-100";
 
@@ -166,7 +171,7 @@ export default function Sidebar({ onNavigate, runtime, serverTime }) {
 
         <div className="mt-2 flex items-center gap-2">
           <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${modeBadgeClass}`}>
-            {runtime.mode}
+            {frontendMode}
           </span>
           <span className="truncate text-[10px] text-slate-500" title={runtime.runtime_source}>
             {runtime.runtime_source}

@@ -1,0 +1,146 @@
+{
+  "realm": "{{ keycloak_realm }}",
+  "enabled": true,
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "accessTokenLifespan": 3600,
+  "roles": {
+    "realm": [
+      {
+        "name": "camara-location-read",
+        "description": "Read access to CAMARA Location API",
+        "composite": false,
+        "clientRole": false
+      },
+      {
+        "name": "dashboard-admin",
+        "description": "Full read/write access to the dashboard (exec, scale, restart, NF update). Composite: inherits camara-location-read so dashboard admins can also call the CAMARA Location API from the positioning demo.",
+        "composite": true,
+        "composites": {
+          "realm": ["camara-location-read"]
+        },
+        "clientRole": false
+      },
+      {
+        "name": "dashboard-viewer",
+        "description": "Read-only access to the dashboard (GET endpoints, log streaming)",
+        "composite": false,
+        "clientRole": false
+      }
+    ]
+  },
+  "groups": [
+    {
+      "name": "g-camara-users",
+      "realmRoles": ["camara-location-read"]
+    },
+    {
+      "name": "g-dashboard-admins",
+      "realmRoles": ["dashboard-admin"]
+    },
+    {
+      "name": "g-dashboard-viewers",
+      "realmRoles": ["dashboard-viewer"]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "camara-gateway",
+      "name": "CAMARA Gateway (M2M)",
+      "description": "Service account for the CAMARA Location API gateway. Uses client_credentials.",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "{{ camara_client_secret }}",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "protocol": "openid-connect",
+      "attributes": {
+        "access.token.lifespan": "3600"
+      }
+    },
+    {
+      "clientId": "positioning-demo",
+      "name": "Positioning Demo App",
+      "description": "Browser-side public client. PKCE flow for end-user login.",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "{{ positioning_demo_external_origin }}/*"
+      ],
+      "webOrigins": [
+        "{{ positioning_demo_external_origin }}"
+      ],
+      "protocol": "openid-connect",
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
+    },
+    {
+      "clientId": "dashboard",
+      "name": "5G Dashboard (browser)",
+      "description": "Browser-side public client for the dashboard frontend. PKCE flow.",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "{{ dashboard_external_origin }}/*"{% if dashboard_dev_external_url %},
+        "{{ dashboard_dev_external_url }}/*"{% endif %}
+
+      ],
+      "webOrigins": [
+        "{{ dashboard_external_origin }}"{% if dashboard_dev_external_url %},
+        "{{ dashboard_dev_external_url }}"{% endif %}
+
+      ],
+      "protocol": "openid-connect",
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
+    },
+    {
+      "clientId": "dashboard-readonly",
+      "name": "Dashboard Read-Only Token (M2M)",
+      "description": "Service account for headless read-only consumers (monitoring agents, demos to outsiders). Grants dashboard-viewer only.",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "{{ dashboard_readonly_secret }}",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "protocol": "openid-connect",
+      "attributes": {
+        "access.token.lifespan": "3600"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "service-account-camara-gateway",
+      "enabled": true,
+      "serviceAccountClientId": "camara-gateway",
+      "realmRoles": ["camara-location-read"]
+    },
+    {
+      "username": "service-account-dashboard-readonly",
+      "enabled": true,
+      "serviceAccountClientId": "dashboard-readonly",
+      "realmRoles": ["dashboard-viewer"]
+    }
+  ]
+}
