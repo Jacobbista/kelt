@@ -30,6 +30,8 @@ const AUTHORITY = env("VITE_KEYCLOAK_AUTHORITY")
   || `${typeof window !== "undefined" ? window.location.origin : ""}${PATH_PREFIX}/realms/${REALM}`;
 const CLIENT_ID = env("VITE_KEYCLOAK_CLIENT_ID", "dashboard");
 
+export const KEYCLOAK_AUTHORITY = AUTHORITY;
+
 function buildUserManager() {
   if (!AUTH_ENABLED || !AUTHORITY) return null;
   return new UserManager({

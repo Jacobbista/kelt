@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
-import { AUTH_ENABLED, extractRoles, getUserManager } from "./oidc";
+import { AUTH_ENABLED, extractRoles, getUserManager, KEYCLOAK_AUTHORITY } from "./oidc";
 import { env } from "../runtime-env";
 
 // AuthContext exposes the currently authenticated user (or null), the role
@@ -88,7 +88,13 @@ export function useAuth() {
 export function getCurrentAccessToken() {
   if (!AUTH_ENABLED) return null;
   try {
-    const raw = sessionStorage.getItem(`oidc.user:${env("VITE_KEYCLOAK_AUTHORITY")}:${env("VITE_KEYCLOAK_CLIENT_ID", "dashboard")}`);
+    // Key must match the authority oidc.js used when storing the user
+    // (which is computed same-origin when VITE_KEYCLOAK_AUTHORITY is not
+    // set). Reading the env var directly here previously produced an
+    // empty key under same-origin deployments, so no token was attached
+    // to API calls and every request returned 401.
+    const key = `oidc.user:${KEYCLOAK_AUTHORITY}:${env("VITE_KEYCLOAK_CLIENT_ID", "dashboard")}`;
+    const raw = sessionStorage.getItem(key);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     return parsed?.access_token || null;
