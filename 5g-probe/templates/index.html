@@ -140,9 +140,18 @@
         #alerts { min-height: 2rem; }
 
         .sp { width: .9rem; height: .9rem; border-width: 2px; vertical-align: middle; }
+
+        /* Planner: align controls with selects */
+        .planner-stack .form-select,
+        .planner-stack .form-control { border-radius: 8px; }
     </style>
 </head>
 <body>
+<datalist id="benchmarkTargetList">
+{% for t in benchmark_targets %}
+<option value="{{ t.ip }}">{{ t.label }}</option>
+{% endfor %}
+</datalist>
 <div class="app-wrap">
 
     <!-- ===== SIDEBAR ===== -->
@@ -157,12 +166,16 @@
         <button class="nav-item" data-panel="throughput" onclick="nav('throughput')">📶 Throughput <small style="color:var(--txt3);font-size:.65rem;">iperf3</small></button>
         <button class="nav-item" data-panel="latency" onclick="nav('latency')">📍 Latency <small style="color:var(--txt3);font-size:.65rem;">ping</small></button>
         <button class="nav-item" data-panel="bufferbloat" onclick="nav('bufferbloat')">🌊 Bufferbloat <small style="color:var(--txt3);font-size:.65rem;">loaded RTT</small></button>
+        <div style="padding:.2rem .75rem .55rem;font-size:.68rem;line-height:1.35;color:var(--txt3);">
+            Target fields accept any reachable IP. Built-in presets (UPF, optional MEC) and <strong>saved presets</strong> (Run Queue tab) appear in dropdowns and datalists.
+        </div>
 
         <div class="nav-sep">Planning</div>
         <button class="nav-item" data-panel="planner" onclick="nav('planner');plannerNav(plannerTab);">🗂 Experiment Planner</button>
 
         <div class="nav-sep">Results</div>
         <button class="nav-item" data-panel="results" onclick="nav('results');loadResults();">📁 Test Results</button>
+        <button class="nav-item" data-panel="remote" onclick="nav('remote');_loadRemotePickers();">🛰 Remote UE</button>
 
         <div class="nav-sep">System</div>
         <div style="padding:.5rem .75rem; font-size:.75rem;color:var(--txt3);" id="sysStatus">–</div>
@@ -194,7 +207,11 @@
                     </div>
                     <div class="col-md-3">
                         <label class="form-label">Target IP</label>
-                        <input type="text" id="qIp" class="form-control form-control-sm" value="10.45.0.1">
+                        <input type="text" id="qIp" class="form-control form-control-sm" value="{{ default_target_ip }}" list="benchmarkTargetList" autocomplete="off">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">TCP streams (-P)</label>
+                        <input type="number" id="qPar" class="form-control form-control-sm" value="1" min="1" max="64">
                     </div>
                     <div class="col-md-2">
                         <button class="btn_ btn-green" onclick="quickBench()" id="btnQB">▶ Run</button>
@@ -216,7 +233,8 @@
         <!-- ====================================================== -->
         <div class="panel" id="panel-namespaces">
             <div class="panel-title">Active Namespaces</div>
-            <div class="panel-sub">Namespaces currently active on the host. Reset to move interfaces back and destroy the namespace.</div>
+            <div class="panel-sub">Namespaces currently active on the host. Reset to move interfaces back and destroy the namespace.
+            <br><span style="font-size:.78em;color:var(--txt3);"><strong>HTTPS tunnel certificate:</strong> the dongle/router presents a cert for its LAN IP (e.g. <code>192.168.2.1</code>), but the link uses <code>127.0.0.1</code>, so Chrome/Brave show “Not secure” — expected in the lab. Use <strong>Advanced → Continue</strong> (Brave remembers per host/port). Avoid global flags like <code>--ignore-certificate-errors</code> outside testing. To remove warnings entirely you’d need a local terminating proxy + trusted CA (e.g. <a href="https://github.com/FiloSottile/mkcert" target="_blank" rel="noopener noreferrer">mkcert</a>), which we don’t automate here.</span></div>
             <div class="card_">
                 <div id="nsTable"><div class="ns-empty">No active namespaces.</div></div>
             </div>
@@ -227,7 +245,7 @@
         <!-- ====================================================== -->
         <div class="panel" id="panel-throughput">
             <div class="panel-title">Throughput Test</div>
-            <div class="panel-sub">Uses <strong>iperf3</strong> to measure TCP or UDP throughput. Requires an iperf3 server at the target IP.
+            <div class="panel-sub">Uses <strong>iperf3</strong> to measure TCP or UDP throughput. Requires an iperf3 server at the target IP you enter—presets in the datalist are optional shortcuts (UPF anchor, optional post-UPF MEC); type any lab IP as needed and rerun toward another endpoint without conflict.
             <br><span style="font-size:.75em;color:var(--txt3);">TCP: limited by kernel congestion window (CUBIC/BBR). UDP: bypasses TCP stack — measures raw radio channel capacity. If TCP &lt;&lt; UDP, the issue is TCP tuning, not the antenna.</span></div>
 
             <div class="card_">
@@ -238,7 +256,7 @@
                     </div>
                     <div class="col-md-3">
                         <label class="form-label">iperf3 Server IP</label>
-                        <input type="text" id="tpIp" class="form-control form-control-sm" value="10.45.0.1">
+                        <input type="text" id="tpIp" class="form-control form-control-sm" value="{{ default_target_ip }}" list="benchmarkTargetList" autocomplete="off">
                     </div>
                     <div class="col-md-1">
                         <label class="form-label">Duration (s)</label>
@@ -246,7 +264,7 @@
                     </div>
                     <div class="col-md-2">
                         <label class="form-label">Direction</label>
-                        <select id="tpMode" class="form-select form-select-sm">
+                        <select id="tpMode" class="form-select form-select-sm" onchange="toggleBwField()">
                             <option value="dl">⬇ Downlink</option>
                             <option value="ul">⬆ Uplink</option>
                             <option value="both">🔁 Sequential (DL → UL)</option>
@@ -271,14 +289,44 @@
                         </div>
                         <input type="number" id="tpBwMbps" class="form-control form-control-sm" value="200" min="0" placeholder="Mbps (0=max)">
                     </div>
-                    <div class="col-md-2" id="tpLengthCol" style="display:none;">
-                        <label class="form-label">UDP Datagram (B) <span title="UDP payload size per datagram. Must stay below the tunnel MTU (~1200 B for GTP-U over VXLAN). TCP uses Path MTU Discovery automatically." style="cursor:help;color:#64748b;">&#9432;</span></label>
-                        <input type="number" id="tpLength" class="form-control form-control-sm" value="1200" min="68" max="65507" placeholder="1200">
-                    </div>
                     <div class="col-md-1 text-end">
                         <button class="btn_ btn-start" id="btnTp" onclick="startThroughput()">▶ Start</button>
                     </div>
                 </div>
+
+                <details class="card_" style="background:var(--bg);border:1px solid var(--border);padding:.65rem .85rem;margin-bottom:.75rem;">
+                    <summary style="cursor:pointer;font-weight:600;font-size:.78rem;color:var(--txt2);list-style-position:outside;">Advanced iperf flags</summary>
+                    <div class="row g-2 mt-2 align-items-end">
+                        <div class="col-md-2">
+                            <label class="form-label">Parallel (-P)</label>
+                            <input type="number" id="tpPar" class="form-control form-control-sm" value="1" min="1" max="64">
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label">Interval (-i s)</label>
+                            <input type="number" id="tpInt" class="form-control form-control-sm" value="0.1" step="0.05" min="0.05">
+                        </div>
+                        <div class="col-md-2" id="tpUdpDlBwCol" style="display:none;">
+                            <label class="form-label">UDP DL target (Mbps)</label>
+                            <input type="number" id="tpBwDlMbps" class="form-control form-control-sm" value="180" min="0" placeholder="Mbps">
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label">UDP length</label>
+                            <select id="tpUdpLenMode" class="form-select form-select-sm" onchange="toggleTpUdpLenMode()">
+                                <option value="fixed">Fixed payload (B)</option>
+                                <option value="omit">Omit (-l), iperf3 default</option>
+                                <option value="auto">Auto from MTU</option>
+                            </select>
+                        </div>
+                        <div class="col-md-2" id="tpUdpFixedCol">
+                            <label class="form-label">Payload (B)</label>
+                            <input type="number" id="tpLength" class="form-control form-control-sm" value="1200" min="68" max="65507">
+                        </div>
+                        <div class="col-md-2" id="tpUdpClampCol" style="display:none;">
+                            <label class="form-label">Auto clamp max (B)</label>
+                            <input type="number" id="tpUdpClamp" class="form-control form-control-sm" value="1200" min="68" max="9000">
+                        </div>
+                    </div>
+                </details>
 
                 <div class="test-bar">
                     <span class="t-dot" id="tpDot"></span>
@@ -308,7 +356,7 @@
                     </div>
                     <div class="col-md-3">
                         <label class="form-label">Target (IP or host)</label>
-                        <input type="text" id="latIp" class="form-control form-control-sm" value="10.45.0.1">
+                        <input type="text" id="latIp" class="form-control form-control-sm" value="{{ default_target_ip }}" list="benchmarkTargetList" autocomplete="off">
                     </div>
                     <div class="col-md-2">
                         <label class="form-label">Packets</label>
@@ -391,7 +439,7 @@
                     </div>
                     <div class="col-md-3">
                         <label class="form-label">iperf3 Server IP</label>
-                        <input type="text" id="bbIp" class="form-control form-control-sm" value="10.45.0.1">
+                        <input type="text" id="bbIp" class="form-control form-control-sm" value="{{ default_target_ip }}" list="benchmarkTargetList" autocomplete="off">
                     </div>
                     <div class="col-md-1">
                         <label class="form-label">Duration</label>
@@ -399,7 +447,7 @@
                     </div>
                     <div class="col-md-2">
                         <label class="form-label">Direction</label>
-                        <select id="bbMode" class="form-select form-select-sm">
+                        <select id="bbMode" class="form-select form-select-sm" onchange="toggleBbBwField()">
                             <option value="dl">⬇ Downlink</option>
                             <option value="ul">⬆ Uplink</option>
                             <option value="both" selected>🔁 Sequential (DL → UL)</option>
@@ -424,14 +472,44 @@
                         </div>
                         <input type="number" id="bbBwMbps" class="form-control form-control-sm" value="200" min="0" placeholder="Mbps (0=max)">
                     </div>
-                    <div class="col-md-2" id="bbLengthCol" style="display:none;">
-                        <label class="form-label">UDP Datagram (B) <span title="UDP payload size per datagram. Must stay below the tunnel MTU (~1200 B for GTP-U over VXLAN). TCP uses Path MTU Discovery automatically." style="cursor:help;color:#64748b;">&#9432;</span></label>
-                        <input type="number" id="bbLength" class="form-control form-control-sm" value="1200" min="68" max="65507" placeholder="1200">
-                    </div>
                     <div class="col-md-1 text-end">
                         <button class="btn_ btn-start" id="btnBb" onclick="startBufferbloat()">▶ Start</button>
                     </div>
                 </div>
+
+                <details class="card_" style="background:var(--bg);border:1px solid var(--border);padding:.65rem .85rem;margin-bottom:.75rem;">
+                    <summary style="cursor:pointer;font-weight:600;font-size:.78rem;color:var(--txt2);list-style-position:outside;">Advanced iperf flags</summary>
+                    <div class="row g-2 mt-2 align-items-end">
+                        <div class="col-md-2">
+                            <label class="form-label">Parallel (-P)</label>
+                            <input type="number" id="bbPar" class="form-control form-control-sm" value="1" min="1" max="64">
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label">Interval (-i s)</label>
+                            <input type="number" id="bbInt" class="form-control form-control-sm" value="0.1" step="0.05" min="0.05">
+                        </div>
+                        <div class="col-md-2" id="bbUdpDlBwCol" style="display:none;">
+                            <label class="form-label">UDP DL target (Mbps)</label>
+                            <input type="number" id="bbBwDlMbps" class="form-control form-control-sm" value="180" min="0">
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label">UDP length</label>
+                            <select id="bbUdpLenMode" class="form-select form-select-sm" onchange="toggleBbUdpLenMode()">
+                                <option value="fixed">Fixed payload (B)</option>
+                                <option value="omit">Omit (-l)</option>
+                                <option value="auto">Auto from MTU</option>
+                            </select>
+                        </div>
+                        <div class="col-md-2" id="bbUdpFixedCol">
+                            <label class="form-label">Payload (B)</label>
+                            <input type="number" id="bbLength" class="form-control form-control-sm" value="1200" min="68" max="65507">
+                        </div>
+                        <div class="col-md-2" id="bbUdpClampCol" style="display:none;">
+                            <label class="form-label">Auto clamp max (B)</label>
+                            <input type="number" id="bbUdpClamp" class="form-control form-control-sm" value="1200" min="68" max="9000">
+                        </div>
+                    </div>
+                </details>
 
                 <div class="test-bar">
                     <span class="t-dot" id="bbDot"></span>
@@ -473,20 +551,16 @@
             <div class="col-md-5">
                 <div class="card_">
                     <div class="card-label">New Plan Template</div>
-                    <div class="row g-2 mb-2">
-                        <div class="col-8">
-                            <label class="form-label">Plan Name</label>
-                            <input type="text" id="planName" class="form-control form-control-sm" placeholder="e.g. udp_sweep_march">
-                        </div>
-                    </div>
-                    <div class="row g-2 mb-2">
-                        <div class="col-6">
-                            <label class="form-label">Namespace</label>
-                            <select id="planNs" class="form-select form-select-sm"></select>
-                        </div>
-                        <div class="col-6">
-                            <label class="form-label">Target IP</label>
-                            <input type="text" id="planIp" class="form-control form-control-sm" value="10.45.0.1">
+                    <div class="planner-stack row g-2 mb-2">
+                        <div class="col-12">
+                            <label class="form-label">Plan title</label>
+                            <input type="text" id="planDisplayName" class="form-control form-control-sm" placeholder="e.g. Standard iperf smoke" autocomplete="off" oninput="syncPlanSlugPreview()">
+                            <div id="planSlugPreviewRow" style="font-size:.68rem;color:var(--txt3);margin-top:.28rem;">
+                                Folder name on disk: <code id="planSlugPreview" style="color:var(--cyan);"></code>
+                            </div>
+                            <div id="planEditingFolderRow" style="display:none;font-size:.68rem;color:var(--txt3);margin-top:.25rem;">
+                                Updating saved template <code id="planEditingFolderCode" style="color:var(--cyan);"></code>
+                            </div>
                         </div>
                     </div>
                     <hr style="border-color:var(--border);margin:.75rem 0;">
@@ -502,13 +576,13 @@
                         </div>
                         <div class="col-4" id="expDirRow">
                             <label class="form-label">Direction</label>
-                            <select id="expDir" class="form-select form-select-sm">
+                            <select id="expDir" class="form-select form-select-sm" onchange="togglePlannerBwFields()">
                                 <option value="ul">⬆ Uplink</option>
                                 <option value="dl">⬇ Downlink</option>
                                 <option value="both">🔁 Both</option>
                             </select>
                         </div>
-                        <div class="col-4">
+                        <div class="col-4" id="expDurCol">
                             <label class="form-label">Duration (s)</label>
                             <input type="number" id="expDur" class="form-control form-control-sm" value="15" min="3">
                         </div>
@@ -548,14 +622,46 @@
                     <div id="expPingSection" style="display:none;">
                         <div class="card-label mt-2">Ping Parameters</div>
                         <div class="row g-1">
-                            <div class="col-4"><label class="form-label">Packets</label><input type="number" id="expPingCount" class="form-control form-control-sm" value="60" min="5"></div>
-                            <div class="col-4"><label class="form-label">Interval (s)</label><input type="number" id="expPingInterval" class="form-control form-control-sm" value="0.5" min="0.1" step="0.1"></div>
+                            <div class="col-4"><label class="form-label">Packets</label><input type="number" id="expPingCount" class="form-control form-control-sm" value="60" min="5" oninput="updatePingDurHint()"></div>
+                            <div class="col-4"><label class="form-label">Interval (s)</label><input type="number" id="expPingInterval" class="form-control form-control-sm" value="0.5" min="0.1" step="0.1" oninput="updatePingDurHint()"></div>
                             <div class="col-4"><label class="form-label">Size (B)</label><input type="number" id="expPingSize" class="form-control form-control-sm" value="56" min="8"></div>
                         </div>
+                        <div id="expPingDurHint" style="font-size:.65rem;color:var(--txt3);margin-top:.3rem;">≈ test duration: 30s (packets × interval)</div>
                     </div>
                     <div id="expLengthSection" style="display:none;">
-                        <div class="card-label mt-2">UDP Datagram (B) <span title="UDP payload size per datagram." style="cursor:help;color:#64748b;">&#9432;</span></div>
-                        <input type="number" id="expLength" class="form-control form-control-sm" value="1200" min="68" max="65507" placeholder="1200">
+                        <div class="card-label mt-2">UDP payload</div>
+                        <div class="row g-2 mb-2">
+                            <div class="col-md-4">
+                                <label class="form-label">Length mode</label>
+                                <select id="expUdpMode" class="form-select form-select-sm">
+                                    <option value="fixed">Fixed (bytes)</option>
+                                    <option value="omit">Omit (-l)</option>
+                                    <option value="auto">Auto from MTU</option>
+                                </select>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Payload (B)</label>
+                                <input type="number" id="expLength" class="form-control form-control-sm" value="1200" min="68" max="65507">
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">MTU clamp (auto)</label>
+                                <input type="number" id="expUdpClamp" class="form-control form-control-sm" value="1200" min="68" max="9000">
+                            </div>
+                        </div>
+                        <div class="row g-2 mb-2">
+                            <div class="col-md-3">
+                                <label class="form-label">Streams (-P)</label>
+                                <input type="number" id="expPar" class="form-control form-control-sm" value="1" min="1" max="64">
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Interval (-i)</label>
+                                <input type="number" id="expInt" class="form-control form-control-sm" value="0.1" step="0.05" min="0.05">
+                            </div>
+                            <div class="col-md-3" id="expBwDlCol" style="display:none;">
+                                <label class="form-label">UDP DL (Mbps)</label>
+                                <input type="number" id="expBwDlMbps" class="form-control form-control-sm" placeholder="e.g. 180">
+                            </div>
+                        </div>
                     </div>
                     <div style="display:flex;align-items:center;gap:.5rem;margin-top:.75rem;">
                         <button class="btn_ btn-blue" onclick="addExperiment()">+ Add</button>
@@ -565,16 +671,29 @@
                 <div class="card_">
                     <div class="card-label">Queued Experiments <span id="planExpCount" style="color:var(--txt3);">(0)</span></div>
                     <div id="planExpList" style="max-height:180px;overflow-y:auto;font-size:.78rem;"></div>
+                    <div class="row g-2 mt-1">
+                        <div class="col-6">
+                            <label class="form-label" title="Default pause inserted between consecutive experiments inside one run (can be overridden per experiment).">Pause between exps (s)</label>
+                            <input id="planInterExpPause" type="number" class="form-control form-control-sm" value="2" min="0">
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label" title="Pause inserted between repeats of this plan in the Run Queue. Wins over the queue global delay if higher.">Pause between repeats (s)</label>
+                            <input id="planInterRepeatPause" type="number" class="form-control form-control-sm" value="0" min="0">
+                        </div>
+                    </div>
                     <div style="display:flex;gap:.5rem;margin-top:.75rem;">
-                        <button class="btn_ btn-green" onclick="savePlan()">💾 Save Template</button>
+                        <button class="btn_ btn-green" id="btnSavePlanTemplate" onclick="savePlan()">💾 Save template</button>
                         <button class="btn_ btn-amber" onclick="clearPlanBuilder()">🗑 Clear</button>
                     </div>
                 </div>
             </div>
             <div class="col-md-7">
                 <div class="card_">
-                    <div class="card-label">Saved Templates</div>
-                    <div id="planList"><div style="color:var(--txt3);font-size:.85rem;">No templates yet.</div></div>
+                    <div class="card-label">Plan templates</div>
+                    <div id="planList" style="min-height:2rem;"><div style="color:var(--txt3);font-size:.85rem;">Loading…</div></div>
+                </div>
+                <div class="card_" style="margin-top:.75rem;font-size:.78rem;color:var(--txt2);border-style:dashed;">
+                    <strong>Where files go:</strong> <strong>Save template</strong> stores only the experiment list in <code>plan.json</code> under <code>plan_templates/</code>. <strong>Namespace</strong> and <strong>target IP</strong> are chosen per run on the <strong>Run Queue</strong> tab and recorded in each run’s <code>run.json</code> under <code>results/plan_runs/&lt;slug&gt;/run_…/</code>. Built-in <code>standard_iperf_smoke</code> is read-only: <strong>Duplicate</strong> then save a new title; your own templates get <strong>Edit</strong> / <strong>Delete</strong>.
                 </div>
             </div>
         </div>
@@ -594,6 +713,27 @@
                     </div>
                     <div class="row g-2 mb-2">
                         <div class="col-6">
+                            <label class="form-label">Namespace</label>
+                            <select id="queueNs" class="form-select form-select-sm"></select>
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label">Target IP</label>
+                            <select id="queueIpPreset" class="form-select form-select-sm" onchange="onQueueIpPresetChange()"></select>
+                            <input type="text" id="queueIpCustom" class="form-control form-control-sm mt-1" style="display:none;" placeholder="Enter IP address" autocomplete="off">
+                        </div>
+                    </div>
+                    <div class="row g-2 mb-1 align-items-end">
+                        <div class="col-8">
+                            <label class="form-label">Save IP preset</label>
+                            <input type="text" id="savedTargetLabel" class="form-control form-control-sm" placeholder="Name (e.g. Lab iperf)" maxlength="120" autocomplete="off">
+                        </div>
+                        <div class="col-4 d-flex align-items-end">
+                            <button type="button" class="btn_ btn-blue w-100" style="font-size:.72rem;padding:.4rem .5rem;" onclick="saveQueueIpPreset()" title="Save the IP selected above">💾 Save</button>
+                        </div>
+                    </div>
+                    <div id="userBenchmarkTargetsList" class="mb-2" style="font-size:.7rem;color:var(--txt2);max-height:120px;overflow-y:auto;"></div>
+                    <div class="row g-2 mb-2">
+                        <div class="col-6">
                             <label class="form-label">Repeat</label>
                             <input type="number" id="queueRepeat" class="form-control form-control-sm" value="1" min="1">
                         </div>
@@ -602,7 +742,7 @@
                             <input type="number" id="queueDelay" class="form-control form-control-sm" value="5" min="0">
                         </div>
                     </div>
-                    <button class="btn_ btn-blue" onclick="addToQueue()">+ Add to Queue</button>
+                    <button class="btn_ btn-blue" id="btnAddToQueue" onclick="addToQueue()">+ Add to Queue</button>
                 </div>
                 <div class="card_">
                     <div class="card-label">Current Queue <span id="queueCount" style="color:var(--txt3);">(0)</span></div>
@@ -664,6 +804,121 @@
 </div>
 
 <!-- ====================================================== -->
+<!-- PANEL: Remote UE                                         -->
+<!-- ====================================================== -->
+<div class="panel" id="panel-remote">
+    <div class="panel-title">🛰 Remote UE</div>
+    <div class="panel-sub">Run probe-compatible tests from any remote device (Raspberry Pi, second laptop, …) and import the results into this probe.</div>
+
+    <!-- Connection: remote SSH target + local probe path -->
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:1rem;margin-top:1rem;">
+        <div style="font-size:.7rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--txt2);margin-bottom:.6rem;">Remote connection</div>
+        <div class="row g-2">
+            <div class="col-md-3 col-6">
+                <label class="form-label">Remote IP / SSH host</label>
+                <input id="remHost" class="form-control form-control-sm" placeholder="192.168.x.y or ssh alias" oninput="_onRemoteHostChange()">
+                <div id="remHostChips" style="display:flex;flex-wrap:wrap;gap:.25rem;margin-top:.3rem;"></div>
+                <div id="remHostHint" style="font-size:.62rem;color:var(--txt3);margin-top:.15rem;">Loading ~/.ssh/config…</div>
+            </div>
+            <div class="col-md-3 col-6">
+                <label class="form-label">Remote user</label>
+                <input id="remUser" class="form-control form-control-sm" value="pi" oninput="_onUserManualEdit()">
+                <div id="remUserHint" style="font-size:.62rem;color:var(--txt3);margin-top:.15rem;">Auto-filled from ~/.ssh/config when host matches.</div>
+            </div>
+            <div class="col-md-3 col-6">
+                <label class="form-label">Remote working path</label>
+                <select id="remPathPreset" class="form-select form-select-sm" onchange="_onRemotePathPresetChange()">
+                    <option value="~">~ (home)</option>
+                    <option value="/tmp">/tmp</option>
+                    <option value="/var/tmp">/var/tmp</option>
+                    <option value="/usr/local/share/5g-probe">/usr/local/share/5g-probe</option>
+                    <option value="__custom__">Custom…</option>
+                </select>
+                <input id="remPath" class="form-control form-control-sm mt-1" value="~" oninput="_renderRemoteCmds()" style="display:none;">
+            </div>
+            <div class="col-md-3 col-6">
+                <label class="form-label">Probe results dir (local)</label>
+                <div id="probePathDisplay" style="background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:.35rem .5rem;font-family:monospace;font-size:.75rem;color:var(--txt);overflow-x:auto;white-space:nowrap;">loading…</div>
+                <input id="probePath" type="hidden" value="">
+                <div style="font-size:.62rem;color:var(--txt3);margin-top:.15rem;">Bundles land under <code>results/remotes/</code> and appear in Test Results.</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Build batch from an existing plan -->
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:1rem;margin-top:.75rem;">
+        <div style="font-size:.7rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--txt2);margin-bottom:.6rem;">Build batch from an existing plan</div>
+        <div class="row g-2">
+            <div class="col-md-4 col-6"><label class="form-label">Plan template</label>
+                <select id="remPlan" class="form-select form-select-sm"><option value="">— select plan —</option></select></div>
+            <div class="col-md-3 col-6"><label class="form-label">Target IP for this plan</label>
+                <input id="remPlanTarget" class="form-control form-control-sm" list="remTargetList" value="10.45.0.1">
+                <datalist id="remTargetList"></datalist></div>
+            <div class="col-md-2 col-6"><label class="form-label">Repeats</label>
+                <input id="remPlanRepeats" type="number" class="form-control form-control-sm" value="1" min="1"></div>
+            <div class="col-md-3 col-6 d-flex align-items-end">
+                <button class="btn_ btn-blue" style="font-size:.78rem;padding:.3rem .7rem;" onclick="_genBatchFromPlan()">⚙ Generate batch lines</button>
+            </div>
+        </div>
+        <div style="font-size:.65rem;color:var(--txt3);margin-top:.35rem;">Plan-level pauses (between exps / between repeats) are inserted as <code>pause N</code> directives in the batch.</div>
+    </div>
+
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:1rem;margin-top:.75rem;">
+        <div style="font-size:.7rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--txt2);margin-bottom:.5rem;">1 · Copy the runner script to the remote UE</div>
+        <pre id="cmdCopyScript" style="background:var(--bg2);padding:.6rem;border-radius:6px;font-size:.78rem;color:var(--txt);margin:.4rem 0;overflow-x:auto;border:1px solid var(--border);"></pre>
+        <button class="btn_ btn-blue" style="font-size:.7rem;padding:.25rem .6rem;" onclick="_copyText('cmdCopyScript')">📋 Copy</button>
+    </div>
+
+    <!-- Batch builder: textarea + scp + run-batch commands -->
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:1rem;margin-top:.75rem;">
+        <div style="font-size:.7rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--txt2);margin-bottom:.5rem;">2 · Batch file (edit or auto-generate from a plan above)</div>
+        <div style="font-size:.72rem;color:var(--txt3);margin-bottom:.4rem;">
+            One test per line. <code>#</code> = comment. <code>pause &lt;sec&gt;</code> = sleep directive. Edit freely.
+        </div>
+        <label style="font-size:.72rem;color:var(--txt3);cursor:pointer;display:inline-block;margin-bottom:.3rem;">
+            <input type="checkbox" id="remBackground" onchange="_renderRemoteCmds()"> Run batch in background (nohup)
+        </label>
+        <textarea id="remBatchTxt" rows="8" spellcheck="false"
+            style="width:100%;background:var(--bg2);color:var(--txt);border:1px solid var(--border);border-radius:6px;padding:.5rem;font-family:monospace;font-size:.78rem;"
+            oninput="_renderRemoteCmds()"># 5G probe batch — one test per line
+# Format mirrors the single-shot CLI args (no leading "./run-probe-remote.sh").
+throughput 10.45.0.1 ul tcp 30
+throughput 10.45.0.1 dl tcp 60
+throughput 10.45.0.1 ul udp 30 50M
+throughput 10.45.0.1 dl udp 30 120M
+latency    10.45.0.1 60 0.5</textarea>
+
+        <div style="font-size:.65rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--txt3);margin:.7rem 0 .3rem;">Save the batch on the remote (paste via heredoc)</div>
+        <pre id="cmdBatchWrite" style="background:var(--bg2);padding:.6rem;border-radius:6px;font-size:.78rem;color:var(--txt);margin:.2rem 0;overflow-x:auto;border:1px solid var(--border);"></pre>
+        <button class="btn_ btn-blue" style="font-size:.7rem;padding:.25rem .6rem;" onclick="_copyText('cmdBatchWrite')">📋 Copy</button>
+
+        <div style="font-size:.65rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--txt3);margin:.7rem 0 .3rem;">Run all tests sequentially on the remote</div>
+        <pre id="cmdBatchRun" style="background:var(--bg2);padding:.6rem;border-radius:6px;font-size:.78rem;color:var(--txt);margin:.2rem 0;overflow-x:auto;border:1px solid var(--border);"></pre>
+        <button class="btn_ btn-blue" style="font-size:.7rem;padding:.25rem .6rem;" onclick="_copyText('cmdBatchRun')">📋 Copy</button>
+    </div>
+
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:1rem;margin-top:.75rem;">
+        <div style="font-size:.7rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--txt2);margin-bottom:.5rem;">3 · Copy the result bundle to this probe (run on this host)</div>
+        <pre id="cmdImport" style="background:var(--bg2);padding:.6rem;border-radius:6px;font-size:.78rem;color:var(--txt);margin:.4rem 0;overflow-x:auto;border:1px solid var(--border);"></pre>
+        <div style="display:flex;align-items:center;gap:.5rem;margin-top:.3rem;flex-wrap:wrap;">
+            <button class="btn_ btn-blue" style="font-size:.7rem;padding:.25rem .6rem;" onclick="_copyText('cmdImport')">📋 Copy</button>
+            <button class="btn_ btn-green" style="font-size:.7rem;padding:.25rem .6rem;" onclick="_openProbeTerminal()">🖥 Open terminal here</button>
+            <span style="color:var(--txt3);font-size:.72rem;">Bundle appears under <strong>Test Results</strong> after scp finishes.</span>
+        </div>
+    </div>
+
+    <div style="background:rgba(59,130,246,0.06);border:1px solid rgba(59,130,246,0.3);border-radius:8px;padding:1rem;margin-top:.75rem;">
+        <div style="font-size:.7rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#93c5fd;margin-bottom:.5rem;">Notes</div>
+        <ul style="font-size:.78rem;color:var(--txt2);margin:.4rem 0 0;padding-left:1.2rem;line-height:1.6;">
+            <li>The remote UE only needs <code>bash</code>, <code>iperf3</code>, <code>ping</code> and <code>python3</code> (standard library).</li>
+            <li>The bundle uses the same CSV/metadata format as local results — no import step required, the probe discovers it on disk.</li>
+            <li>Background runs: prefix with <code>nohup</code> + <code>&amp;</code>, e.g. <code>nohup ./run-probe-remote.sh throughput 10.45.0.1 dl tcp 600 &gt; run.log &amp;</code></li>
+            <li><code>namespace</code> in the bundle metadata is set to <code>remote:&lt;hostname&gt;</code> so you can tell remote runs apart in the UI.</li>
+        </ul>
+    </div>
+</div>
+
+<!-- ====================================================== -->
 <!-- MODAL: Result Viewer                                     -->
 <!-- ====================================================== -->
 <div id="resultModal" class="modal-overlay" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:9999;backdrop-filter:blur(4px);justify-content:center;align-items:center;">
@@ -671,6 +926,7 @@
         <div id="modalHeader" style="display:flex;justify-content:space-between;align-items:center;padding:1rem 1.5rem;border-bottom:1px solid var(--border);">
             <div style="font-weight:600;font-size:1.1rem;" id="modalTitle">Test Result</div>
             <div style="display:flex;gap:.5rem;">
+                <button class="btn btn-sm btn-outline-secondary" id="btnChartToggle" style="display:none;" onclick="toggleResultView()">📊 CSV Chart</button>
                 <button class="btn btn-sm btn-outline-secondary" onclick="copyResultImage()">📋 Copy Image</button>
                 <button class="btn btn-sm btn-outline-secondary" id="btnOpenFolder" onclick="openResultFolder()">📂 Open Folder</button>
                 <button class="btn btn-sm btn-outline-danger" onclick="deleteResultImage()">🗑️ Delete</button>
@@ -688,17 +944,25 @@
                         <button class="sampling-btn" data-ms="500">500ms</button>
                         <button class="sampling-btn" data-ms="1000">1s</button>
                     </div>
+                    <span id="samplingHint" style="color:var(--txt3);font-size:.7rem;margin-left:.5rem;"></span>
+                    <span style="flex:1;"></span>
+                    <label id="clipOutliersWrap" style="display:none;color:var(--txt3);font-size:.72rem;cursor:pointer;user-select:none;">
+                        <input type="checkbox" id="clipOutliers" checked style="vertical-align:middle;margin-right:.25rem;">
+                        Clip outliers (p95)
+                    </label>
                 </div>
                 <!-- Chart.js canvas (for CSV-based results) -->
                 <div id="resultChartWrap" style="width:100%;height:350px;display:none;">
                     <canvas id="resultChart"></canvas>
                 </div>
+                <!-- Metric glossary (populated per render): hover each item for definition -->
+                <div id="resultChartGlossary" style="display:none;margin-top:.4rem;font-size:.7rem;color:var(--txt3);"></div>
                 <!-- Fallback image (for legacy/standalone PNG results) -->
                 <img id="resultModalImg" src="" style="max-width:100%;object-fit:contain;border-radius:6px;box-shadow:0 4px 6px -1px rgba(0,0,0,0.1);display:none;">
             </div>
             <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:1rem;">
-                <div style="font-weight:600;font-size:.9rem;color:var(--txt2);margin-bottom:.5rem;">Test Metadata (JSON)</div>
-                <pre id="resultModalMeta" style="margin:0;font-size:.8rem;color:var(--txt3);white-space:pre-wrap;word-wrap:break-word;"></pre>
+                <div style="font-weight:600;font-size:.9rem;color:var(--txt2);margin-bottom:.5rem;">Test Details</div>
+                <div id="resultModalMeta" style="margin:0;font-size:.8rem;color:var(--txt3);"></div>
             </div>
         </div>
     </div>
@@ -719,17 +983,312 @@ let tpData = [], latData = [], jitterData = [], bbTpData = [], bbLatData = [];
 let latSent = 0, latLost = 0, latPrevRtt = null;
 // Planner state
 let planBuilderExps = [];
+/** When set, Save calls PUT /api/plans/:slug instead of POST */
+let planEditingSlug = null;
+
+function updateSavePlanButtonLabel() {
+    const b = document.getElementById('btnSavePlanTemplate');
+    if (!b) return;
+    b.textContent = planEditingSlug ? '💾 Update template' : '💾 Save template';
+    syncPlanSlugPreview();
+}
+
+function escapeHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function slugifyPlanTitle(s) {
+    return String(s).toLowerCase().trim()
+        .replace(/[^\w\-]/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_|_$/g, '');
+}
+
+function humanizePlanSlug(slug) {
+    if (!slug) return '';
+    return slug.replace(/_/g, ' ').replace(/-/g, ' ').replace(/\s+/g, ' ').trim()
+        .split(' ')
+        .filter(Boolean)
+        .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+        .join(' ');
+}
+
+function syncPlanSlugPreview() {
+    const inp = document.getElementById('planDisplayName');
+    const prev = document.getElementById('planSlugPreview');
+    const row = document.getElementById('planSlugPreviewRow');
+    const editRow = document.getElementById('planEditingFolderRow');
+    const editCode = document.getElementById('planEditingFolderCode');
+    if (!inp || !prev || !row || !editRow) return;
+    if (planEditingSlug) {
+        row.style.display = 'none';
+        editRow.style.display = '';
+        if (editCode) editCode.textContent = planEditingSlug;
+        return;
+    }
+    editRow.style.display = 'none';
+    row.style.display = '';
+    const slug = slugifyPlanTitle(inp.value);
+    prev.textContent = slug || '(enter a title)';
+}
+
+async function fetchBenchmarkTargets() {
+    try {
+        const r = await fetch('/api/config');
+        const j = await r.json();
+        window._benchmarkTargets = j.benchmark_targets || [];
+        window._userBenchmarkTargets = j.user_benchmark_targets || [];
+    } catch (_) {
+        window._benchmarkTargets = window._benchmarkTargets || [];
+        window._userBenchmarkTargets = window._userBenchmarkTargets || [];
+    }
+    syncBenchmarkTargetDatalist();
+}
+
+function syncBenchmarkTargetDatalist() {
+    const dl = document.getElementById('benchmarkTargetList');
+    if (!dl) return;
+    dl.innerHTML = (window._benchmarkTargets || []).map(t => {
+        const ip = String(t.ip || '').replace(/"/g, '&quot;');
+        const lab = escapeHtml(String(t.label || t.ip || ''));
+        return `<option value="${ip}">${lab}</option>`;
+    }).join('');
+}
+
+function renderUserBenchmarkTargetsList() {
+    const el = document.getElementById('userBenchmarkTargetsList');
+    if (!el) return;
+    const arr = window._userBenchmarkTargets || [];
+    if (!arr.length) {
+        el.innerHTML = '<span style="color:var(--txt3);">No custom presets yet. Choose or type an IP above, enter a name, then Save. Presets are stored in <code style="font-size:.62rem;">results/user_benchmark_targets.json</code>.</span>';
+        return;
+    }
+    el.innerHTML = arr.map((t) => {
+        const id = String(t.id || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:.2rem 0;border-bottom:1px solid var(--border);gap:.35rem;">
+            <span style="min-width:0;"><strong>${escapeHtml(t.label)}</strong> <code style="font-size:.65rem;">${escapeHtml(t.ip)}</code></span>
+            <button type="button" class="btn_" style="flex-shrink:0;font-size:.62rem;padding:.1em .35em;background:var(--bg-3);color:var(--txt2);" onclick="deleteUserBenchmarkTarget('${id}')">✕</button>
+        </div>`;
+    }).join('');
+}
+
+async function saveQueueIpPreset() {
+    const ip = getQueueTargetIp();
+    if (!ip) { notify('Select or enter a target IP first.'); return; }
+    const labEl = document.getElementById('savedTargetLabel');
+    const label = labEl ? labEl.value.trim() : '';
+    if (!label) { notify('Enter a name for this preset.'); return; }
+    try {
+        const r = await fetch('/api/user_benchmark_targets', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ label, ip }),
+        });
+        const j = await r.json();
+        if (!j.ok) { notify(j.error || 'Save failed'); return; }
+        window._benchmarkTargets = j.benchmark_targets || [];
+        window._userBenchmarkTargets = j.user_benchmark_targets || [];
+        syncBenchmarkTargetDatalist();
+        const cur = ip;
+        rebuildQueueIpPresetSelect(cur);
+        setQueueIpSelectValue(cur);
+        renderUserBenchmarkTargetsList();
+        if (labEl) labEl.value = '';
+        notify('Preset saved.', true);
+    } catch (e) { notify('Save failed: ' + e.message); }
+}
+
+async function deleteUserBenchmarkTarget(id) {
+    try {
+        const r = await fetch('/api/user_benchmark_targets/' + encodeURIComponent(id), { method: 'DELETE' });
+        const j = await r.json();
+        if (!j.ok) { notify(j.error || 'Delete failed'); return; }
+        window._benchmarkTargets = j.benchmark_targets || [];
+        window._userBenchmarkTargets = j.user_benchmark_targets || [];
+        syncBenchmarkTargetDatalist();
+        rebuildQueueIpPresetSelect(getQueueTargetIp());
+        renderUserBenchmarkTargetsList();
+        notify('Preset removed.', true);
+    } catch (e) { notify('Delete failed: ' + e.message); }
+}
+
+function rebuildQueueIpPresetSelect(preferredIp) {
+    const sel = document.getElementById('queueIpPreset');
+    const cust = document.getElementById('queueIpCustom');
+    if (!sel || !cust) return;
+    let html = '<option value="">— Select target IP —</option>';
+    (window._benchmarkTargets || []).forEach(t => {
+        const ip = String(t.ip || '').replace(/"/g, '&quot;');
+        const lab = escapeHtml(String(t.label || t.ip || ''));
+        html += `<option value="${ip}">${lab} (${escapeHtml(String(t.ip || ''))})</option>`;
+    });
+    html += '<option value="__custom__">Other IP…</option>';
+    sel.innerHTML = html;
+    if (preferredIp !== undefined && preferredIp !== null && preferredIp !== '') {
+        setQueueIpSelectValue(preferredIp);
+    } else {
+        sel.value = '';
+        cust.style.display = 'none';
+        cust.value = '';
+    }
+}
+
+async function refreshQueueIpPresets(preferredIp) {
+    await fetchBenchmarkTargets();
+    const ip = preferredIp !== undefined ? preferredIp : getQueueTargetIp();
+    rebuildQueueIpPresetSelect(ip);
+    renderUserBenchmarkTargetsList();
+}
+
+function setQueueIpSelectValue(ip) {
+    const sel = document.getElementById('queueIpPreset');
+    const cust = document.getElementById('queueIpCustom');
+    if (!sel || !cust) return;
+    const raw = String(ip || '').trim();
+    if (!raw) {
+        sel.value = '';
+        cust.style.display = 'none';
+        cust.value = '';
+        return;
+    }
+    let found = false;
+    for (let i = 0; i < sel.options.length; i++) {
+        if (sel.options[i].value === raw) {
+            sel.selectedIndex = i;
+            found = true;
+            break;
+        }
+    }
+    if (found) {
+        cust.style.display = 'none';
+        cust.value = '';
+    } else {
+        sel.value = '__custom__';
+        cust.style.display = '';
+        cust.value = raw;
+    }
+}
+
+function onQueueIpPresetChange() {
+    const sel = document.getElementById('queueIpPreset');
+    const cust = document.getElementById('queueIpCustom');
+    if (!sel || !cust) return;
+    if (sel.value === '__custom__') {
+        cust.style.display = '';
+        cust.focus();
+    } else {
+        cust.style.display = 'none';
+        cust.value = '';
+    }
+}
+
+function getQueueTargetIp() {
+    const sel = document.getElementById('queueIpPreset');
+    const cust = document.getElementById('queueIpCustom');
+    if (!sel) return '';
+    if (sel.value === '__custom__') return cust ? cust.value.trim() : '';
+    return sel.value.trim();
+}
+
+function apiExperimentToBuilder(exp) {
+    const proto =
+        exp.type === 'latency' ? '' : (exp.protocol || 'tcp');
+    return {
+        type: exp.type || 'throughput',
+        direction: exp.direction || 'ul',
+        protocol: proto,
+        duration: exp.duration != null ? exp.duration : 15,
+        bandwidth: exp.bandwidth || null,
+        bandwidth_dl: exp.bandwidth_dl || null,
+        parallel_streams: exp.parallel_streams != null ? exp.parallel_streams : 1,
+        interval_s: exp.interval_s != null ? exp.interval_s : 0.1,
+        length_bytes: exp.length_bytes != null ? exp.length_bytes : null,
+        udp_length_mode: exp.udp_length_mode || null,
+        udp_mtu_clamp: exp.udp_mtu_clamp != null ? exp.udp_mtu_clamp : 1200,
+        ping_count: exp.ping_count != null ? exp.ping_count : 60,
+        ping_interval: exp.ping_interval != null ? exp.ping_interval : 0.5,
+        ping_packet_size: exp.ping_packet_size != null ? exp.ping_packet_size : 56,
+    };
+}
+
+async function loadPlanBodyIntoBuilder(plan, opts = {}) {
+    const experimentsOnly = !!opts.experimentsOnly;
+    if (!experimentsOnly) {
+        const dn = (plan.display_name || '').trim();
+        document.getElementById('planDisplayName').value =
+            dn || humanizePlanSlug(plan.name || '');
+    } else {
+        document.getElementById('planDisplayName').value = '';
+    }
+    planBuilderExps = (plan.experiments || []).map(apiExperimentToBuilder);
+    const ie = document.getElementById('planInterExpPause');
+    const ir = document.getElementById('planInterRepeatPause');
+    if (ie) ie.value = plan.inter_exp_pause_s ?? 2;
+    if (ir) ir.value = plan.inter_repeat_pause_s ?? 0;
+    renderPlanExpList();
+}
+
+async function duplicatePlanTemplate(name) {
+    try {
+        const r = await fetch('/api/plans/' + encodeURIComponent(name));
+        const plan = await r.json();
+        if (!r.ok) {
+            notify(plan.error || 'Load failed');
+            return;
+        }
+        planEditingSlug = null;
+        await loadPlanBodyIntoBuilder(plan, { experimentsOnly: true });
+        syncPlanSlugPreview();
+        updateSavePlanButtonLabel();
+        plannerNav('templates');
+        notify('Duplicate: enter a title, then Save. Namespace and target IP are set when you queue a run.', true);
+    } catch (e) {
+        notify('Load failed: ' + e.message);
+    }
+}
+
+async function editPlanIntoBuilder(name) {
+    try {
+        const r = await fetch('/api/plans/' + encodeURIComponent(name));
+        const plan = await r.json();
+        if (!r.ok) {
+            notify(plan.error || 'Load failed');
+            return;
+        }
+        await loadPlanBodyIntoBuilder(plan, { experimentsOnly: false });
+        planEditingSlug = name;
+        syncPlanSlugPreview();
+        updateSavePlanButtonLabel();
+        plannerNav('templates');
+        const shown = (plan.display_name || '').trim() || humanizePlanSlug(name);
+        notify(`Editing "${shown}" — Save updates this template.`, true);
+    } catch (e) {
+        notify('Load failed: ' + e.message);
+    }
+}
 let currentPlanName = null;
 
 function toggleBwField() {
     const isUdp = document.getElementById('tpProto').value === 'udp';
     document.getElementById('bwCol').style.display = isUdp ? 'block' : 'none';
-    document.getElementById('tpLengthCol').style.display = isUdp ? 'block' : 'none';
+    const mode = document.getElementById('tpMode').value;
+    document.getElementById('tpUdpDlBwCol').style.display = (isUdp && mode === 'both') ? 'block' : 'none';
+}
+function toggleTpUdpLenMode() {
+    const m = document.getElementById('tpUdpLenMode').value;
+    document.getElementById('tpUdpFixedCol').style.display = m === 'fixed' ? 'block' : 'none';
+    document.getElementById('tpUdpClampCol').style.display = m === 'auto' ? 'block' : 'none';
 }
 function toggleBbBwField() {
     const isUdp = document.getElementById('bbProto').value === 'udp';
     document.getElementById('bbBwCol').style.display = isUdp ? 'block' : 'none';
-    document.getElementById('bbLengthCol').style.display = isUdp ? 'block' : 'none';
+    const mode = document.getElementById('bbMode').value;
+    document.getElementById('bbUdpDlBwCol').style.display = (isUdp && mode === 'both') ? 'block' : 'none';
+}
+function toggleBbUdpLenMode() {
+    const m = document.getElementById('bbUdpLenMode').value;
+    document.getElementById('bbUdpFixedCol').style.display = m === 'fixed' ? 'block' : 'none';
+    document.getElementById('bbUdpClampCol').style.display = m === 'auto' ? 'block' : 'none';
 }
 function setTpBwPreset(mbps) { document.getElementById('tpBwMbps').value = mbps; }
 function setBbBwPreset(mbps) { document.getElementById('bbBwMbps').value = mbps; }
@@ -745,6 +1304,244 @@ function nav(id) {
     document.querySelector(`[data-panel="${id}"]`).classList.add('active');
 }
 
+function _copyText(elId) {
+    const el = document.getElementById(elId);
+    if (!el) return;
+    const text = el.innerText || el.textContent;
+    navigator.clipboard.writeText(text).then(
+        () => notify('Copied to clipboard', true),
+        () => notify('Copy failed')
+    );
+}
+
+async function _openProbeTerminal() {
+    // Probe results dir field holds the project path; trim trailing slash, expand ~
+    let cwd = (document.getElementById('probePath')?.value || '').trim();
+    if (!cwd) { notify('Set "Probe results dir" first.'); return; }
+    cwd = cwd.replace(/\/+$/, '');
+    try {
+        const r = await fetch('/api/open_terminal', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cwd })
+        });
+        const d = await r.json();
+        if (d.ok) notify(`Terminal opened in ${d.cwd}`, true);
+        else notify('Failed: ' + (d.error || 'unknown'));
+    } catch (e) { notify('Error: ' + e.message); }
+}
+
+// Stash SSH config user lookups keyed by host alias.
+window._sshUserByHost = {};
+window._userManuallyEdited = false;
+
+function _onUserManualEdit() {
+    window._userManuallyEdited = true;
+    _renderRemoteCmds();
+}
+
+function _onRemoteHostChange() {
+    const host = (document.getElementById('remHost')?.value || '').trim();
+    const sshUser = window._sshUserByHost[host];
+    const userIn = document.getElementById('remUser');
+    const userHint = document.getElementById('remUserHint');
+    if (sshUser && userIn && !window._userManuallyEdited) {
+        userIn.value = sshUser;
+        if (userHint) userHint.textContent = `User "${sshUser}" pulled from ~/.ssh/config.`;
+    } else if (userHint) {
+        userHint.textContent = 'Auto-filled from ~/.ssh/config when host matches.';
+    }
+    _renderRemoteCmds();
+}
+
+function _onRemotePathPresetChange() {
+    const sel = document.getElementById('remPathPreset');
+    const inp = document.getElementById('remPath');
+    if (!sel || !inp) return;
+    if (sel.value === '__custom__') {
+        inp.style.display = '';
+        inp.value = inp.value && inp.value !== '~' ? inp.value : '';
+        inp.focus();
+    } else {
+        inp.style.display = 'none';
+        inp.value = sel.value;
+    }
+    _renderRemoteCmds();
+}
+
+function _renderRemoteCmds() {
+    const v = (id, fb='') => (document.getElementById(id)?.value || fb).trim();
+    const user   = v('remUser', 'pi');
+    const host   = v('remHost', '<remote-ip>');
+    const remPath = v('remPath', '~');
+    const probePath = v('probePath', '~/5g-probe');
+    const bg     = document.getElementById('remBackground')?.checked;
+
+    // Step 1: scp script up
+    document.getElementById('cmdCopyScript').textContent =
+        `scp ./run-probe-remote.sh ${user}@${host}:${remPath}/`;
+
+    // Step 3: scp bundle back — single "remotes" subdir, wildcard pulls every bundle
+    document.getElementById('cmdImport').textContent =
+        `mkdir -p ${probePath}/results/remotes\n`
+        + `scp -r ${user}@${host}:${remPath}/results/standalone/*/* \\\n`
+        + `    ${probePath}/results/remotes/`;
+
+    // Batch mode commands
+    const batchEl = document.getElementById('remBatchTxt');
+    if (batchEl) {
+        const content = batchEl.value || '';
+        const writeEl = document.getElementById('cmdBatchWrite');
+        const runEl = document.getElementById('cmdBatchRun');
+        if (writeEl) {
+            writeEl.textContent =
+                `ssh ${user}@${host} 'cat > ${remPath}/tests.txt' <<'EOF'\n`
+                + content
+                + (content.endsWith('\n') ? '' : '\n')
+                + 'EOF';
+        }
+        if (runEl) {
+            const runArgs = `./run-probe-remote.sh batch tests.txt`;
+            runEl.textContent = bg
+                ? `nohup ${runArgs} > batch.log 2>&1 &`
+                : runArgs;
+        }
+    }
+}
+
+// Convert a plan's experiments to script batch lines, honoring inter_exp / inter_repeat pauses.
+async function _genBatchFromPlan() {
+    const slug = document.getElementById('remPlan').value;
+    if (!slug) { notify('Pick a plan first.'); return; }
+    const target = (document.getElementById('remPlanTarget').value || '10.45.0.1').trim();
+    const repeats = Math.max(1, parseInt(document.getElementById('remPlanRepeats').value) || 1);
+    try {
+        const r = await fetch(`/api/plans/${encodeURIComponent(slug)}`);
+        if (!r.ok) { notify('Plan load failed.'); return; }
+        const plan = await r.json();
+        const interExp = parseInt(plan.inter_exp_pause_s || 0) || 0;
+        const interRep = parseInt(plan.inter_repeat_pause_s || 0) || 0;
+        const lines = [`# Generated from plan "${plan.display_name || slug}" — repeats=${repeats}`,
+                       `# inter_exp_pause=${interExp}s · inter_repeat_pause=${interRep}s`];
+        for (let r = 0; r < repeats; r++) {
+            if (r > 0 && interRep > 0) lines.push(`pause ${interRep}`);
+            lines.push(`# --- repeat ${r+1}/${repeats} ---`);
+            const exps = plan.experiments || [];
+            for (let i = 0; i < exps.length; i++) {
+                const e = exps[i];
+                const type = e.type || 'throughput';
+                if (type === 'latency') {
+                    const cnt = e.ping_count || 60;
+                    const pi = e.ping_interval || 0.5;
+                    const sz = e.ping_packet_size || 56;
+                    lines.push(`latency ${target} ${cnt} ${pi} ${sz}`);
+                } else {
+                    const dir = e.direction || 'ul';
+                    const proto = e.protocol || 'tcp';
+                    const dur = e.duration || 30;
+                    const bw = e.bandwidth;
+                    let ln = `throughput ${target} ${dir} ${proto} ${dur}`;
+                    if (proto === 'udp' && bw) ln += ` ${bw}`;
+                    lines.push(ln);
+                }
+                // Per-exp pause overrides plan default
+                const expPause = (e.pause_after_s != null ? e.pause_after_s : interExp);
+                if (i < exps.length - 1 && expPause > 0) lines.push(`pause ${expPause}`);
+            }
+        }
+        document.getElementById('remBatchTxt').value = lines.join('\n') + '\n';
+        _renderRemoteCmds();
+        notify('Batch generated from plan.', true);
+    } catch (e) { notify('Error: ' + e.message); }
+}
+
+// Populate Remote UE pickers (plans, SSH hosts, target IPs) on tab open.
+async function _loadRemotePickers() {
+    // Plans
+    try {
+        const r = await fetch('/api/plans');
+        const d = await r.json();
+        const sel = document.getElementById('remPlan');
+        if (sel) {
+            sel.innerHTML = '<option value="">— select plan —</option>';
+            for (const p of (d.plans || [])) {
+                const dn = p.display_name || p.name;
+                const o = document.createElement('option');
+                o.value = p.name; o.textContent = `${dn} (${p.experiment_count || (p.experiments?.length || 0)} exp)`;
+                sel.appendChild(o);
+            }
+        }
+    } catch {}
+    // Target IP presets + probe root path (display only)
+    try {
+        const r = await fetch('/api/config');
+        const d = await r.json();
+        const dl = document.getElementById('remTargetList');
+        if (dl) {
+            dl.innerHTML = '';
+            const all = [...(d.benchmark_targets || []), ...(d.user_benchmark_targets || [])];
+            for (const t of all) {
+                const o = document.createElement('option');
+                o.value = t.ip; o.label = `${t.ip} — ${t.label || t.id}`;
+                dl.appendChild(o);
+            }
+        }
+        const probeRoot = d.probe_root || '';
+        const probeHidden = document.getElementById('probePath');
+        const probeDisplay = document.getElementById('probePathDisplay');
+        if (probeHidden) probeHidden.value = probeRoot;
+        if (probeDisplay) probeDisplay.textContent = probeRoot || '(unknown)';
+        _renderRemoteCmds();
+    } catch {}
+    // SSH hosts → chips below the input (datalist popup unreliable in some browsers)
+    try {
+        const r = await fetch('/api/ssh_hosts');
+        const d = await r.json();
+        const chips = document.getElementById('remHostChips');
+        const hint = document.getElementById('remHostHint');
+        window._sshUserByHost = {};
+        if (chips) {
+            chips.innerHTML = '';
+            for (const h of (d.hosts || [])) {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'sampling-btn';
+                btn.style.cssText = 'font-size:.65rem;padding:.15rem .45rem;';
+                btn.textContent = h.host;
+                const sub = [];
+                if (h.hostname) sub.push(h.hostname);
+                if (h.user) sub.push(`user: ${h.user}`);
+                if (sub.length) btn.title = sub.join(' · ');
+                btn.onclick = () => {
+                    const inp = document.getElementById('remHost');
+                    if (inp) { inp.value = h.host; }
+                    window._userManuallyEdited = false;  // re-allow user autofill
+                    _onRemoteHostChange();
+                };
+                chips.appendChild(btn);
+                if (h.user) window._sshUserByHost[h.host] = h.user;
+            }
+        }
+        if (hint) {
+            if (!d.exists) {
+                hint.textContent = `~/.ssh/config not found — type IP manually or create it at ${d.config_path}.`;
+            } else if (!(d.hosts || []).length) {
+                hint.textContent = `No Host entries in ${d.config_path}. Add one to populate suggestions.`;
+            } else {
+                hint.innerHTML = `Click a host or type manually. Loaded ${d.hosts.length} from <code>${d.config_path}</code>.`;
+            }
+        }
+    } catch {}
+}
+
+// Initial render + pre-load pickers once panel is in DOM (so suggestions appear without nav click)
+window.addEventListener('DOMContentLoaded', () => {
+    if (document.getElementById('cmdCopyScript')) {
+        _renderRemoteCmds();
+        if (typeof _loadRemotePickers === 'function') _loadRemotePickers();
+    }
+});
+
 // =====================================================================
 // Alerts
 // =====================================================================
@@ -755,6 +1552,60 @@ function notify(msg, ok = false) {
     const c = document.getElementById('alerts');
     c.prepend(d);
     setTimeout(() => d.remove(), 7000);
+}
+
+async function copyText(t) {
+    try {
+        await navigator.clipboard.writeText(t);
+        notify('Copied to clipboard.', true);
+    } catch (_) {
+        notify('Clipboard unavailable');
+    }
+}
+
+function copyNsCmd(btn) {
+    const raw = btn.getAttribute('data-cmd');
+    if (raw) copyText(decodeURIComponent(raw));
+}
+
+async function openNsTerminal(ns) {
+    try {
+        const r = await fetch('/api/open_netns_terminal', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+            },
+            body: JSON.stringify({ namespace: ns }),
+        });
+        const ct = (r.headers.get('content-type') || '').toLowerCase();
+        const raw = await r.text();
+        if (!ct.includes('application/json')) {
+            notify(
+                `Terminal API returned non-JSON (${r.status}). ${raw.slice(0, 160).replace(/\s+/g, ' ')}`,
+            );
+            return;
+        }
+        let j;
+        try {
+            j = JSON.parse(raw);
+        } catch (_) {
+            notify('Terminal API: invalid JSON body.');
+            return;
+        }
+        if (j.ok) {
+            let msg = 'Terminal opened.';
+            if (j.hint) msg += ' ' + j.hint;
+            notify(msg, true);
+        } else {
+            let msg = j.error || 'Could not open terminal';
+            if (j.hint) msg += ' — ' + j.hint;
+            notify(msg);
+            if (j.command) await copyText(j.command);
+        }
+    } catch (e) {
+        notify('Error: ' + e.message);
+    }
 }
 
 // =====================================================================
@@ -795,14 +1646,19 @@ async function refresh() {
                 if (router)       { tagClass = 'tag-router'; tagLabel = '⚠️ Router/Uplink'; }
                 else if (isWwan)  { tagClass = 'tag-wwan';   tagLabel = '📡 WWAN Modem'; }
                 else              { tagClass = 'tag-ue';     tagLabel = '📱 UE Dongle'; }
-                const ipLine = isWwan && i.current_ip
-                    ? `<div style="font-size:.68rem;color:var(--txt3);margin-top:.2rem;font-family:monospace;">IP: ${i.current_ip}${i.gateway ? ' · GW: ' + i.gateway : ''}</div>`
+                const ipgw = i.ipv4 || i.current_ip
+                    ? `<div style="font-size:.68rem;color:var(--txt3);margin-top:.2rem;font-family:monospace;">IP: ${i.ipv4 || i.current_ip}${i.gateway ? ' · GW: ' + i.gateway : ''}</div>`
+                    : '';
+                const topo = [i.subnet, i.topology_hint].filter(Boolean).join(' · ');
+                const topoLine = topo
+                    ? `<div style="font-size:.65rem;color:var(--cyan);margin-top:.15rem;font-family:monospace;">${topo}</div>`
                     : '';
                 return `<div class="iface-row">
                     <div>
                         <div class="iface-name">${i.name}</div>
                         <div class="iface-mac">${i.mac} <span class="tag ${tagClass} ms-2">${i.vendor} — ${tagLabel}</span></div>
-                        ${ipLine}
+                        ${ipgw}
+                        ${topoLine}
                     </div>
                     <button class="btn_ btn-blue" onclick="doIsolate('${i.name}')">🔒 Isolate</button>
                 </div>`;
@@ -814,26 +1670,64 @@ async function refresh() {
         if (!d.namespaces.length) {
             ntc.innerHTML = '<div class="ns-empty">No active namespaces. Isolate a device first.</div>';
         } else {
-            ntc.innerHTML = '<table class="ns-tbl"><thead><tr><th>Namespace</th><th>Interfaces</th><th>WebUI</th><th></th></tr></thead><tbody>' +
+            ntc.innerHTML = '<table class="ns-tbl"><thead><tr><th>Namespace</th><th>Address</th><th>Topology</th><th>WebUI</th><th>Actions</th></tr></thead><tbody>' +
                 d.namespaces.map(ns => {
-                    const hasWwan = ns.interfaces.some(i => i.startsWith('wwan'));
-                    const webuiCell = hasWwan
-                        ? `<span style="font-size:.72rem;color:var(--txt3);">N/A (WWAN)</span>`
-                        : `<a class="btn_ btn-amber" style="font-size:.72rem;padding:.3em .75em;" href="http://localhost:${ns.webui_port}" target="_blank">🌐 :${ns.webui_port}</a>`;
+                    const det = (ns.interface_details && ns.interface_details[0]) || {};
+                    const addr = det.ipv4
+                        ? `${det.ipv4}${det.subnet ? ' · ' + det.subnet : ''}`
+                        : (ns.interfaces.join(', ') || '—');
+                    const topologyHint = det.topology_hint || '—';
+                    const mgmt = ns.management_selected || '—';
+                    const local = ns.management_local_url || `${ns.management_https ? 'https' : 'http'}://127.0.0.1:${ns.webui_port}`;
+                    const enc = encodeURIComponent(ns.shell_command || '');
+                    const tunnelHintEsc = (ns.webui_tunnel_hint || '').replace(/"/g, '&quot;');
+                    const tunOk = ns.webui_tunnel_listening === true && ns.management_tcp_ok === true && ns.management_http_ok === true;
+                    const webWarn = tunOk ? '' : '<span style="opacity:.85;margin-left:.15rem;" title="' + tunnelHintEsc + '">⚠</span>';
+                    const webStyle = tunOk ? '' : 'opacity:.72;border:1px dashed rgba(251,191,36,.45);';
+                    const sch = ns.management_https ? 'https' : 'http';
+                    const web = `<a class="btn_ btn-amber" style="font-size:.68rem;padding:.28em .6em;${webStyle}" href="${local.replace(/"/g, '&quot;')}" target="_blank" rel="noopener noreferrer" title="${tunnelHintEsc || 'Web UI tunnel'}">:${ns.webui_port}</a>${webWarn}`;
+                    const actions = `<button type="button" class="btn_ btn-blue" style="font-size:.68rem;padding:.28em .55em;margin-right:.25rem;" onclick='openNsTerminal(${JSON.stringify(ns.name)})'>Terminal</button>` +
+                        `<button type="button" class="sampling-btn" style="font-size:.65rem;margin-right:.25rem;" data-cmd="${enc}" onclick="copyNsCmd(this)">Copy shell</button>` +
+                        `<button type="button" class="btn_ btn-red" style="font-size:.68rem;padding:.28em .55em;" onclick='doReset(${JSON.stringify(ns.name)})'>Reset</button>`;
                     return `<tr>
-                    <td><strong>${ns.name}</strong></td>
-                    <td style="font-family:monospace;">${ns.interfaces.join(', ') || '<em>none</em>'}</td>
-                    <td>${webuiCell}</td>
-                    <td><button class="btn_ btn-red" style="font-size:.72rem;padding:.3em .8em;" onclick="doReset('${ns.name}')">🗑 Reset</button></td>
+                    <td><strong>${ns.name}</strong><div style="font-size:.62rem;color:var(--txt3);margin-top:.2rem;">mgmt ${mgmt}:${ns.management_port != null ? ns.management_port : 80} · ${sch}</div></td>
+                    <td style="font-family:monospace;font-size:.72rem;">${addr}</td>
+                    <td style="font-size:.75rem;">${topologyHint}</td>
+                    <td>${web}</td>
+                    <td style="white-space:nowrap;">${actions}</td>
                 </tr>`;
                 }).join('') + '</tbody></table>';
         }
 
-        // Populate all namespace selects
-        const opts = d.namespaces.length
+        // Cache active namespace names for cross-handler validation
+        window._activeNamespaces = d.namespaces.map(n => n.name);
+        // Populate all namespace selects — never fall back to a fake "ue1" entry.
+        // When no namespaces exist, render a disabled placeholder so users can't accidentally
+        // submit a run against a non-existent namespace.
+        const hasNs = d.namespaces.length > 0;
+        const opts = hasNs
             ? d.namespaces.map(n => `<option value="${n.name}">${n.name}</option>`).join('')
-            : '<option value="ue1">ue1</option>';
-        ['qNs', 'tpNs', 'latNs', 'bbNs', 'planNs'].forEach(id => document.getElementById(id).innerHTML = opts);
+            : '<option value="" disabled selected>— No active namespace —</option>';
+        ['qNs', 'tpNs', 'latNs', 'bbNs'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) {
+                el.innerHTML = opts;
+                el.disabled = !hasNs;
+            }
+        });
+        const queueNsEl = document.getElementById('queueNs');
+        if (queueNsEl) {
+            queueNsEl.innerHTML = hasNs
+                ? '<option value="">— Select namespace —</option>' + opts
+                : opts;
+            queueNsEl.disabled = !hasNs;
+        }
+        // Reflect availability on Add-to-Queue button
+        const addBtn = document.getElementById('btnAddToQueue');
+        if (addBtn) {
+            addBtn.disabled = !hasNs;
+            addBtn.title = hasNs ? '' : 'Isolate a USB interface first to create a namespace.';
+        }
 
     } catch(_) {
         document.getElementById('sysStatus').textContent = 'Offline';
@@ -856,16 +1750,17 @@ async function doIsolate(iface) {
 }
 
 async function doReset(ns) {
-    if (!confirm(`Reset "${ns}"? Interface will return to host.`)) return;
-    try {
-        const r = await fetch('/api/reset', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({namespace: ns}) });
-        const j = await r.json();
-        const log = document.getElementById('isoLog');
-        log.style.display = 'block';
-        if (j.data?.logs) log.textContent = j.data.logs.join('\n');
-        notify(j.message, j.status === 'success');
-    } catch(e) { notify('Error: ' + e.message); }
-    await refresh();
+    _confirm(`Reset "${ns}"? Interface will return to host.`, async () => {
+        try {
+            const r = await fetch('/api/reset', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({namespace: ns}) });
+            const j = await r.json();
+            const log = document.getElementById('isoLog');
+            log.style.display = 'block';
+            if (j.data?.logs) log.textContent = j.data.logs.join('\n');
+            notify(j.message, j.status === 'success');
+        } catch(e) { notify('Error: ' + e.message); }
+        await refresh();
+    });
 }
 
 // =====================================================================
@@ -878,13 +1773,21 @@ async function quickBench() {
     ['vPing','vDl','vUl'].forEach(id => document.getElementById(id).textContent = '--');
     try {
         const r = await fetch('/api/benchmark', { method: 'POST', headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({namespace: document.getElementById('qNs').value, target_ip: document.getElementById('qIp').value}) });
+            body: JSON.stringify({
+                namespace: document.getElementById('qNs').value,
+                target_ip: document.getElementById('qIp').value,
+                parallel_streams: Math.max(1, Math.min(64, parseInt(document.getElementById('qPar').value) || 1)),
+            }) });
         const d = await r.json();
-        if (d.status === 'success') {
-            document.getElementById('vPing').textContent = d.ping_idle_ms;
-            document.getElementById('vDl').textContent = d.dl_mbps;
-            document.getElementById('vUl').textContent = d.ul_mbps;
-            notify('Quick check complete!', true);
+        if (d.status === 'success' || d.ping_idle_ms != null) {
+            document.getElementById('vPing').textContent = (d.ping_idle_ms != null && d.ping_idle_ms >= 0) ? d.ping_idle_ms : '—';
+            document.getElementById('vDl').textContent = d.dl_error ? 'n/a' : d.dl_mbps;
+            document.getElementById('vUl').textContent = d.ul_error ? 'n/a' : d.ul_mbps;
+            if (d.dl_error || d.ul_error) {
+                notify('iperf3 unreachable on target (port 5201). Start an iperf3 server on ' + (document.getElementById('qIp').value) + '.');
+            } else if (d.status === 'success') {
+                notify('Quick check complete!', true);
+            }
         } else notify('Error: ' + (d.message || 'Unknown'));
     } catch(e) { notify('Error: ' + e.message); }
     btn.disabled = false; btn.innerHTML = btn._t;
@@ -995,9 +1898,13 @@ function parseCSV(text) {
 
 function aggregateData(rows, windowMs) {
     if (windowMs <= 100) return rows;
+    // Ping rows have a different schema; aggregating would drop rtt_ms/owd_ms/jitter_ms.
+    // Ping series are small enough that downsampling adds no value.
+    if (rows.length && rows[0].rtt_ms !== undefined) return rows;
     const bucketSize = Math.round(windowMs / 100);
+    const windowS = windowMs / 1000;
     const result = [];
-    for (let i = 0; i < rows.length; i += bucketSize) {
+    for (let i = 0, b = 0; i < rows.length; i += bucketSize, b++) {
         const bucket = rows.slice(i, i + bucketSize);
         if (!bucket.length) continue;
         const avg = (key) => {
@@ -1014,8 +1921,10 @@ function aggregateData(rows, windowMs) {
             }
             return null;
         };
+        // Align time to bucket-end so labels are multiples of sampling rate (0.5, 1.0, 1.5 ...)
+        const tEnd = Math.round(((b + 1) * windowS) * 100) / 100;
         result.push({
-            time_s: avg('time_s'),
+            time_s: tEnd,
             protocol: bucket[0].protocol,
             phase: bucket[0].phase,
             client_Mbps: avg('client_Mbps'),
@@ -1029,7 +1938,205 @@ function aggregateData(rows, windowMs) {
     return result;
 }
 
+function _augmentSummaryFromCsv(summary, rows) {
+    if (!rows || !rows.length) return;
+    const num = (k) => rows.map(r => r[k]).filter(v => v != null && typeof v === 'number');
+    const stats = (arr) => {
+        if (!arr.length) return null;
+        const sorted = arr.slice().sort((a,b) => a-b);
+        const sum = arr.reduce((a,b) => a+b, 0);
+        const mean = sum / arr.length;
+        const variance = arr.reduce((a,b) => a + (b-mean)**2, 0) / arr.length;
+        const pct = (p) => sorted[Math.min(sorted.length - 1, Math.floor(p * (sorted.length - 1)))];
+        return {
+            avg: Math.round(mean * 100) / 100,
+            min: Math.round(sorted[0] * 100) / 100,
+            max: Math.round(sorted[sorted.length - 1] * 100) / 100,
+            p95: Math.round(pct(0.95) * 100) / 100,
+            p99: Math.round(pct(0.99) * 100) / 100,
+            stddev: Math.round(Math.sqrt(variance) * 100) / 100,
+        };
+    };
+    const rtts = num('rtt_ms');
+    if (rtts.length) {
+        const s = stats(rtts);
+        summary.avg_rtt_ms = summary.avg_rtt_ms ?? s.avg;
+        summary.min_rtt_ms = summary.min_rtt_ms ?? s.min;
+        summary.max_rtt_ms = summary.max_rtt_ms ?? s.max;
+        summary.rtt_p95_ms = s.p95;
+        summary.rtt_p99_ms = s.p99;
+        summary.rtt_stddev_ms = s.stddev;
+        summary.packets = summary.packets ?? rtts.length;
+    }
+    const jitters = num('jitter_ms').filter(v => v > 0);
+    if (jitters.length) {
+        const s = stats(jitters);
+        summary.jitter_avg_ms = s.avg;
+        summary.jitter_max_ms = s.max;
+    }
+}
+
+function _updateSamplingHint(n, dotsVisible) {
+    const el = document.getElementById('samplingHint');
+    if (!el) return;
+    el.textContent = dotsVisible
+        ? `(${n} points · dots shown)`
+        : `(${n} points · dots hidden, too dense — pick a coarser sampling to see them)`;
+}
+
+function _percentile(arr, p) {
+    const v = arr.filter(x => x != null && typeof x === 'number').slice().sort((a,b) => a-b);
+    if (!v.length) return 0;
+    const i = Math.min(v.length - 1, Math.floor(p * (v.length - 1)));
+    return v[i];
+}
+
+const METRIC_DEFS = {
+    'Client (Mbps)': 'Throughput measured at the iperf3 client (bytes sent per second).',
+    'Server (Mbps)': 'Throughput measured at the iperf3 server (bytes actually received). Lower than Client = path loss.',
+    'Loss %': 'Percentage of UDP datagrams the server reported missing in each interval.',
+    'Jitter (ms)': 'Mean inter-packet delay variation reported by the UDP receiver (RFC 1889).',
+    'Retransmits': 'TCP segments the sender had to retransmit (lost or never ACKed).',
+    'cwnd (kB)': 'TCP congestion window: how much unacknowledged data the sender allows in flight.',
+    'RTT (ms)': 'Round-trip time: ICMP Echo → Reply for one packet.',
+    'Est. OWD (ms)': 'Estimated one-way delay = RTT / 2 (assumes symmetric path).',
+};
+
+function renderChartGlossary(metricNames) {
+    const el = document.getElementById('resultChartGlossary');
+    if (!el) return;
+    const items = metricNames
+        .filter(n => METRIC_DEFS[n])
+        .map(n => `<span title="${METRIC_DEFS[n].replace(/"/g, '&quot;')}" style="display:inline-block;margin-right:.6rem;padding:.1rem .4rem;border:1px dashed var(--border);border-radius:4px;cursor:help;">${n} <span style="color:var(--txt3);font-size:.65rem;">ⓘ</span></span>`)
+        .join('');
+    if (items) {
+        el.innerHTML = `<span style="color:var(--txt3);margin-right:.4rem;">Hover for definition:</span>${items}`;
+        el.style.display = 'block';
+    } else {
+        el.style.display = 'none';
+    }
+}
+
+function renderPingResultChart(rows) {
+    if (resultModalChart) { resultModalChart.destroy(); resultModalChart = null; }
+    const canvas = document.getElementById('resultChart');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+
+    // ping CSV parser renames "#" → "seq"; use seq as fallback when time_s missing
+    const labels = rows.map(r => r.time_s != null ? Number(r.time_s).toFixed(1) : String(r.seq != null ? r.seq : ''));
+    const rttData = rows.map(r => r.rtt_ms);
+    const jitterData = rows.map(r => r.jitter_ms);
+    const owdData = rows.map(r => r.owd_ms);
+    const hasJitter = jitterData.some(v => v != null && v > 0);
+    const hasOwd = owdData.some(v => v != null);
+    const ptR = rows.length > 60 ? 0 : 2.0;
+    const tens = 0.2;
+    _updateSamplingHint(rows.length, ptR > 0);
+
+    const maxOf = arr => arr.reduce((m,v) => (v != null && v > m) ? v : m, 0);
+    const realMax = Math.max(maxOf(rttData), maxOf(jitterData), maxOf(owdData));
+    // p95-based scale so single spike outliers don't squash the rest of the trace.
+    // Show toggle when outlier exists; max RTT noted in the hint.
+    const p95 = Math.max(_percentile(rttData, 0.95), _percentile(jitterData, 0.95), _percentile(owdData, 0.95));
+    const clipEl = document.getElementById('clipOutliers');
+    const clipWrap = document.getElementById('clipOutliersWrap');
+    const hasOutliers = realMax > p95 * 2 && realMax > 30;
+    if (clipWrap) clipWrap.style.display = hasOutliers ? 'inline' : 'none';
+    const clipping = hasOutliers && (!clipEl || clipEl.checked);
+    const yMaxSuggest = clipping
+        ? Math.max(p95 * 1.3, 20)
+        : Math.max(realMax, 20);
+    if (hasOutliers) {
+        const hint = document.getElementById('samplingHint');
+        if (hint) hint.textContent += clipping
+            ? ` · clipped to p95 (max real: ${realMax.toFixed(1)} ms)`
+            : ` · showing outliers (max: ${realMax.toFixed(1)} ms)`;
+    }
+    // Wire toggle to re-render
+    if (clipEl && hasOutliers) {
+        clipEl.onchange = () => renderPingResultChart(rows);
+    }
+
+    const datasets = [
+        { label: 'RTT (ms)', data: rttData, borderColor: '#ef4444',
+          backgroundColor: mkGrad(ctx, '#ef4444'), fill: true, tension: tens,
+          pointRadius: ptR, borderWidth: 1.5, yAxisID: 'y' },
+    ];
+    if (hasOwd) {
+        datasets.push({
+            label: 'Est. OWD (ms)', data: owdData, borderColor: '#06b6d4',
+            backgroundColor: 'transparent', fill: false, tension: tens,
+            pointRadius: ptR, borderWidth: 1.2, borderDash: [6, 3], yAxisID: 'y'
+        });
+    }
+    if (hasJitter) {
+        datasets.push({
+            label: 'Jitter (ms)', data: jitterData, borderColor: '#fbbf24',
+            backgroundColor: 'transparent', fill: false, tension: tens,
+            pointRadius: ptR, borderWidth: 1.2, borderDash: [3, 2], yAxisID: 'y'
+        });
+    }
+    renderChartGlossary(datasets.map(d => d.label));
+
+    resultModalChart = new Chart(ctx, {
+        type: 'line',
+        data: { labels, datasets },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            animation: { duration: 0 },
+            scales: {
+                // Use hard max when clipping so outlier spikes don't expand the axis
+                y: { beginAtZero: true,
+                     max: clipping ? yMaxSuggest : undefined,
+                     suggestedMax: clipping ? undefined : yMaxSuggest,
+                     grid: {color:'rgba(255,255,255,.04)'},
+                     ticks: {color:'#94a3b8'}, title: {display:true,text:'ms',color:'#64748b'} },
+                x: { grid: {color:'rgba(255,255,255,.02)'}, ticks: {color:'#94a3b8', maxTicksLimit: 20, autoSkip: true} },
+            },
+            plugins: {
+                title: { display: true, text: _chartTitleFromMeta(), color: '#e2e8f0',
+                         font: { size: 14, weight: '600' }, padding: { top: 4, bottom: 10 } },
+                legend: { labels: {color:'#e2e8f0'} },
+                customCanvasBackgroundColor: { color: '#0b0e14' }
+            }
+        },
+        plugins: [{
+            id: 'customCanvasBackgroundColor',
+            beforeDraw: (chart) => {
+                const {ctx: c} = chart;
+                c.save();
+                c.globalCompositeOperation = 'destinationOver';
+                c.fillStyle = '#0b0e14';
+                c.fillRect(0, 0, chart.width, chart.height);
+                c.restore();
+            }
+        }]
+    });
+}
+
+function _chartTitleFromMeta() {
+    const m = currentResultMeta;
+    if (!m) return '';
+    const t = (m.test_type || 'Test').charAt(0).toUpperCase() + (m.test_type || '').slice(1);
+    const dirMap = { ul: 'UL', dl: 'DL', both: 'UL+DL', bi: 'Bi' };
+    const dir = m.direction ? (dirMap[m.direction] || m.direction.toUpperCase()) : '';
+    const proto = m.protocol ? m.protocol.toUpperCase() : '';
+    const bw = m.bandwidth ? ` @ ${m.bandwidth}` : '';
+    const parts = [t];
+    if (dir) parts.push(dir);
+    if (proto) parts.push(proto);
+    let s = parts.join(' · ') + bw;
+    if (m.exp_id) s += `  (${m.exp_id})`;
+    return s;
+}
+
 function renderResultChart(rows, protocol, direction) {
+    // Dispatch: ping rows have rtt_ms column; iperf rows have client_Mbps
+    if (rows.length && rows[0].rtt_ms !== undefined) {
+        renderPingResultChart(rows);
+        return;
+    }
     if (resultModalChart) { resultModalChart.destroy(); resultModalChart = null; }
     const canvas = document.getElementById('resultChart');
     if (!canvas) return;
@@ -1041,14 +2148,26 @@ function renderResultChart(rows, protocol, direction) {
     // Server always a contrasting color — cyan for UL, blue for DL
     const serverColor = isUl ? '#06b6d4' : '#3b82f6';
 
-    const labels = rows.map(r => r.time_s != null ? r.time_s.toFixed(1) : '');
+    // Choose label precision from row spacing (sampling rate); sub-second → 1 decimal, ≥1s → integer
+    let dt = 0.1;
+    for (let i = 1; i < rows.length; i++) {
+        if (rows[i].time_s != null && rows[i-1].time_s != null) { dt = rows[i].time_s - rows[i-1].time_s; break; }
+    }
+    const decimals = dt >= 1 ? 0 : (dt >= 0.5 ? 1 : 1);
+    const labels = rows.map(r => r.time_s != null ? r.time_s.toFixed(decimals) : '');
     const clientData = rows.map(r => r.client_Mbps);
     const serverData = rows.map(r => r.server_Mbps);
     const hasServer = serverData.some(v => v != null);
 
-    // Adaptive point radius — fewer points = bigger dots
-    const ptR = rows.length > 200 ? 0 : rows.length > 80 ? 1.5 : 2.5;
-    const ptRsec = rows.length > 200 ? 0 : 1;
+    // Adaptive point radius — hide markers when many points or aggregated, otherwise small dots.
+    // Visible markers + Bezier smoothing on aggregated data caused visible "jumps" on the line.
+    const ptR = rows.length > 60 ? 0 : 2.0;
+    const ptRsec = rows.length > 60 ? 0 : 1;
+    // Lower curve tension to reduce smoothing overshoot artifacts between aggregated buckets
+    const tens = 0.2;
+    _updateSamplingHint(rows.length, ptR > 0);
+    const clipWrap = document.getElementById('clipOutliersWrap');
+    if (clipWrap) clipWrap.style.display = 'none';
 
     // Secondary metrics
     let sec1Data, sec1Label, sec1Color, sec1Dash;
@@ -1077,26 +2196,37 @@ function renderResultChart(rows, protocol, direction) {
 
     const datasets = [
         { label: 'Client (Mbps)', data: clientData, borderColor: clientColor,
-          backgroundColor: mkGrad(ctx, clientColor), fill: true, tension: .35,
+          backgroundColor: mkGrad(ctx, clientColor), fill: true, tension: tens,
           pointRadius: ptR, borderWidth: 1.5, yAxisID: 'y' },
         { label: sec1Label, data: sec1Data, borderColor: sec1Color,
-          backgroundColor: 'transparent', fill: false, tension: .3,
+          backgroundColor: 'transparent', fill: false, tension: tens,
           pointRadius: ptRsec, borderWidth: 1, borderDash: sec1Dash, yAxisID: 'y1' },
         { label: sec2Label, data: sec2Data, borderColor: sec2Color,
-          backgroundColor: 'transparent', fill: false, tension: .3,
+          backgroundColor: 'transparent', fill: false, tension: tens,
           pointRadius: ptRsec, borderWidth: 1, borderDash: sec2Dash, yAxisID: 'y2' },
     ];
     if (hasServer) {
         datasets.push({
             label: 'Server (Mbps)', data: serverData, borderColor: serverColor,
-            backgroundColor: 'transparent', fill: false, tension: .35,
+            backgroundColor: 'transparent', fill: false, tension: tens,
             pointRadius: ptR, borderWidth: 1.5, borderDash: [6, 3], yAxisID: 'y'
         });
     }
+    renderChartGlossary(datasets.map(d => d.label));
 
-    // Y1/Y2 axis config
-    const y1Max = isTcp ? undefined : 100;
+    // Y1/Y2 axis config — set floor on suggestedMax so tiny values don't look "huge" filling the axis
+    const maxOf = arr => arr.reduce((m,v) => (v != null && v > m) ? v : m, 0);
+    const sec1Real = maxOf(sec1Data);
+    const sec2Real = maxOf(sec2Data);
+    const clientReal = maxOf(clientData);
+    // Mbps: at least 10 Mbps span so a 0.5Mbps line isn't visually max
+    const yMaxSuggest = Math.max(clientReal, maxOf(serverData), 10);
+    // y1: retransmits → floor 10; loss% → dynamic (was fixed 100 — squashed small losses)
+    const y1Max = undefined;
+    const y1Suggest = isTcp ? Math.max(sec1Real, 10) : Math.min(Math.max(sec1Real * 1.5, 5), 100);
     const y1TickCb = isTcp ? undefined : (v => v + '%');
+    // y2: cwnd → floor 100 kB; jitter → floor 5 ms
+    const y2Suggest = isTcp ? Math.max(sec2Real, 100) : Math.max(sec2Real * 1.5, 5);
 
     resultModalChart = new Chart(ctx, {
         type: 'line',
@@ -1105,17 +2235,19 @@ function renderResultChart(rows, protocol, direction) {
             responsive: true, maintainAspectRatio: false,
             animation: { duration: 0 },
             scales: {
-                y:  { beginAtZero: true, grid: {color:'rgba(255,255,255,.04)'},
+                y:  { beginAtZero: true, suggestedMax: yMaxSuggest, grid: {color:'rgba(255,255,255,.04)'},
                       ticks: {color:'#94a3b8'}, title: {display:true,text:'Mbps',color:'#64748b'}, position: 'left' },
-                y1: { beginAtZero: true, max: y1Max, grid: {drawOnChartArea: false},
+                y1: { beginAtZero: true, max: y1Max, suggestedMax: y1Suggest, grid: {drawOnChartArea: false},
                       ticks: {color:'#fca5a5', callback: y1TickCb}, title: {display:true,text:sec1Label,color:sec1Color},
                       position: 'right', display: hasSec1 },
-                y2: { beginAtZero: true, grid: {drawOnChartArea: false},
+                y2: { beginAtZero: true, suggestedMax: y2Suggest, grid: {drawOnChartArea: false},
                       ticks: {color:'#fbbf24'}, title: {display:true,text:sec2Label,color:sec2Color},
                       position: 'right', display: hasSec2 },
-                x:  { grid: {color:'rgba(255,255,255,.02)'}, ticks: {color:'#94a3b8', maxTicksLimit: 40} }
+                x:  { grid: {color:'rgba(255,255,255,.02)'}, ticks: {color:'#94a3b8', maxTicksLimit: 20, autoSkip: true } }
             },
             plugins: {
+                title: { display: true, text: _chartTitleFromMeta(), color: '#e2e8f0',
+                         font: { size: 14, weight: '600' }, padding: { top: 4, bottom: 10 } },
                 legend: { labels: {color:'#e2e8f0'} },
                 // Dark background for canvas (needed for copy/export)
                 customCanvasBackgroundColor: { color: '#0b0e14' }
@@ -1153,13 +2285,22 @@ function setTpUI(running) {
 
 function startThroughput() {
     const ns = document.getElementById('tpNs').value;
+    if (!ns || !(window._activeNamespaces || []).includes(ns)) { notify('No active namespace. Isolate a USB interface first.'); return; }
     const ip = document.getElementById('tpIp').value;
     const dur = parseInt(document.getElementById('tpDur').value) || 15;
     const mode = document.getElementById('tpMode').value;
     const proto = document.getElementById('tpProto').value;
     const bwMbps = parseInt(document.getElementById('tpBwMbps').value) || 200;
     const bw = proto === 'udp' ? (bwMbps === 0 ? '0' : bwMbps + 'M') : '200M';
+    const bwDlMbps = parseInt(document.getElementById('tpBwDlMbps').value);
+    const bandwidth_dl = (proto === 'udp' && mode === 'both' && !isNaN(bwDlMbps))
+        ? (bwDlMbps === 0 ? '0' : bwDlMbps + 'M')
+        : null;
     const length_bytes = parseInt(document.getElementById('tpLength').value) || 1200;
+    const parallel_streams = Math.max(1, Math.min(64, parseInt(document.getElementById('tpPar').value) || 1));
+    const interval_s = Math.max(0.05, parseFloat(document.getElementById('tpInt').value) || 0.1);
+    const udp_length_mode = document.getElementById('tpUdpLenMode').value;
+    const udp_mtu_clamp = Math.max(68, Math.min(9000, parseInt(document.getElementById('tpUdpClamp').value) || 1200));
 
     tpData = [];
     chart4Hidden = true;
@@ -1170,7 +2311,11 @@ function startThroughput() {
     document.getElementById('tpMsg').textContent = 'Starting…';
     setTpUI(true);
 
-    socket.emit('start_live_benchmark', { namespace: ns, target_ip: ip, duration: dur, mode, proto, bandwidth: bw, length_bytes, with_ping: false });
+    socket.emit('start_live_benchmark', {
+        namespace: ns, target_ip: ip, duration: dur, mode, proto, bandwidth: bw,
+        bandwidth_dl, length_bytes, parallel_streams, interval_s,
+        udp_length_mode, udp_mtu_clamp, with_ping: false,
+    });
 }
 
 // =====================================================================
@@ -1192,6 +2337,7 @@ function setLatUI(running) {
 
 function startLatency() {
     const ns = document.getElementById('latNs').value;
+    if (!ns || !(window._activeNamespaces || []).includes(ns)) { notify('No active namespace. Isolate a USB interface first.'); return; }
     const ip = document.getElementById('latIp').value;
     const count = parseInt(document.getElementById('latCount').value) || 60;
     const interval = parseFloat(document.getElementById('latInterval').value) || 0.5;
@@ -1227,13 +2373,22 @@ function setBbUI(running) {
 
 function startBufferbloat() {
     const ns = document.getElementById('bbNs').value;
+    if (!ns || !(window._activeNamespaces || []).includes(ns)) { notify('No active namespace. Isolate a USB interface first.'); return; }
     const ip = document.getElementById('bbIp').value;
     const dur = parseInt(document.getElementById('bbDur').value) || 20;
     const mode = document.getElementById('bbMode').value;
     const proto = document.getElementById('bbProto').value;
     const bwMbps = parseInt(document.getElementById('bbBwMbps').value) || 200;
     const bw = proto === 'udp' ? (bwMbps === 0 ? '0' : bwMbps + 'M') : '200M';
+    const bwDlMbps = parseInt(document.getElementById('bbBwDlMbps').value);
+    const bandwidth_dl = (proto === 'udp' && mode === 'both' && !isNaN(bwDlMbps))
+        ? (bwDlMbps === 0 ? '0' : bwDlMbps + 'M')
+        : null;
     const length_bytes = parseInt(document.getElementById('bbLength').value) || 1200;
+    const parallel_streams = Math.max(1, Math.min(64, parseInt(document.getElementById('bbPar').value) || 1));
+    const interval_s = Math.max(0.05, parseFloat(document.getElementById('bbInt').value) || 0.1);
+    const udp_length_mode = document.getElementById('bbUdpLenMode').value;
+    const udp_mtu_clamp = Math.max(68, Math.min(9000, parseInt(document.getElementById('bbUdpClamp').value) || 1200));
 
     bbTpData = []; bbLatData = [];
     if (chartBbTp) chartBbTp.destroy();
@@ -1245,7 +2400,11 @@ function startBufferbloat() {
     document.getElementById('bbMsg').textContent = 'Starting iperf3 + ping…';
     setBbUI(true);
 
-    socket.emit('start_live_benchmark', { namespace: ns, target_ip: ip, duration: dur, mode, proto, bandwidth: bw, length_bytes, with_ping: true });
+    socket.emit('start_live_benchmark', {
+        namespace: ns, target_ip: ip, duration: dur, mode, proto, bandwidth: bw,
+        bandwidth_dl, length_bytes, parallel_streams, interval_s,
+        udp_length_mode, udp_mtu_clamp, with_ping: true,
+    });
 }
 
 function stopTest() {
@@ -1380,8 +2539,11 @@ socket.on('iperf_backfill', (data) => {
     let idx = 0;
     for (let i = 0; i < arr.length; i++) {
         if (arr[i].phase === data.phase && idx < intervals.length) {
-            if (intervals[idx].loss_pct != null) arr[i].loss_pct = intervals[idx].loss_pct;
-            if (intervals[idx].jitter_ms != null) arr[i].jitter_ms = intervals[idx].jitter_ms;
+            if (intervals[idx].loss_pct != null)   arr[i].loss_pct  = intervals[idx].loss_pct;
+            if (intervals[idx].jitter_ms != null)  arr[i].jitter_ms = intervals[idx].jitter_ms;
+            // TCP DL: retr + cwnd come from server output, not client intervals
+            if (intervals[idx].retransmits != null) arr[i].retr    = intervals[idx].retransmits;
+            if (intervals[idx].cwnd_kb != null)     arr[i].cwnd_kb = intervals[idx].cwnd_kb;
             idx++;
         }
     }
@@ -1577,11 +2739,26 @@ socket.on('test_complete', (data) => {
 // =====================================================================
 // Init
 // =====================================================================
-window.addEventListener('DOMContentLoaded', refresh);
+window.addEventListener('DOMContentLoaded', () => {
+    refresh();
+    toggleBwField();
+    toggleBbBwField();
+    toggleTpUdpLenMode();
+    toggleBbUdpLenMode();
+    syncPlanSlugPreview();
+    refreshQueueIpPresets('').catch(() => {});
+});
 
 // =====================================================================
 // Test Results — save & browse
 // =====================================================================
+
+function metaUdpPayload(mode, fixedLen, clampLen) {
+    if (mode === 'omit') return null;
+    if (mode === 'auto') return clampLen || 1200;
+    return fixedLen || 1200;
+}
+
 async function saveTestResult(testType, direction, protocol, summaryData) {
     let captureEl;
     if (testType === 'throughput') captureEl = document.querySelector('#panel-throughput .card_');
@@ -1604,14 +2781,23 @@ async function saveTestResult(testType, direction, protocol, summaryData) {
                 ? chartTP?.data?.datasets[3]?.data
                 : chartBbTp?.data?.datasets[3]?.data;
             const lenEl = testType === 'throughput' ? 'tpLength' : 'bbLength';
-            const lenVal = parseInt(document.getElementById(lenEl)?.value) || 1200;
+            const modeEl = testType === 'throughput' ? 'tpUdpLenMode' : 'bbUdpLenMode';
+            const clampEl = testType === 'throughput' ? 'tpUdpClamp' : 'bbUdpClamp';
+            const udpMode = document.getElementById(modeEl)?.value || 'fixed';
+            const lenMeta = protocol === 'udp'
+                ? metaUdpPayload(
+                    udpMode,
+                    parseInt(document.getElementById(lenEl)?.value) || 1200,
+                    parseInt(document.getElementById(clampEl)?.value) || 1200,
+                )
+                : null;
             intervals = arr.map((d, i) => ({
                 protocol:      protocol,
                 phase:         d.phase,
                 timestamp_s:   d.second ?? +((i + 1) * 0.1).toFixed(2),
                 interval_start: d.second != null ? Math.max(0, +(d.second - 0.1).toFixed(2)) : +(i * 0.1).toFixed(2),
                 interval_end:   d.second != null ? d.second : +((i + 1) * 0.1).toFixed(2),
-                length_bytes:  lenVal,
+                length_bytes:  lenMeta,
                 client_mbps:   d.mbps,
                 server_mbps:   ds3 ? (ds3[i] ?? null) : null,
                 loss_pct:      d.loss_pct ?? null,
@@ -1646,6 +2832,16 @@ async function saveTestResult(testType, direction, protocol, summaryData) {
         const ipEl = testType === 'throughput' ? 'tpIp' : testType === 'latency' ? 'latIp' : 'bbIp';
         const durEl = testType === 'throughput' ? 'tpDur' : testType === 'bufferbloat' ? 'bbDur' : null;
         const lenEl2 = testType !== 'latency' ? (testType === 'throughput' ? 'tpLength' : 'bbLength') : null;
+        const modeEl2 = testType === 'throughput' ? 'tpUdpLenMode' : 'bbUdpLenMode';
+        const clampEl2 = testType === 'throughput' ? 'tpUdpClamp' : 'bbUdpClamp';
+        let metaLenBytes = null;
+        if (protocol === 'udp' && lenEl2 && document.getElementById(modeEl2)) {
+            metaLenBytes = metaUdpPayload(
+                document.getElementById(modeEl2).value,
+                parseInt(document.getElementById(lenEl2)?.value) || 1200,
+                parseInt(document.getElementById(clampEl2)?.value) || 1200,
+            );
+        }
 
         await fetch('/api/save_result', {
             method: 'POST',
@@ -1655,7 +2851,7 @@ async function saveTestResult(testType, direction, protocol, summaryData) {
                 bandwidth: testType !== 'latency'
                     ? (document.getElementById(testType === 'throughput' ? 'tpBwMbps' : 'bbBwMbps')?.value + 'M')
                     : '',
-                length_bytes: lenEl2 ? (parseInt(document.getElementById(lenEl2)?.value) || 1200) : null,
+                length_bytes: metaLenBytes,
                 namespace: document.getElementById(nsEl)?.value || '',
                 target_ip: document.getElementById(ipEl)?.value || '',
                 duration_s: durEl ? parseInt(document.getElementById(durEl)?.value) : null,
@@ -1689,7 +2885,10 @@ function _resultCard(item, imgSrc, deletePath) {
     } else {
         imgHtml = `<div style="height:60px;display:flex;align-items:center;justify-content:center;background:var(--bg);border-bottom:1px solid var(--border);color:var(--txt3);font-size:.75rem;">No chart (plan result)</div>`;
     }
-    return `<div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;overflow:hidden;cursor:pointer;transition:border-color .2s;" onmouseenter="this.style.borderColor='var(--blue)'" onmouseleave="this.style.borderColor='var(--border)'" onclick="openResultModal('${escapedPath}', ${JSON.stringify(item._legacy||false)})">
+    const ctxHandler = deletePath
+        ? `oncontextmenu="_showCtxMenu(event,[{label:'Open',icon:'🔍',action:()=>openResultModal('${escapedPath}',${JSON.stringify(item._legacy||false)})},{label:'Delete result',icon:'🗑',danger:true,action:()=>_deleteStandaloneResult('${escapedPath}')}])"`
+        : '';
+    return `<div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;overflow:hidden;cursor:pointer;transition:border-color .2s;" onmouseenter="this.style.borderColor='var(--blue)'" onmouseleave="this.style.borderColor='var(--border)'" onclick="openResultModal('${escapedPath}', ${JSON.stringify(item._legacy||false)})" ${ctxHandler}>
         ${imgHtml}
         <div style="padding:.6rem .75rem;">
             <div style="font-size:.8rem;font-weight:600;color:var(--txt);">${typeIcon} ${(item.test_type||'').charAt(0).toUpperCase()+(item.test_type||'').slice(1)} <span style="color:var(--txt3);font-weight:400;">${tag}</span></div>
@@ -1728,9 +2927,33 @@ function _summarizeTypes(items) {
     return Object.entries(counts).map(([k,v]) => v > 1 ? `${v} ${k}` : k).join(', ');
 }
 
+function _relativeDate(dateStr) {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const target = new Date(y, m - 1, d);
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const diffDays = Math.round((today - target) / 86400000);
+    if (diffDays === 0) return 'Today';
+    if (diffDays === 1) return 'Yesterday';
+    if (diffDays < 7) return target.toLocaleDateString('en-US', { weekday: 'long' });
+    if (diffDays < 14) return 'Last week';
+    if (diffDays < 21) return '2 weeks ago';
+    if (diffDays < 31) return '3 weeks ago';
+    const diffM = (today.getFullYear() - target.getFullYear()) * 12 + (today.getMonth() - target.getMonth());
+    if (diffM === 1) return 'Last month';
+    if (diffM < 6) return `${diffM} months ago`;
+    if (diffM < 12) return 'Several months ago';
+    const diffY = Math.round(diffDays / 365);
+    return diffY === 1 ? 'A year ago' : `${diffY} years ago`;
+}
+
 function _groupCard(type, key, label, count, summary, extraClass) {
     const escaped = key.replace(/'/g, "\\'");
-    return `<div class="group-card ${extraClass||''}" onclick="openResultGroup('${type}','${escaped}')">
+    const ctxAttr = type === 'standalone'
+        ? `oncontextmenu="_showCtxMenu(event,[{label:'Delete group',icon:'🗑',danger:true,action:()=>_deleteStandaloneGroup('${escaped}')}])"`
+        : type === 'plan'
+        ? `oncontextmenu="_showCtxMenu(event,[{label:'Delete plan',icon:'🗑',danger:true,action:()=>deletePlan('${escaped}')}])"`
+        : '';
+    return `<div class="group-card ${extraClass||''}" onclick="openResultGroup('${type}','${escaped}')" ${ctxAttr}>
         <div style="font-weight:600;font-size:.85rem;">${label}</div>
         <div style="font-size:.72rem;color:var(--txt3);margin-top:.25rem;">
             ${count} test${count>1?'s':''} ${summary ? '· '+summary : ''}
@@ -1751,7 +2974,8 @@ async function loadResults() {
         const standaloneKeys = Object.keys(data.standalone || {});
         const legacyKeys = Object.keys(data.legacy || {});
         const planKeys = Object.keys(data.plans || {});
-        if (!standaloneKeys.length && !legacyKeys.length && !planKeys.length) {
+        const remotes = data.remotes || [];
+        if (!standaloneKeys.length && !legacyKeys.length && !planKeys.length && !remotes.length) {
             overview.innerHTML = '<div style="color:var(--txt3);font-size:.9rem;padding:2rem 0;text-align:center;">No saved results yet. Run a test and it will appear here.</div>';
             return;
         }
@@ -1762,7 +2986,23 @@ async function loadResults() {
             html += '<div class="results-grid">';
             for (const date of standaloneKeys) {
                 const items = data.standalone[date];
-                html += _groupCard('standalone', date, `📅 ${date}`, items.length, _summarizeTypes(items));
+                html += _groupCard('standalone', date, `📅 ${_relativeDate(date)}`, items.length, _summarizeTypes(items));
+            }
+            html += '</div>';
+        }
+        // Remote imports — grouped by source host (remote_host or namespace "remote:<host>")
+        if (remotes.length) {
+            const byHost = {};
+            for (const m of remotes) {
+                const host = m.remote_host
+                    || (m.namespace && m.namespace.startsWith('remote:') ? m.namespace.slice(7) : '')
+                    || 'unknown';
+                (byHost[host] = byHost[host] || []).push(m);
+            }
+            html += `<div style="font-size:.65rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--txt3);margin:.75rem 0 .6rem;">Remote UE imports</div>`;
+            html += '<div class="results-grid">';
+            for (const host of Object.keys(byHost).sort()) {
+                html += _groupCard('remote', host, `🛰 ${host}`, byHost[host].length, _summarizeTypes(byHost[host]));
             }
             html += '</div>';
         }
@@ -1795,34 +3035,68 @@ async function loadResults() {
     }
 }
 
-function openResultGroup(type, key) {
+window._detailCtx = null; // {type, key} — tracks the currently open detail group
+
+async function openResultGroup(type, key) {
+    window._detailCtx = { type, key };
     const overview = document.getElementById('resultsOverview');
     const detail = document.getElementById('resultsDetail');
     overview.style.display = 'none';
     detail.style.display = 'block';
 
     const data = window._resultsData;
-    let items = [], title = '', isLegacy = false;
+    const grid = document.getElementById('resultsDetailGrid');
 
+    if (type === 'plan') {
+        document.getElementById('resultsDetailTitle').textContent = `🗂 ${key}`;
+        // Plan view: vertical stack so each run gets full width (cards were cramped in multi-column grid)
+        grid.style.gridTemplateColumns = '1fr';
+        grid.innerHTML = '<div style="color:var(--txt3);font-size:.85rem;">Loading runs…</div>';
+        try {
+            const r = await fetch(`/api/plans/${encodeURIComponent(key)}/runs`);
+            const rd = await r.json();
+            const runs = rd.runs || [];
+            if (!runs.length) {
+                grid.innerHTML = '<div style="color:var(--txt3);font-size:.85rem;">No runs recorded yet.</div>';
+                return;
+            }
+            // Fetch full experiment details for all runs in parallel
+            const details = await Promise.all(runs.map(run =>
+                fetch(`/api/plans/${encodeURIComponent(key)}/runs/${run.run_id}`).then(x => x.json())
+            ));
+            let html = '';
+            for (let i = 0; i < runs.length; i++) {
+                html += _planRunSection(key, runs[i], details[i].experiments || [], i === 0);
+            }
+            grid.innerHTML = html;
+            document.getElementById('resultsDetailTitle').textContent =
+                `🗂 ${key} — ${runs.length} run${runs.length > 1 ? 's' : ''}`;
+        } catch (e) {
+            grid.innerHTML = `<div style="color:#fca5a5;font-size:.85rem;">Error: ${e.message}</div>`;
+        }
+        return;
+    }
+
+    // Standalone/legacy/remote: multi-column grid of result cards
+    grid.style.gridTemplateColumns = 'repeat(auto-fill,minmax(260px,1fr))';
+    let items = [], title = '', isLegacy = false;
     if (type === 'standalone') {
         items = data.standalone[key] || [];
-        title = `📅 ${key}`;
-    } else if (type === 'plan') {
-        const p = data.plans[key];
-        items = (p.plan.experiments || []).filter(e => e.result_path).map(e => ({
-            test_type: e.type, direction: e.direction, protocol: e.protocol,
-            bandwidth: e.bandwidth, timestamp: e.completed_at, summary: {},
-            result_path: e.result_path, chart: null, csv: 'data.csv',
-        }));
-        title = `🗂 ${key} — ${p.completed}/${p.total} completed`;
+        title = `📅 ${_relativeDate(key)} · ${key}`;
+    } else if (type === 'remote') {
+        items = (data.remotes || []).filter(m => {
+            const host = m.remote_host
+                || (m.namespace && m.namespace.startsWith('remote:') ? m.namespace.slice(7) : '')
+                || 'unknown';
+            return host === key;
+        });
+        title = `🛰 Remote UE · ${key}`;
     } else {
         items = data.legacy[key] || [];
         title = `📅 ${key} (legacy)`;
         isLegacy = true;
     }
-
     document.getElementById('resultsDetailTitle').textContent = title;
-    const grid = document.getElementById('resultsDetailGrid');
     let html = '';
     for (const item of items) {
         let imgSrc, deletePath;
@@ -1838,6 +3112,83 @@ function openResultGroup(type, key) {
     grid.innerHTML = html || '<div style="color:var(--txt3);font-size:.85rem;">No results in this group.</div>';
 }
 
+function _expTestIcon(label) {
+    const l = (label || '').toLowerCase();
+    if (l.includes('throughput')) return '📶';
+    if (l.includes('latency') || l.includes('ping')) return '📍';
+    if (l.includes('bufferbloat')) return '🌊';
+    return '🧪';
+}
+
+function _planRunSection(planName, run, experiments, isNewest) {
+    const runId = run.run_id;
+    const ts = run.started_at ? run.started_at.replace('T', ' ').slice(0, 16) : runId;
+    const done = run.completed || 0, total = run.total || 0;
+    const failed = run.failed || 0;
+    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+    const statusColor = done === total ? '#86efac' : failed > 0 ? '#fca5a5' : '#fde68a';
+    const statusLabel = done === total ? 'complete' : failed > 0 ? `${failed} failed` : 'in progress';
+    const escapedPlan = planName.replace(/'/g, "\\'");
+    const escapedRun = runId.replace(/'/g, "\\'");
+
+    // Single-line experiment rows for a denser, scannable layout
+    let expRows = '';
+    for (const exp of experiments) {
+        const state = exp.state || 'pending';
+        const icon = state === 'completed' ? '✓' : state === 'failed' ? '✗' : state === 'running' ? '⟳' : '–';
+        const iconColor = state === 'completed' ? '#86efac' : state === 'failed' ? '#fca5a5' : '#fde68a';
+        const label = exp.label || exp.id;
+        const tIcon = _expTestIcon(label);
+        const rp = exp.result_path;
+        const escapedRp = rp ? rp.replace(/'/g, "\\'") : '';
+        const csvLink = rp ? `<a href="/api/results/${rp}/data.csv" download onclick="event.stopPropagation();" style="font-size:.65rem;color:var(--cyan);text-decoration:none;padding:.1rem .35rem;border:1px solid var(--border);border-radius:3px;">CSV</a>` : '';
+        const openBtn = rp ? `<button onclick="event.stopPropagation();openResultModal('${escapedRp}', false)" style="font-size:.65rem;padding:.1rem .45rem;background:var(--blue);border:none;border-radius:3px;color:#fff;cursor:pointer;font-weight:500;">Open</button>` : '';
+        const errMsg = state === 'failed' && exp.error ? `<span style="font-size:.62rem;color:#fca5a5;margin-left:.4rem;">${exp.error.slice(0,60)}</span>` : '';
+        const ctx = rp
+            ? `oncontextmenu="_showCtxMenu(event,[{label:'Open result',icon:'🔍',action:()=>openResultModal('${escapedRp}',false)}])"`
+            : '';
+        const rowClick = rp ? `onclick="openResultModal('${escapedRp}', false)"` : '';
+        const cursor = rp ? 'cursor:pointer;' : '';
+        expRows += `<div ${ctx} ${rowClick} style="display:flex;align-items:center;gap:.5rem;padding:.3rem .7rem;border-top:1px solid var(--border);font-size:.76rem;${cursor}transition:background .12s;" onmouseenter="if('${rp}')this.style.background='rgba(59,130,246,.06)'" onmouseleave="this.style.background='transparent'">
+            <span style="color:${iconColor};width:.9rem;flex-shrink:0;">${icon}</span>
+            <span style="flex-shrink:0;">${tIcon}</span>
+            <span style="color:var(--txt);flex:1;">${label} ${errMsg}</span>
+            <span style="color:var(--txt3);font-size:.62rem;font-family:monospace;">${exp.id || ''}</span>
+            ${csvLink}${openBtn}
+        </div>`;
+    }
+
+    const body = expRows || '<div style="color:var(--txt3);font-size:.78rem;padding:.5rem .7rem;">No experiments recorded.</div>';
+
+    // Native <details> for collapse; newest run open by default
+    const openAttr = isNewest ? 'open' : '';
+    return `<details ${openAttr} style="background:var(--bg);border:1px solid var(--border);border-radius:8px;margin-bottom:.5rem;overflow:hidden;">
+        <summary oncontextmenu="_showCtxMenu(event,[{label:'Delete run',icon:'🗑',danger:true,action:()=>deletePlanRun('${escapedPlan}','${escapedRun}')}])" style="display:flex;align-items:center;gap:.6rem;padding:.5rem .8rem;background:var(--bg2);cursor:pointer;list-style:none;user-select:none;">
+            <span style="font-size:.7rem;color:var(--txt3);">▸</span>
+            <span style="font-size:.82rem;font-weight:600;color:var(--txt);">${ts}</span>
+            <span style="font-size:.7rem;color:${statusColor};">${done}/${total} ${statusLabel}</span>
+            <span style="flex:1;"></span>
+            <button onclick="event.stopPropagation();event.preventDefault();deletePlanRun('${escapedPlan}','${escapedRun}')" style="font-size:.65rem;padding:.15rem .5rem;background:transparent;border:1px solid rgba(239,68,68,.3);border-radius:4px;color:#fca5a5;cursor:pointer;">🗑</button>
+        </summary>
+        ${body}
+    </details>
+    <style>details[open] > summary > span:first-child { transform: rotate(90deg); }</style>`;
+}
+
+async function deletePlanRun(planName, runId) {
+    _confirm('Delete this run? All result files will be removed.', async () => {
+        // Immediate visual feedback — clear grid before fetch
+        const grid = document.getElementById('resultsDetailGrid');
+        if (grid) grid.innerHTML = '<div style="color:var(--txt3);font-size:.85rem;padding:.5rem 0;">Deleting…</div>';
+        try {
+            const r = await fetch(`/api/plans/${encodeURIComponent(planName)}/runs/${encodeURIComponent(runId)}`, { method: 'DELETE' });
+            const d = await r.json();
+            if (d.ok) { notify('Run deleted.', true); openResultGroup('plan', planName); }
+            else { notify('Error: ' + d.error); openResultGroup('plan', planName); }
+        } catch (e) { notify('Failed: ' + e.message); openResultGroup('plan', planName); }
+    });
+}
+
 function backToResultsOverview() {
     document.getElementById('resultsOverview').style.display = 'block';
     document.getElementById('resultsDetail').style.display = 'none';
@@ -1848,9 +3199,108 @@ let currentResultPath = null;  // e.g. "standalone/2026-03-16/14-30_throughput_u
 let currentResultIsLegacy = false;
 let currentResultMeta = null;
 
+function humanResultTitle(meta, resultPath) {
+    if (!meta) return `Result — ${resultPath.split('/').pop()}`;
+    const t = (meta.test_type || 'Test').charAt(0).toUpperCase() + (meta.test_type || 'Test').slice(1);
+    const dirMap = { ul: 'Upload', dl: 'Download', both: 'UL+DL', bi: 'Bidirectional' };
+    const dir = meta.direction ? (dirMap[meta.direction] || meta.direction.toUpperCase()) : '';
+    const proto = meta.protocol ? meta.protocol.toUpperCase() : '';
+    const parts = [t];
+    if (dir) parts.push(dir);
+    if (proto) parts.push(proto);
+    let title = parts.join(' · ');
+    if (meta.exp_id) title += `  (${meta.exp_id})`;
+    return title;
+}
+
+function _fmtDur(s) { return s != null ? `${s}s` : '—'; }
+function _fmtBw(bw) { return bw == null || bw === '' ? '—' : bw; }
+function _fmtTs(ts) {
+    if (!ts) return '—';
+    try { return ts.replace('T', ' ').split('.')[0]; } catch { return ts; }
+}
+
+function renderResultMeta(meta) {
+    const el = document.getElementById('resultModalMeta');
+    if (!el || !meta) return;
+    const s = meta.summary || {};
+    const m = meta;
+    const row = (k, v) => v == null || v === '' ? '' :
+        `<div style="display:flex;gap:.6rem;padding:.2rem 0;border-bottom:1px solid var(--border);">
+           <span style="color:var(--txt3);font-size:.72rem;min-width:9rem;text-transform:uppercase;letter-spacing:.05em;">${k}</span>
+           <span style="color:var(--txt);font-size:.82rem;font-weight:500;">${v}</span>
+         </div>`;
+    // Build summary rows specific to test type
+    const summaryRows = [];
+    if (s.ul_client_mbps != null) summaryRows.push(['UL throughput (client)', `${s.ul_client_mbps} Mbps`]);
+    if (s.ul_server_mbps != null) summaryRows.push(['UL throughput (server)', `${s.ul_server_mbps} Mbps`]);
+    if (s.dl_client_mbps != null) summaryRows.push(['DL throughput (client)', `${s.dl_client_mbps} Mbps`]);
+    if (s.dl_server_mbps != null) summaryRows.push(['DL throughput (server)', `${s.dl_server_mbps} Mbps`]);
+    if (s.ul_total_retr != null) summaryRows.push(['UL retransmits', s.ul_total_retr]);
+    if (s.dl_total_retr != null) summaryRows.push(['DL retransmits', s.dl_total_retr]);
+    if (s.ul_loss_pct != null) summaryRows.push(['UL loss', `${s.ul_loss_pct}%`]);
+    if (s.dl_loss_pct != null) summaryRows.push(['DL loss', `${s.dl_loss_pct}%`]);
+    if (s.ul_jitter_ms != null) summaryRows.push(['UL jitter', `${s.ul_jitter_ms} ms`]);
+    if (s.dl_jitter_ms != null) summaryRows.push(['DL jitter', `${s.dl_jitter_ms} ms`]);
+    // Backend writes avg_rtt_ms / min_rtt_ms / max_rtt_ms / packets (also legacy rtt_*_ms alias)
+    const rttAvg = s.avg_rtt_ms ?? s.rtt_avg_ms;
+    const rttMin = s.min_rtt_ms ?? s.rtt_min_ms;
+    const rttMax = s.max_rtt_ms ?? s.rtt_max_ms;
+    if (rttAvg != null) summaryRows.push(['RTT (avg)', `${rttAvg} ms`]);
+    if (rttMin != null) summaryRows.push(['RTT (min)', `${rttMin} ms`]);
+    if (rttMax != null) summaryRows.push(['RTT (max)', `${rttMax} ms`]);
+    if (s.rtt_p95_ms != null) summaryRows.push(['RTT (p95)', `${s.rtt_p95_ms} ms`]);
+    if (s.rtt_p99_ms != null) summaryRows.push(['RTT (p99)', `${s.rtt_p99_ms} ms`]);
+    if (s.rtt_stddev_ms != null) summaryRows.push(['RTT (stddev)', `${s.rtt_stddev_ms} ms`]);
+    if (s.jitter_avg_ms != null) summaryRows.push(['Jitter (avg)', `${s.jitter_avg_ms} ms`]);
+    if (s.jitter_max_ms != null) summaryRows.push(['Jitter (max)', `${s.jitter_max_ms} ms`]);
+    if (s.jitter_ms != null && s.jitter_avg_ms == null) summaryRows.push(['Jitter', `${s.jitter_ms} ms`]);
+    if (s.loss_pct != null) summaryRows.push(['Loss', `${s.loss_pct}%`]);
+    if (s.packets_received != null && s.packets_sent != null) {
+        summaryRows.push(['Packets', `${s.packets_received}/${s.packets_sent}`]);
+    } else {
+        if (s.packets != null) summaryRows.push(['Packets', s.packets]);
+        if (s.packets_sent != null) summaryRows.push(['Packets sent', s.packets_sent]);
+    }
+
+    const cfgHtml = [
+        row('Test type', m.test_type),
+        row('Direction', m.direction),
+        row('Protocol', m.protocol),
+        row('Bandwidth', _fmtBw(m.bandwidth)),
+        row('Duration', _fmtDur(m.duration_s)),
+        row('Namespace', m.namespace),
+        row('Target IP', m.target_ip),
+        row('Streams', m.parallel_streams),
+        row('Packet length', m.length_bytes ? `${m.length_bytes} B` : ''),
+        row('Interval', m.interval_s ? `${m.interval_s}s` : ''),
+        row('Plan', m.plan_name),
+        row('Experiment', m.exp_id),
+        row('Timestamp', _fmtTs(m.timestamp)),
+    ].join('');
+
+    const summaryHtml = summaryRows.length
+        ? `<div style="margin-bottom:.85rem;">
+             <div style="font-weight:700;font-size:.75rem;color:var(--txt2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:.35rem;">Results</div>
+             ${summaryRows.map(([k,v]) => row(k,v)).join('')}
+           </div>` : '';
+
+    el.innerHTML = `
+        ${summaryHtml}
+        <div>
+          <div style="font-weight:700;font-size:.75rem;color:var(--txt2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:.35rem;">Configuration</div>
+          ${cfgHtml}
+        </div>
+        <details style="margin-top:.85rem;">
+          <summary style="cursor:pointer;color:var(--txt3);font-size:.72rem;">Raw JSON</summary>
+          <pre style="margin:.4rem 0 0;font-size:.72rem;color:var(--txt3);white-space:pre-wrap;word-wrap:break-word;">${JSON.stringify(meta, null, 2)}</pre>
+        </details>`;
+}
+
 async function openResultModal(resultPath, isLegacy) {
     currentResultPath = resultPath;
     currentResultIsLegacy = isLegacy;
+    // Provisional title; refined once metadata loads
     document.getElementById('modalTitle').textContent = `Result — ${resultPath.split('/').pop()}`;
 
     const chartWrap = document.getElementById('resultChartWrap');
@@ -1876,30 +3326,39 @@ async function openResultModal(resultPath, isLegacy) {
         if (res.ok) {
             meta = await res.json();
             currentResultMeta = meta;
-            document.getElementById('resultModalMeta').textContent = JSON.stringify(meta, null, 2);
+            renderResultMeta(meta);
+            document.getElementById('modalTitle').textContent = humanResultTitle(meta, resultPath);
             document.getElementById('btnOpenFolder').onclick = () => openResultFolder(resultPath);
         }
     } catch { document.getElementById('resultModalMeta').textContent = 'Error loading metadata'; }
 
-    // Try CSV-based Chart.js rendering first (non-legacy results)
-    let csvRendered = false;
+    const btnToggle = document.getElementById('btnChartToggle');
+    btnToggle.style.display = 'none';
+    window._modalShowingCsv = false;
+
+    const hasPng = !isLegacy && meta?.chart;
+    resultProtocol = meta?.protocol || 'tcp';
+    resultDirection = meta?.direction || 'ul';
+
+    // Load CSV data (always, so toggle is available if both png+csv exist)
     if (!isLegacy) {
         try {
             const csvRes = await fetch(`/api/results/${resultPath}/data.csv`);
             if (csvRes.ok) {
                 const csvText = await csvRes.text();
                 resultCSVRows = parseCSV(csvText);
-                resultProtocol = meta?.protocol || (resultCSVRows[0]?.protocol) || 'tcp';
-                resultDirection = meta?.direction || (resultCSVRows[0]?.phase) || 'ul';
                 if (resultCSVRows.length > 0) {
-                    chartWrap.style.display = 'block';
-                    samplingBar.style.display = 'flex';
-                    // Default to 500ms aggregation to avoid lag with 600+ raw data points
-                    const defaultMs = resultCSVRows.length > 200 ? 500 : 100;
-                    const initialData = defaultMs > 100 ? aggregateData(resultCSVRows, defaultMs) : resultCSVRows;
-                    renderResultChart(initialData, resultProtocol, resultDirection);
-                    csvRendered = true;
+                    resultProtocol = meta?.protocol || (resultCSVRows[0]?.protocol) || 'tcp';
+                    resultDirection = meta?.direction || (resultCSVRows[0]?.phase) || 'ul';
+                    // Derive richer stats from raw CSV (p95, p99, stddev, jitter avg/max).
+                    // Backend only writes avg/min/max so this fills gaps for both ping and iperf.
+                    if (meta) {
+                        meta.summary = meta.summary || {};
+                        _augmentSummaryFromCsv(meta.summary, resultCSVRows);
+                        renderResultMeta(meta);
+                    }
                     // Wire sampling buttons
+                    const defaultMs = resultCSVRows.length > 200 ? 500 : 100;
                     document.querySelectorAll('#samplingBtns .sampling-btn').forEach(btn => {
                         btn.classList.remove('active');
                         if (btn.dataset.ms === String(defaultMs)) btn.classList.add('active');
@@ -1914,11 +3373,37 @@ async function openResultModal(resultPath, isLegacy) {
                     });
                 }
             }
-        } catch (e) { console.warn('CSV chart render failed:', e); }
+        } catch (e) { console.warn('CSV load failed:', e); }
     }
 
-    // Fallback: show PNG if no CSV chart was rendered
-    if (!csvRendered) {
+    if (hasPng) {
+        // PNG is primary — show it; offer CSV chart toggle if data is available
+        imgEl.src = `/api/results/${resultPath}/chart.png`;
+        imgEl.style.display = 'block';
+        chartWrap.style.display = 'none';
+        samplingBar.style.display = 'none';
+        if (resultCSVRows?.length > 0) {
+            btnToggle.textContent = '📊 CSV Chart';
+            btnToggle.style.display = '';
+            window._modalShowingCsv = false;
+        }
+    } else if (resultCSVRows?.length > 0) {
+        // No PNG — render CSV chart directly
+        const isPing = resultCSVRows[0]?.rtt_ms !== undefined;
+        const defaultMs = resultCSVRows.length > 200 ? 500 : 100;
+        const initialData = (!isPing && defaultMs > 100) ? aggregateData(resultCSVRows, defaultMs) : resultCSVRows;
+        renderResultChart(initialData, resultProtocol, resultDirection);
+        chartWrap.style.display = 'block';
+        // Always show sampling bar (hides sampling buttons via CSS for ping where they're inert)
+        samplingBar.style.display = 'flex';
+        // For ping, hide the sampling buttons themselves (aggregation skipped); clip toggle stays.
+        const sBtns = document.getElementById('samplingBtns');
+        const sLabel = samplingBar.querySelector('span');
+        if (sBtns) sBtns.style.display = isPing ? 'none' : 'flex';
+        if (sLabel) sLabel.style.display = isPing ? 'none' : '';
+        window._modalShowingCsv = true;
+    } else {
+        // Legacy or no data at all — show PNG/path as fallback
         const imgSrc = isLegacy
             ? `/api/results/${resultPath}`
             : `/api/results/${resultPath}/chart.png`;
@@ -1940,6 +3425,8 @@ function closeResultModal() {
     document.getElementById('resultModalImg').style.display = 'none';
     document.getElementById('resultChartWrap').style.display = 'none';
     document.getElementById('resultSamplingBar').style.display = 'none';
+    const glos = document.getElementById('resultChartGlossary');
+    if (glos) glos.style.display = 'none';
     document.getElementById('resultModalMeta').textContent = '';
     if (resultModalChart) { resultModalChart.destroy(); resultModalChart = null; }
     resultCSVRows = null;
@@ -1950,6 +3437,36 @@ function closeResultModal() {
     currentResultPath = null;
     currentResultIsLegacy = false;
     currentResultMeta = null;
+}
+
+function toggleResultView() {
+    const imgEl    = document.getElementById('resultModalImg');
+    const chartWrap = document.getElementById('resultChartWrap');
+    const samplingBar = document.getElementById('resultSamplingBar');
+    const btn = document.getElementById('btnChartToggle');
+    if (!window._modalShowingCsv) {
+        // Switch to CSV chart
+        imgEl.style.display = 'none';
+        const isPing = resultCSVRows[0]?.rtt_ms !== undefined;
+        const defaultMs = resultCSVRows.length > 200 ? 500 : 100;
+        const agg = (!isPing && defaultMs > 100) ? aggregateData(resultCSVRows, defaultMs) : resultCSVRows;
+        renderResultChart(agg, resultProtocol, resultDirection);
+        chartWrap.style.display = 'block';
+        samplingBar.style.display = 'flex';
+        const sBtns2 = document.getElementById('samplingBtns');
+        const sLabel2 = samplingBar.querySelector('span');
+        if (sBtns2) sBtns2.style.display = isPing ? 'none' : 'flex';
+        if (sLabel2) sLabel2.style.display = isPing ? 'none' : '';
+        btn.textContent = '🖼 Saved Chart';
+        window._modalShowingCsv = true;
+    } else {
+        // Switch back to PNG
+        chartWrap.style.display = 'none';
+        samplingBar.style.display = 'none';
+        imgEl.style.display = 'block';
+        btn.textContent = '📊 CSV Chart';
+        window._modalShowingCsv = false;
+    }
 }
 
 // Global key listener for ESC
@@ -2019,21 +3536,78 @@ async function openResultFolder(resultPath) {
 
 async function deleteResultImage() {
     if (!currentResultPath) return;
-    if (!confirm('Delete this result? This cannot be undone.')) return;
-    const deletePath = currentResultIsLegacy ? currentResultPath : currentResultPath;
-    try {
-        const res = await fetch(`/api/results/${deletePath}`, { method: 'DELETE' });
-        const data = await res.json();
-        if (data.ok) {
-            notify('Test result deleted.', true);
-            closeResultModal();
-            loadResults(); // refresh the grid
-        } else {
-            notify('Error deleting: ' + data.error);
+    _confirm('Delete this result? This cannot be undone.', async () => {
+        closeResultModal();
+        try {
+            const res = await fetch(`/api/results/${currentResultPath}`, { method: 'DELETE' });
+            const data = await res.json();
+            if (data.ok) {
+                notify('Test result deleted.', true);
+                const ctx = window._detailCtx;
+                if (ctx?.type === 'standalone') {
+                    await loadResults();
+                    const updated = window._resultsData?.standalone?.[ctx.key];
+                    if (updated?.length) openResultGroup('standalone', ctx.key);
+                } else if (ctx?.type === 'plan') {
+                    openResultGroup('plan', ctx.key);
+                } else {
+                    loadResults();
+                }
+            } else {
+                notify('Error deleting: ' + data.error);
+            }
+        } catch (e) {
+            notify('Failed to delete: ' + e.message);
         }
-    } catch (e) {
-        notify('Failed to delete: ' + e.message);
-    }
+    });
+}
+
+async function _deleteStandaloneGroup(dateKey) {
+    _confirm(`Delete all results for ${dateKey}? This cannot be undone.`, async () => {
+        // Remove card immediately from overview
+        document.querySelectorAll('.group-card').forEach(el => {
+            if (el.onclick?.toString().includes(`'${dateKey}'`)) el.remove();
+        });
+        try {
+            const res = await fetch(`/api/results/standalone/${dateKey}`, { method: 'DELETE' });
+            const data = await res.json();
+            if (data.ok) { notify('Group deleted.', true); loadResults(); }
+            else { notify('Error: ' + data.error); loadResults(); }
+        } catch (e) { notify('Failed: ' + e.message); loadResults(); }
+    });
+}
+
+async function _deleteStandaloneResult(path) {
+    _confirm('Delete this result? This cannot be undone.', async () => {
+        // Immediate feedback: clear grid or remove specific card
+        const grid = document.getElementById('resultsDetailGrid');
+        if (grid) grid.innerHTML = '<div style="color:var(--txt3);font-size:.85rem;padding:.5rem 0;">Deleting…</div>';
+        try {
+            const res = await fetch(`/api/results/${path}`, { method: 'DELETE' });
+            const data = await res.json();
+            if (data.ok) {
+                notify('Result deleted.', true);
+                // Stay in detail if group still open; fall back to overview if empty
+                const ctx = window._detailCtx;
+                if (ctx?.type === 'standalone') {
+                    await loadResults();       // refresh _resultsData
+                    const updated = window._resultsData?.standalone?.[ctx.key];
+                    if (updated?.length) openResultGroup('standalone', ctx.key);
+                    // else loadResults() already shows overview
+                } else {
+                    loadResults();
+                }
+            } else {
+                notify('Error: ' + data.error);
+                const ctx = window._detailCtx;
+                if (ctx) openResultGroup(ctx.type, ctx.key); else loadResults();
+            }
+        } catch (e) {
+            notify('Failed: ' + e.message);
+            const ctx = window._detailCtx;
+            if (ctx) openResultGroup(ctx.type, ctx.key); else loadResults();
+        }
+    });
 }
 
 // =====================================================================
@@ -2044,16 +3618,31 @@ function togglePlannerFields() {
     const isLatency = type === 'latency';
     document.getElementById('expProtoRow').style.display = isLatency ? 'none' : '';
     document.getElementById('expDirRow').style.display = isLatency ? 'none' : '';
+    // Latency duration is implicit (count * interval) — hide the explicit field to avoid confusion
+    const durCol = document.getElementById('expDurCol');
+    if (durCol) durCol.style.display = isLatency ? 'none' : '';
     togglePlannerBwFields();
     document.getElementById('expPingSection').style.display = (isLatency || type === 'bufferbloat') ? 'block' : 'none';
+    updatePingDurHint();
+}
+
+function updatePingDurHint() {
+    const el = document.getElementById('expPingDurHint');
+    if (!el) return;
+    const c = parseInt(document.getElementById('expPingCount').value) || 0;
+    const i = parseFloat(document.getElementById('expPingInterval').value) || 0;
+    const s = Math.round(c * i);
+    el.textContent = `≈ test duration: ${s}s (${c} packets × ${i}s interval)`;
 }
 
 function togglePlannerBwFields() {
     const type = document.getElementById('expType').value;
     const proto = document.getElementById('expProto').value;
+    const dir = document.getElementById('expDir').value;
     const isUdp = type !== 'latency' && proto === 'udp';
     document.getElementById('expBwSection').style.display = isUdp ? 'block' : 'none';
     document.getElementById('expLengthSection').style.display = isUdp ? 'block' : 'none';
+    document.getElementById('expBwDlCol').style.display = (isUdp && dir === 'both') ? 'block' : 'none';
     updateExpPreview();
 }
 
@@ -2079,20 +3668,42 @@ function addExperiment() {
     const type = document.getElementById('expType').value;
     const dir = document.getElementById('expDir').value;
     const proto = type === 'latency' ? '' : document.getElementById('expProto').value;
-    const dur = parseInt(document.getElementById('expDur').value) || 15;
+    let dur = parseInt(document.getElementById('expDur').value) || 15;
+    if (type === 'latency') {
+        const pc = parseInt(document.getElementById('expPingCount').value) || 60;
+        const pi = parseFloat(document.getElementById('expPingInterval').value) || 0.5;
+        dur = Math.max(1, Math.round(pc * pi));
+    }
 
     const bwSingle = document.getElementById('expBwSingle').value;
     const bwStart = document.getElementById('expBwStart').value;
     const bwEnd = document.getElementById('expBwEnd').value;
     const bwStep = document.getElementById('expBwStep').value;
 
+    const bwDlRaw = document.getElementById('expBwDlMbps').value;
+    const bwDlMbps = bwDlRaw !== '' ? parseInt(bwDlRaw, 10) : NaN;
+    const parallel_streams = Math.max(1, Math.min(64, parseInt(document.getElementById('expPar').value, 10) || 1));
+    const interval_s = Math.max(0.05, parseFloat(document.getElementById('expInt').value) || 0.1);
+    const udp_mode = document.getElementById('expUdpMode').value;
+    const udp_mtu_clamp = Math.max(68, Math.min(9000, parseInt(document.getElementById('expUdpClamp').value, 10) || 1200));
+
     const base = {
         type, direction: dir, protocol: proto, duration: dur,
         length_bytes: proto === 'udp' ? (parseInt(document.getElementById('expLength').value) || 1200) : null,
+        udp_length_mode: proto === 'udp' ? udp_mode : null,
+        udp_mtu_clamp: proto === 'udp' ? udp_mtu_clamp : null,
+        parallel_streams,
+        interval_s,
         ping_count: parseInt(document.getElementById('expPingCount').value) || 60,
         ping_interval: parseFloat(document.getElementById('expPingInterval').value) || 0.5,
         ping_packet_size: parseInt(document.getElementById('expPingSize').value) || 56,
     };
+
+    if (proto === 'udp' && dir === 'both' && !isNaN(bwDlMbps)) {
+        base.bandwidth_dl = bwDlMbps === 0 ? '0' : bwDlMbps + 'M';
+    } else {
+        base.bandwidth_dl = null;
+    }
 
     if (proto === 'udp' && !bwSingle && bwStart && bwEnd && bwStep) {
         // Range: backend will expand; send as bandwidth_start/end/step
@@ -2124,31 +3735,66 @@ function removeExperiment(idx) {
     renderPlanExpList();
 }
 
-function clearPlanBuilder() {
+async function clearPlanBuilder() {
     planBuilderExps = [];
-    document.getElementById('planName').value = '';
+    document.getElementById('planDisplayName').value = '';
+    const ie = document.getElementById('planInterExpPause');
+    const ir = document.getElementById('planInterRepeatPause');
+    if (ie) ie.value = 2;
+    if (ir) ir.value = 0;
+    planEditingSlug = null;
+    updateSavePlanButtonLabel();
     renderPlanExpList();
+    syncPlanSlugPreview();
 }
 
 async function savePlan() {
-    const name = document.getElementById('planName').value.trim();
-    if (!name) { notify('Enter a plan name first.'); return; }
-    if (!planBuilderExps.length) { notify('Add at least one experiment.'); return; }
-    const ns = document.getElementById('planNs').value;
-    const ip = document.getElementById('planIp').value;
+    const displayName = document.getElementById('planDisplayName').value.trim();
+    if (!displayName) {
+        notify('Enter a plan title.');
+        return;
+    }
+    const slugPreview = slugifyPlanTitle(displayName);
+    if (!slugPreview) {
+        notify('Title must include at least one letter or number.');
+        return;
+    }
+    if (!planBuilderExps.length) {
+        notify('Add at least one experiment.');
+        return;
+    }
+    const bodyObj = {
+        display_name: displayName,
+        experiments: planBuilderExps,
+        inter_exp_pause_s: Math.max(0, parseInt(document.getElementById('planInterExpPause')?.value) || 0),
+        inter_repeat_pause_s: Math.max(0, parseInt(document.getElementById('planInterRepeatPause')?.value) || 0),
+    };
+    const url = planEditingSlug
+        ? `/api/plans/${encodeURIComponent(planEditingSlug)}`
+        : '/api/plans';
+    const method = planEditingSlug ? 'PUT' : 'POST';
     try {
-        const r = await fetch('/api/plans', {
-            method: 'POST',
-            headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({ name, config: {namespace: ns, target_ip: ip}, experiments: planBuilderExps }),
+        const r = await fetch(url, {
+            method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(bodyObj),
         });
         const d = await r.json();
         if (d.ok) {
-            notify(`Plan '${d.plan_name}' saved (${d.experiment_count} experiments).`, true);
-            clearPlanBuilder();
+            notify(
+                planEditingSlug
+                    ? `Plan "${displayName}" updated (${d.experiment_count} experiments).`
+                    : `Plan "${displayName}" saved as ${d.plan_name} (${d.experiment_count} experiments).`,
+                true,
+            );
+            await clearPlanBuilder();
             loadPlans();
-        } else { notify('Error: ' + d.error); }
-    } catch (e) { notify('Save failed: ' + e.message); }
+        } else {
+            notify('Error: ' + d.error);
+        }
+    } catch (e) {
+        notify('Save failed: ' + e.message);
+    }
 }
 
 // ---- Planner tab navigation ----
@@ -2161,60 +3807,106 @@ function plannerNav(tab) {
         if (tabBtn) tabBtn.classList.toggle('active', t === tab);
         if (section) section.style.display = t === tab ? 'block' : 'none';
     });
-    if (tab === 'templates') loadPlans();
-    if (tab === 'queue') { loadQueuePlanSelect(); loadQueueState(); }
+    if (tab === 'templates') {
+        loadPlans();
+    }
+    if (tab === 'queue') {
+        refreshQueueIpPresets().catch(() => {});
+        loadQueuePlanSelect();
+        loadQueueState();
+    }
     if (tab === 'history') loadRunHistory();
 }
 
 // ---- Templates tab ----
 async function loadPlans() {
     const el = document.getElementById('planList');
+    if (!el) return;
     try {
         const r = await fetch('/api/plans');
         const d = await r.json();
         window._plansData = d.plans;
-        if (!d.plans.length) { el.innerHTML = '<div style="color:var(--txt3);font-size:.85rem;">No templates yet.</div>'; return; }
-        el.innerHTML = d.plans.map(p => {
-            const escaped = p.name.replace(/'/g, "\\'");
-            return `<div style="background:var(--bg-2);border-radius:10px;padding:.75rem 1rem;margin-bottom:.5rem;border:1px solid var(--border);">
+        if (!d.plans.length) {
+            el.innerHTML =
+                '<div style="color:var(--txt3);font-size:.85rem;">No templates yet.</div>';
+            return;
+        }
+        el.innerHTML = d.plans
+            .map((p) => {
+                const esc = p.name.replace(/'/g, "\\'");
+                const safeAttr = String(p.name).replace(/"/g, '&quot;');
+                const title = escapeHtml(p.display_name || p.name);
+                const badge = p.readonly
+                    ? '<span style="font-size:.62rem;color:var(--amber);margin-left:.35rem;">built-in</span>'
+                    : '';
+                const dupBtn = `<button type="button" class="btn_ btn-blue" style="font-size:.7rem;padding:.25em .6em;" data-plan="${safeAttr}" onclick="duplicatePlanTemplate(this.dataset.plan)">Duplicate</button>`;
+                const editBtn = p.readonly
+                    ? ''
+                    : `<button type="button" class="btn_ btn-amber" style="font-size:.7rem;padding:.25em .6em;" data-plan="${safeAttr}" onclick="editPlanIntoBuilder(this.dataset.plan)">Edit</button>`;
+                const delBtn = p.readonly
+                    ? ''
+                    : `<button type="button" class="btn_ btn-red" style="font-size:.7rem;padding:.25em .6em;" onclick="deletePlan('${esc}')">Delete</button>`;
+                const detailId = `tmpl-detail-${p.name.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+                return `<div style="background:var(--bg-2);border-radius:10px;padding:.75rem 1rem;margin-bottom:.5rem;border:1px solid var(--border);">
                 <div style="display:flex;justify-content:space-between;align-items:center;">
                     <div>
-                        <div style="font-weight:600;font-size:.85rem;">${p.name}</div>
-                        <div style="font-size:.7rem;color:var(--txt3);">${p.experiment_count} experiments · ${p.experiments_summary || ''}</div>
+                        <div style="font-weight:600;font-size:.85rem;">${title}${badge}</div>
+                        <div style="font-size:.68rem;color:var(--txt3);font-family:monospace;margin-top:.12rem;">${escapeHtml(p.name)}</div>
+                        <div style="font-size:.7rem;color:var(--txt3);margin-top:.15rem;">${p.experiment_count} experiments · ${escapeHtml(p.experiments_summary || '')}</div>
                     </div>
-                    <div style="display:flex;gap:.35rem;">
-                        <button class="btn_ btn-blue" style="font-size:.7rem;padding:.25em .6em;" onclick="toggleTemplateDetail('${escaped}')">👁 View</button>
-                        <button class="btn_ btn-red" style="font-size:.7rem;padding:.25em .6em;" onclick="deletePlan('${escaped}')">🗑</button>
+                    <div style="display:flex;gap:.35rem;flex-wrap:wrap;">
+                        <button type="button" class="btn_ btn-blue" style="font-size:.7rem;padding:.25em .6em;" data-detail="${detailId}" data-plan="${safeAttr}" onclick="togglePlanDetail(this)">👁 View</button>
+                        ${dupBtn}
+                        ${editBtn}
+                        ${delBtn}
                     </div>
                 </div>
-                <div id="tmpl-detail-${p.name}" style="display:none;margin-top:.5rem;border-top:1px solid var(--border);padding-top:.5rem;"></div>
+                <div id="${detailId}" style="display:none;margin-top:.5rem;border-top:1px solid var(--border);padding-top:.5rem;"></div>
             </div>`;
-        }).join('');
-    } catch (e) { el.innerHTML = `<div style="color:#fca5a5;">Error: ${e.message}</div>`; }
+            })
+            .join('');
+    } catch (e) {
+        el.innerHTML = `<div style="color:#fca5a5;">Error: ${e.message}</div>`;
+    }
 }
 
-function toggleTemplateDetail(name) {
-    const el = document.getElementById('tmpl-detail-' + name);
+function togglePlanDetail(btn) {
+    const detailId = btn.dataset.detail;
+    const planName = btn.dataset.plan;
+    const el = document.getElementById(detailId);
     if (!el) return;
-    if (el.style.display !== 'none') { el.style.display = 'none'; return; }
+    if (el.style.display !== 'none') {
+        el.style.display = 'none';
+        return;
+    }
     const plans = window._plansData || [];
-    const plan = plans.find(p => p.name === name);
-    if (!plan || !plan.experiments) { el.innerHTML = '<span style="color:var(--txt3);font-size:.75rem;">No experiments.</span>'; el.style.display = 'block'; return; }
-    el.innerHTML = plan.experiments.map((e, i) => {
-        const parts = [e.type, e.direction?.toUpperCase(), e.protocol?.toUpperCase(), e.bandwidth].filter(x=>x);
-        return `<div style="font-size:.75rem;padding:.2rem 0;color:var(--txt2);">${i+1}. ${parts.join(' ')} — ${e.duration||15}s</div>`;
-    }).join('');
+    const plan = plans.find((p) => p.name === planName);
+    if (!plan || !plan.experiments) {
+        el.innerHTML =
+            '<span style="color:var(--txt3);font-size:.75rem;">No experiments.</span>';
+        el.style.display = 'block';
+        return;
+    }
+    el.innerHTML = plan.experiments
+        .map((e, i) => {
+            const parts = [e.type, e.direction?.toUpperCase(), e.protocol?.toUpperCase(), e.bandwidth].filter(
+                (x) => x,
+            );
+            return `<div style="font-size:.75rem;padding:.2rem 0;color:var(--txt2);">${i + 1}. ${parts.join(' ')} — ${e.duration || 15}s</div>`;
+        })
+        .join('');
     el.style.display = 'block';
 }
 
 async function deletePlan(name) {
-    if (!confirm(`Delete template '${name}'? All run results will also be removed.`)) return;
-    try {
-        const r = await fetch(`/api/plans/${name}`, { method: 'DELETE' });
-        const d = await r.json();
-        if (d.ok) { notify(`Template '${name}' deleted.`, true); loadPlans(); }
-        else notify('Error: ' + d.error);
-    } catch (e) { notify('Delete failed: ' + e.message); }
+    _confirm(`Delete template '${name}'? All run results will also be removed.`, async () => {
+        try {
+            const r = await fetch(`/api/plans/${encodeURIComponent(name)}`, { method: 'DELETE' });
+            const d = await r.json();
+            if (d.ok) { notify(`Template '${name}' deleted.`, true); loadPlans(); }
+            else notify('Error: ' + d.error);
+        } catch (e) { notify('Delete failed: ' + e.message); }
+    });
 }
 
 // ---- Queue tab ----
@@ -2226,7 +3918,14 @@ async function loadQueuePlanSelect() {
     try {
         const r = await fetch('/api/plans');
         const d = await r.json();
-        sel.innerHTML = d.plans.map(p => `<option value="${p.name}">${p.name} (${p.experiment_count} exp)</option>`).join('');
+        window._planSlugToDisplay = {};
+        d.plans.forEach((p) => {
+            window._planSlugToDisplay[p.name] = p.display_name || p.name;
+        });
+        sel.innerHTML = d.plans.map((p) => {
+            const label = escapeHtml(p.display_name || p.name);
+            return `<option value="${String(p.name).replace(/"/g, '&quot;')}">${label} (${p.experiment_count} exp)</option>`;
+        }).join('');
         if (!d.plans.length) sel.innerHTML = '<option value="">No templates available</option>';
     } catch {}
 }
@@ -2244,8 +3943,14 @@ async function loadQueueState() {
 function addToQueue() {
     const plan = document.getElementById('queuePlanSelect').value;
     if (!plan) { notify('Select a plan template first.'); return; }
+    const ns = document.getElementById('queueNs').value.trim();
+    if (!ns) { notify('Select a namespace for this queue item.'); return; }
+    const active = window._activeNamespaces || [];
+    if (!active.includes(ns)) { notify(`Namespace "${ns}" is not active. Isolate a USB interface first.`); return; }
+    const ip = getQueueTargetIp();
+    if (!ip) { notify('Select or enter a target IP.'); return; }
     const repeat = parseInt(document.getElementById('queueRepeat').value) || 1;
-    clientQueue.push({ plan_name: plan, repeat });
+    clientQueue.push({ plan_name: plan, repeat, namespace: ns, target_ip: ip });
     renderQueueList();
     syncQueue();
 }
@@ -2262,8 +3967,12 @@ function renderQueueList() {
     countEl.textContent = `(${clientQueue.length})`;
     if (!clientQueue.length) { el.innerHTML = '<div style="color:var(--txt3);font-size:.8rem;">Queue is empty.</div>'; return; }
     el.innerHTML = clientQueue.map((item, i) => {
+        const nice = (window._planSlugToDisplay && window._planSlugToDisplay[item.plan_name]) || item.plan_name;
+        const bind = item.namespace && item.target_ip
+            ? ` <span style="color:var(--txt3);font-size:.65rem;font-family:monospace;"> ${escapeHtml(item.namespace)} · ${escapeHtml(item.target_ip)}</span>`
+            : '';
         return `<div class="queue-item">
-            <span>${item.plan_name} ${item.repeat > 1 ? '×' + item.repeat : ''}</span>
+            <span>${escapeHtml(nice)}${item.repeat > 1 ? ' ×' + item.repeat : ''}${bind}</span>
             <button class="btn_" style="padding:.1em .4em;font-size:.65rem;background:var(--bg-3);color:var(--txt2);" onclick="removeFromQueue(${i})">✕</button>
         </div>`;
     }).join('');
@@ -2282,6 +3991,14 @@ async function syncQueue() {
 
 function startQueue() {
     if (!clientQueue.length) { notify('Add items to the queue first.'); return; }
+    const active = window._activeNamespaces || [];
+    if (!active.length) { notify('No active namespace. Isolate a USB interface first.'); return; }
+    const stale = clientQueue.filter(it => !active.includes(it.namespace));
+    if (stale.length) {
+        const names = [...new Set(stale.map(it => it.namespace))].join(', ');
+        notify(`Queue references inactive namespace(s): ${names}. Remove or re-create.`);
+        return;
+    }
     syncQueue().then(() => {
         socket.emit('start_queue');
         document.getElementById('planDot').className = 't-dot run';
@@ -2318,16 +4035,17 @@ async function loadRunHistory() {
         let html = '<table class="run-tbl"><thead><tr><th>Date</th><th>Plan</th><th>Status</th><th>Experiments</th><th>Actions</th></tr></thead><tbody>';
         for (const run of d.runs) {
             const date = run.started_at ? run.started_at.replace('T', ' ').slice(0, 16) : '—';
+            const planLabel = escapeHtml(run.plan_display_name || run.plan_name);
             const statusIcon = run.status === 'completed' ? '✅' : run.status === 'partial' ? '⚠️' : run.status === 'running' ? '⏳' : '❌';
             const dur = run.started_at && run.completed_at
                 ? _formatDuration(new Date(run.completed_at) - new Date(run.started_at))
                 : '—';
             html += `<tr>
                 <td>${date}</td>
-                <td style="font-weight:600;">${run.plan_name}</td>
+                <td style="font-weight:600;">${planLabel}<div style="font-size:.65rem;color:var(--txt3);font-weight:400;font-family:monospace;">${escapeHtml(run.plan_name)}</div></td>
                 <td>${statusIcon} ${run.status}</td>
                 <td>${run.completed}/${run.total}${dur !== '—' ? ' · ' + dur : ''}</td>
-                <td><button class="btn_ btn-blue" style="font-size:.65rem;padding:.2em .5em;" onclick="viewRunResults('${run.plan_name}','${run.run_id}')">👁 View</button></td>
+                <td><button class="btn_ btn-blue" style="font-size:.65rem;padding:.2em .5em;" onclick="viewRunResults('${run.plan_name.replace(/'/g, "\\'")}','${run.run_id}')">👁 View</button></td>
             </tr>`;
         }
         html += '</tbody></table>';
@@ -2343,31 +4061,23 @@ function _formatDuration(ms) {
 }
 
 async function viewRunResults(planName, runId) {
-    // Navigate to results panel and open the plan group
     try {
-        const r = await fetch(`/api/plans/${planName}/runs/${runId}`);
-        if (!r.ok) { notify('Run not found.'); return; }
-        const runData = await r.json();
-        const exps = (runData.experiments || []).filter(e => e.result_path);
-        if (!exps.length) { notify('No completed experiments in this run.'); return; }
-        // Switch to results panel and show detail
+        const [runsRes, runDetailRes] = await Promise.all([
+            fetch(`/api/plans/${encodeURIComponent(planName)}/runs`),
+            fetch(`/api/plans/${encodeURIComponent(planName)}/runs/${encodeURIComponent(runId)}`),
+        ]);
+        if (!runDetailRes.ok) { notify('Run not found.'); return; }
+        const runDetail = await runDetailRes.json();
+        const runsData = await runsRes.json();
+        const runSummary = (runsData.runs || []).find(r => r.run_id === runId) || { run_id: runId, total: 0, completed: 0, failed: 0 };
+
         nav('results');
-        const overview = document.getElementById('resultsOverview');
+        document.getElementById('resultsOverview').style.display = 'none';
         const detail = document.getElementById('resultsDetail');
-        overview.style.display = 'none';
         detail.style.display = 'block';
-        document.getElementById('resultsDetailTitle').textContent = `🗂 ${planName} — run ${runId}`;
-        const grid = document.getElementById('resultsDetailGrid');
-        let html = '';
-        for (const exp of exps) {
-            const fakeMeta = {
-                test_type: exp.type, direction: exp.direction, protocol: exp.protocol,
-                bandwidth: exp.bandwidth, timestamp: exp.completed_at, summary: {},
-                result_path: exp.result_path, chart: null, csv: 'data.csv',
-            };
-            html += _resultCard(fakeMeta, '', exp.result_path);
-        }
-        grid.innerHTML = html;
+        document.getElementById('resultsDetailTitle').textContent = `🗂 ${humanizePlanSlug(planName)} — run ${runId}`;
+        document.getElementById('resultsDetailGrid').innerHTML =
+            _planRunSection(planName, runSummary, runDetail.experiments || []);
     } catch (e) { notify('Error: ' + e.message); }
 }
 
@@ -2393,7 +4103,9 @@ socket.on('plan_progress', (data) => {
         statusEl.appendChild(row);
     }
     const icon = data.exp_state === 'running' ? '⏳' : data.exp_state === 'completed' ? '✅' : '❌';
-    row.innerHTML = `<span>${icon}</span><span style="flex:1;">${data.exp_name}</span><span style="color:var(--txt3);font-size:.68rem;">${data.exp_state}</span>`;
+    // Always show exp_id alongside label — labels can collide within a plan
+    const idTag = data.exp_id ? `<span style="color:var(--txt3);font-size:.65rem;font-family:monospace;">${data.exp_id}</span>` : '';
+    row.innerHTML = `<span>${icon}</span><span style="flex:1;">${data.exp_name}</span>${idTag}<span style="color:var(--txt3);font-size:.68rem;">${data.exp_state}</span>`;
 });
 
 socket.on('plan_complete', (data) => {
@@ -2418,8 +4130,12 @@ socket.on('queue_progress', (data) => {
     const bar = document.getElementById('queueStatusBar');
     if (bar) {
         bar.style.display = 'block';
-        bar.textContent = `Queue: item ${data.queue_position}/${data.queue_total} · ${data.plan_name} repeat ${data.repeat_current}/${data.repeat_total}`;
+        const dn = (window._planSlugToDisplay && window._planSlugToDisplay[data.plan_name]) || data.plan_name;
+        bar.textContent = `Queue: item ${data.queue_position}/${data.queue_total} · ${dn} repeat ${data.repeat_current}/${data.repeat_total}`;
     }
+    // Reset per-experiment list so rows from prior queue item don't bleed into the new run
+    const statusEl = document.getElementById('planExpStatus');
+    if (statusEl) statusEl.innerHTML = '';
 });
 
 socket.on('queue_complete', (data) => {
@@ -2443,5 +4159,94 @@ socket.on('queue_complete', (data) => {
 
 </script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+<!-- Context menu -->
+<div id="ctxMenu" style="display:none;position:fixed;z-index:99999;background:#1e2330;border:1px solid #3a4060;border-radius:8px;box-shadow:0 8px 32px rgba(0,0,0,.75);min-width:170px;overflow:hidden;"></div>
+
+<!-- Confirm dialog -->
+<div id="confirmOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:100000;backdrop-filter:blur(3px);display:none;align-items:center;justify-content:center;">
+  <div style="background:#1e2330;border:1px solid #3a4060;border-radius:12px;padding:1.5rem 1.75rem;max-width:380px;width:90%;box-shadow:0 12px 40px rgba(0,0,0,.8);">
+    <div id="confirmMsg" style="font-size:.9rem;color:#e2e8f0;margin-bottom:1.25rem;line-height:1.5;"></div>
+    <div style="display:flex;gap:.65rem;justify-content:flex-end;">
+      <button id="confirmCancel" style="padding:.45rem 1rem;background:transparent;border:1px solid #3a4060;border-radius:7px;color:#94a3b8;cursor:pointer;font-size:.82rem;">Cancel</button>
+      <button id="confirmOk" style="padding:.45rem 1rem;background:rgba(239,68,68,.2);border:1px solid rgba(239,68,68,.5);border-radius:7px;color:#fca5a5;cursor:pointer;font-size:.82rem;font-weight:600;">Delete</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+    // ---- Context menu ----
+    const menu = document.getElementById('ctxMenu');
+    let _pendingAction = null;
+
+    function hideMenu() {
+        menu.style.display = 'none';
+        _pendingAction = null;
+    }
+
+    window._showCtxMenu = function(e, items) {
+        e.preventDefault();
+        e.stopPropagation();
+        menu.innerHTML = items.map((it, i) =>
+            `<div style="padding:.55rem 1.1rem;cursor:pointer;font-size:.82rem;color:${it.danger ? '#fca5a5' : '#e2e8f0'};display:flex;align-items:center;gap:.6rem;user-select:none;"
+                onmouseenter="this.style.background='rgba(255,255,255,.07)'"
+                onmouseleave="this.style.background=''"
+                onclick="window._ctxAction(${i})">${it.icon || ''} ${it.label}</div>`
+        ).join('');
+        _pendingAction = items.map(it => it.action);
+        const vw = window.innerWidth, vh = window.innerHeight;
+        menu.style.display = 'block';
+        const mw = menu.offsetWidth, mh = menu.offsetHeight;
+        const x = e.clientX + mw > vw ? e.clientX - mw : e.clientX;
+        const y = e.clientY + mh > vh ? e.clientY - mh : e.clientY;
+        menu.style.left = x + 'px';
+        menu.style.top  = y + 'px';
+    };
+
+    window._ctxAction = function(i) {
+        if (_pendingAction && _pendingAction[i]) _pendingAction[i]();
+        hideMenu();
+    };
+
+    document.addEventListener('click', hideMenu);
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') hideMenu(); });
+    document.addEventListener('scroll', hideMenu, true);
+
+    // ---- Confirm modal ----
+    const overlay  = document.getElementById('confirmOverlay');
+    const msgEl    = document.getElementById('confirmMsg');
+    const btnOk    = document.getElementById('confirmOk');
+    const btnCancel= document.getElementById('confirmCancel');
+    let _confirmCb = null;
+
+    function closeConfirm() {
+        overlay.style.display = 'none';
+        _confirmCb = null;
+    }
+
+    window._confirm = function(msg, onOk, okLabel) {
+        msgEl.textContent = msg;
+        btnOk.textContent = okLabel || 'Delete';
+        _confirmCb = onOk;
+        overlay.style.display = 'flex';
+        btnOk.focus();
+    };
+
+    btnOk.addEventListener('click', () => {
+        const cb = _confirmCb;
+        closeConfirm();
+        if (cb) cb();
+    });
+    btnCancel.addEventListener('click', closeConfirm);
+    overlay.addEventListener('click', e => { if (e.target === overlay) closeConfirm(); });
+    document.addEventListener('keydown', e => {
+        if (overlay.style.display === 'flex') {
+            if (e.key === 'Escape') closeConfirm();
+            if (e.key === 'Enter')  btnOk.click();
+        }
+    });
+})();
+</script>
 </body>
 </html>

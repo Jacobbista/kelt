@@ -173,11 +173,13 @@ If you have a physical 5G UE dongle (USB modem) and want to run experiments on y
 
 ```bash
 cd 5g-probe
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-sudo $(which python3) app.py
+python3 -m venv venv
+./venv/bin/pip install -r requirements.txt
+./run-probe.sh
 # Open http://localhost:5000
 ```
+
+`run-probe.sh` runs `sudo` with the venv interpreter by absolute path (`sudo` does not keep the activated venv on `PATH`) and starts **`python -m probe`** (code under `5g-probe/probe/`).
 
 See [docs/tools/5g-probe.md](tools/5g-probe.md) for the full guide including host requirements and API reference.
 

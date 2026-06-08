@@ -35,8 +35,10 @@ kubeconfig
 k3s_token
 edge_token
 
-# 5G probe results
+# 5G probe — local results and user-saved plan templates (keep built-in defaults)
 5g-probe/results/
+5g-probe/plan_templates/*/
+!5g-probe/plan_templates/defaults/
 
 # Dashboard build artifacts and env
 dashboard/frontend/dist/
