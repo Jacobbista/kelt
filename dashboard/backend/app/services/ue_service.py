@@ -538,12 +538,12 @@ class UEService:
                 events.append({"ts": ts, "type": "session_count_change", "source": "amf",
                                "severity": "warning",
                                "detail": f"AMF session count decreased to {m.group(1)}",
-                               "reason": "An AMF session ended — UE disconnect or idle timeout"})
+                               "reason": "AMF session ended (UE disconnect or idle timeout)"})
                 continue
 
             m = _RE_UE_CONTEXT_RELEASE.search(text)
             if m:
-                reason = "UE entered CM-IDLE — N2 context released, registration retained"
+                reason = "UE entered CM-IDLE. N2 context released, registration retained."
                 reason_m = _RE_RELEASE_REASON.search(text)
                 if reason_m:
                     # Surface Open5GS's own cause string (e.g. "Radio Connection With UE Lost")
@@ -730,8 +730,14 @@ class UEService:
                     u["gnb_ip"] = gnb_ip
 
         _DEFAULT_REASONS = {
-            "idle": "UE entered CM-IDLE — N2 context released, registration and PDU sessions retained",
-            "stale": "AMF context present but gNB UE count is lower — likely orphaned context",
+            "idle": (
+                "Registered. PDU session and IP preserved. "
+                "Radio suspended for power saving; reactivates on next packet (Service Request)."
+            ),
+            "stale": (
+                "AMF context present but the gNB reports a lower UE count. "
+                "Likely orphaned context after a hard drop without Deregistration."
+            ),
         }
         for u in active:
             if u["status"] in _DEFAULT_REASONS and "status_reason" not in u:
@@ -843,6 +849,13 @@ class UEService:
             if not imsi:
                 continue
             allowed = psi_filter.get(imsi) if psi_filter is not None else None
+            # AMF can return an empty pdu_sessions[] for CM-IDLE UEs (N2
+            # context released, but the PDU session and its IP are still
+            # held by SMF). Treat the empty-set case as "no filter" so
+            # idle UEs keep their IP visible; the ghost-session guard
+            # still applies when AMF lists a non-empty PSI whitelist.
+            if allowed is not None and len(allowed) == 0:
+                allowed = None
             by_imsi[imsi] = [
                 {
                     "psi":       pdu.get("psi"),

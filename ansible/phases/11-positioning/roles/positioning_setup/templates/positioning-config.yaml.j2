@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: positioning-config
+  namespace: {{ positioning_namespace }}
+data:
+  ADAPTER_URLS: "{{ engine_adapter_urls }}"
+  DEVICE_IDS: "{{ engine_device_ids }}"
+  WEBSOCKET_INTERVAL_MS: "{{ engine_websocket_interval_ms }}"
+  FLOOR_PLAN_PATH: "/app/config/floor-plan.json"

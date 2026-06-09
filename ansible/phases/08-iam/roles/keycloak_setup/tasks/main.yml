@@ -1,0 +1,476 @@
+---
+# KEYCLOAK SETUP
+# Deploys PostgreSQL (Keycloak backend) then Keycloak with realm import.
+
+# ── Pre-pull ──────────────────────────────────────────────────────────────────
+
+- name: Pre-pull PostgreSQL image on worker
+  command: >
+    k3s ctr -n k8s.io images pull {{ keycloak_db_image }}
+  delegate_to: "{{ groups['workers'][0] }}"
+  run_once: true
+  changed_when: false
+  register: prepull_pg
+  failed_when: prepull_pg.rc != 0 and 'already exists' not in (prepull_pg.stderr | default(''))
+
+- name: Pre-pull Keycloak image on worker
+  command: >
+    k3s ctr -n k8s.io images pull {{ keycloak_image }}
+  delegate_to: "{{ groups['workers'][0] }}"
+  run_once: true
+  changed_when: false
+  register: prepull_kc
+  failed_when: prepull_kc.rc != 0 and 'already exists' not in (prepull_kc.stderr | default(''))
+
+# ── PostgreSQL ─────────────────────────────────────────────────────────────────
+
+- name: Deploy PostgreSQL PersistentVolumeClaim
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/postgres-pvc.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy PostgreSQL Deployment
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/postgres-deployment.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy PostgreSQL Service
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/postgres-service.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Wait for PostgreSQL to be ready
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: keycloak-db
+    namespace: "{{ iam_namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: pg_deploy
+  retries: "{{ postgres_ready_retries }}"
+  delay: "{{ postgres_ready_delay }}"
+  until: >-
+    pg_deploy.resources | length > 0 and
+    pg_deploy.resources[0].status.availableReplicas | default(0) >= 1
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+# ── Keycloak realm ConfigMap ───────────────────────────────────────────────────
+
+- name: Apply keycloak-realm-config ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    force: true
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/keycloak-realm-configmap.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+# ── Keycloak ───────────────────────────────────────────────────────────────────
+
+- name: Deploy Keycloak Deployment
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    force: true
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/keycloak-deployment.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy Keycloak Service
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/keycloak-service.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Wait for Keycloak to be ready
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: keycloak
+    namespace: "{{ iam_namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: kc_deploy
+  retries: "{{ keycloak_ready_retries }}"
+  delay: "{{ keycloak_ready_delay }}"
+  until: >-
+    kc_deploy.resources | length > 0 and
+    kc_deploy.resources[0].status.availableReplicas | default(0) >= 1
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Request Keycloak admin access token
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/realms/master/protocol/openid-connect/token"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      grant_type: password
+      client_id: admin-cli
+      username: "{{ keycloak_admin_user }}"
+      password: "{{ keycloak_admin_password }}"
+    return_content: true
+    status_code: 200
+  register: _kc_admin_token
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Resolve dashboard client id
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/clients?clientId=dashboard"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    return_content: true
+    status_code: 200
+  register: _kc_dashboard_client
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Resolve positioning-demo client id
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/clients?clientId=positioning-demo"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    return_content: true
+    status_code: 200
+  register: _kc_positioning_client
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Fetch full dashboard client configuration
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/clients/{{ _kc_dashboard_client.json[0].id }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    return_content: true
+    status_code: 200
+  register: _kc_dashboard_full
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: _kc_dashboard_client.json | length > 0
+
+- name: Fetch full positioning-demo client configuration
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/clients/{{ _kc_positioning_client.json[0].id }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    return_content: true
+    status_code: 200
+  register: _kc_positioning_full
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: _kc_positioning_client.json | length > 0
+
+- name: Compute dashboard allowed origins (prod baseline + optional dev)
+  ansible.builtin.set_fact:
+    _dashboard_allowed_origins: >-
+      {{ [dashboard_external_origin]
+         + ([dashboard_dev_external_url] if (dashboard_dev_external_url | default('')) else []) }}
+    _dashboard_allowed_redirects: >-
+      {{ [dashboard_external_origin ~ '/*']
+         + ([dashboard_dev_external_url ~ '/*'] if (dashboard_dev_external_url | default('')) else []) }}
+    # Keycloak 24+ stores post-logout URIs as a ##-separated string in the
+    # client attribute. Without this attribute the end-session endpoint
+    # rejects any post_logout_redirect_uri that does not match redirectUris
+    # exactly (no wildcard fallback on some 26.x builds), and signoutRedirect
+    # silently aborts the logout.
+    _dashboard_post_logout_uris: >-
+      {{ ([dashboard_external_origin ~ '/*']
+          + ([dashboard_dev_external_url ~ '/*'] if (dashboard_dev_external_url | default('')) else []))
+          | join('##') }}
+
+- name: Reconcile dashboard client origins and post-logout URIs
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/clients/{{ _kc_dashboard_client.json[0].id }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    body_format: json
+    body: >-
+      {{ _kc_dashboard_full.json | combine({
+           'redirectUris': _dashboard_allowed_redirects,
+           'webOrigins': _dashboard_allowed_origins,
+           'attributes': (_kc_dashboard_full.json.attributes | default({}))
+              | combine({'post.logout.redirect.uris': _dashboard_post_logout_uris})
+         }, recursive=True) }}
+    status_code: 204
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when:
+    # Realm reconcile is opt-in. See docs/security/iam.md for the toggle
+    # surface (KEYCLOAK_REALM_RECONCILE env / testbed-config IAM prompt).
+    - keycloak_realm_reconcile | bool
+    - _kc_dashboard_client.json | length > 0
+    - (_kc_dashboard_full.json.redirectUris | default([])) != _dashboard_allowed_redirects
+      or (_kc_dashboard_full.json.webOrigins | default([])) != _dashboard_allowed_origins
+      or ((_kc_dashboard_full.json.attributes | default({})).get('post.logout.redirect.uris', '')) != _dashboard_post_logout_uris
+
+- name: Reconcile positioning-demo client origins
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/clients/{{ _kc_positioning_client.json[0].id }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    body_format: json
+    body: "{{ _kc_positioning_full.json | combine({'redirectUris': [positioning_demo_external_origin ~ '/*'], 'webOrigins': [positioning_demo_external_origin]}, recursive=True) }}"
+    status_code: 204
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when:
+    - _kc_positioning_client.json | length > 0
+    - (_kc_positioning_full.json.redirectUris | default([])) != [positioning_demo_external_origin ~ '/*'] or (_kc_positioning_full.json.webOrigins | default([])) != [positioning_demo_external_origin]
+
+- name: Resolve dashboard admin group id
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/groups?search=g-dashboard-admins"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    return_content: true
+    status_code: 200
+  register: _kc_dashboard_admin_group
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Resolve bootstrap dashboard admin user
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/users?username={{ dashboard_bootstrap_admin_username }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    return_content: true
+    status_code: 200
+  register: _kc_bootstrap_user
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Create bootstrap dashboard admin user when missing
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/users"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    body_format: json
+    body:
+      username: "{{ dashboard_bootstrap_admin_username }}"
+      enabled: true
+      emailVerified: true
+    status_code: 201
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: _kc_bootstrap_user.json | length == 0
+
+- name: Re-resolve bootstrap dashboard admin user id
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/users?username={{ dashboard_bootstrap_admin_username }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    return_content: true
+    status_code: 200
+  register: _kc_bootstrap_user_resolved
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+# Set the password ONLY when the bootstrap user was just created in this run
+# (gate against the original lookup before the create task). Prevents Phase 08
+# re-runs from overwriting a password the operator changed via the Keycloak UI.
+# `temporary: true` forces a password reset on first login.
+- name: Set bootstrap dashboard admin password (only on first create)
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/users/{{ _kc_bootstrap_user_resolved.json[0].id }}/reset-password"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    body_format: json
+    body:
+      type: password
+      temporary: true
+      value: "{{ dashboard_bootstrap_admin_password }}"
+    status_code: 204
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when:
+    - _kc_bootstrap_user.json | length == 0
+    - _kc_bootstrap_user_resolved.json | length > 0
+
+- name: Ensure bootstrap user in dashboard admin group
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/users/{{ _kc_bootstrap_user_resolved.json[0].id }}/groups/{{ (_kc_dashboard_admin_group.json | selectattr('name', 'equalto', 'g-dashboard-admins') | list | first).id }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    status_code: 204
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when:
+    - _kc_bootstrap_user_resolved.json | length > 0
+    - (_kc_dashboard_admin_group.json | selectattr('name', 'equalto', 'g-dashboard-admins') | list | length) > 0
+
+# ==== Seed viewer user (mirrors the admin bootstrap pattern) ===============
+# A second seed account so the two-role model is observable out of the box:
+# operators can log in as `viewer` to verify read-only restrictions without
+# having to provision a user via the Keycloak admin console first.
+- name: Resolve dashboard viewer group id
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/groups?search=g-dashboard-viewers"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    return_content: true
+    status_code: 200
+  register: _kc_dashboard_viewer_group
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Resolve bootstrap dashboard viewer user
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/users?username={{ dashboard_bootstrap_viewer_username }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    return_content: true
+    status_code: 200
+  register: _kc_viewer_user
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Create bootstrap dashboard viewer user when missing
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/users"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    body_format: json
+    body:
+      username: "{{ dashboard_bootstrap_viewer_username }}"
+      enabled: true
+      emailVerified: true
+    status_code: 201
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: _kc_viewer_user.json | length == 0
+
+- name: Re-resolve bootstrap dashboard viewer user id
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/users?username={{ dashboard_bootstrap_viewer_username }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    return_content: true
+    status_code: 200
+  register: _kc_viewer_user_resolved
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+# Set the password only on first create so an operator-driven change via the
+# Keycloak UI is preserved across phase 08 reruns. Same pattern as the admin
+# seed above. `temporary: true` forces a password reset on first login.
+- name: Set bootstrap dashboard viewer password (only on first create)
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/users/{{ _kc_viewer_user_resolved.json[0].id }}/reset-password"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    body_format: json
+    body:
+      type: password
+      temporary: true
+      value: "{{ dashboard_bootstrap_viewer_password }}"
+    status_code: 204
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when:
+    - _kc_viewer_user.json | length == 0
+    - _kc_viewer_user_resolved.json | length > 0
+
+- name: Ensure bootstrap viewer user in dashboard viewers group
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/users/{{ _kc_viewer_user_resolved.json[0].id }}/groups/{{ (_kc_dashboard_viewer_group.json | selectattr('name', 'equalto', 'g-dashboard-viewers') | list | first).id }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    status_code: 204
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when:
+    - _kc_viewer_user_resolved.json | length > 0
+    - (_kc_dashboard_viewer_group.json | selectattr('name', 'equalto', 'g-dashboard-viewers') | list | length) > 0
+# ===========================================================================
+
+- name: Resolve camara-location-read realm role
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/roles/camara-location-read"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    return_content: true
+    status_code: 200
+  register: _kc_camara_role
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Fetch dashboard-admin role composites
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/roles/dashboard-admin/composites/realm"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    return_content: true
+    status_code: 200
+  register: _kc_dashboard_admin_composites
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+# Make dashboard-admin a composite role that inherits camara-location-read.
+# This unifies the role model: a dashboard admin can also call the CAMARA
+# Location API from the positioning demo without a separate group membership.
+- name: Ensure dashboard-admin includes camara-location-read as composite
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/roles/dashboard-admin/composites"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    body_format: json
+    body:
+      - id: "{{ _kc_camara_role.json.id }}"
+        name: "camara-location-read"
+        composite: false
+        clientRole: false
+        containerId: "{{ keycloak_realm }}"
+    status_code: 204
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when:
+    - _kc_dashboard_admin_composites.json | selectattr('name', 'equalto', 'camara-location-read') | list | length == 0
+
+- name: Display IAM deployment summary
+  debug:
+    msg:
+      - "IAM Stack deployed"
+      - "Keycloak admin: http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}/admin"
+      - "Realm: {{ keycloak_realm }}"
+      - "Seed users (force password reset on first login):"
+      - "  admin  -> g-dashboard-admins  -> dashboard-admin"
+      - "  viewer -> g-dashboard-viewers -> dashboard-viewer"
+      - "Realm reconcile: {{ keycloak_realm_reconcile | bool }}"
+      - "Token endpoint: http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}/realms/{{ keycloak_realm }}/protocol/openid-connect/token"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true

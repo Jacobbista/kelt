@@ -24,4 +24,4 @@ expected_pods:
 # Validation timeouts
 pod_ready_timeout: 300
 pod_ready_delay: 10
-pod_ready_retries: 30
+pod_ready_retries: 12

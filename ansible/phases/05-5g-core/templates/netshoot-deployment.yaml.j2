@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: netshoot
+  namespace: {{ namespace_5g }}
+  labels:
+    app: netshoot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: netshoot
+  template:
+    metadata:
+      labels:
+        app: netshoot
+      annotations:
+        k8s.v1.cni.cncf.io/networks: |
+          [
+            {"name": "{{ nad_n3_name }}", "namespace": "{{ nad_n3_namespace }}", "interface": "n3"},
+            {"name": "{{ nad_n6c_name }}", "namespace": "{{ nad_n6c_namespace }}", "interface": "n6"}
+          ]
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: worker
+      terminationGracePeriodSeconds: 5
+      containers:
+        - name: netshoot
+          image: {{ network_setup_image }}
+          imagePullPolicy: IfNotPresent
+          command: ["sleep", "infinity"]
+          securityContext:
+            capabilities:
+              add: ["NET_ADMIN", "NET_RAW"]
+          readinessProbe:
+            exec:
+              command: ["true"]
+            initialDelaySeconds: 3
+            periodSeconds: 10

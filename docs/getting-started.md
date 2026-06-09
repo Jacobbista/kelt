@@ -146,21 +146,22 @@ sudo k3s kubectl get nodes
 
 ## Deploy UERANSIM Manually
 
-If you deployed with `core_only` mode and want to add UERANSIM later (requires edge VM):
+UERANSIM (simulated RAN) is an optional addon, off by default and requiring the edge VM. To add it later:
 
 ```bash
-vagrant ssh ansible
-cd ~/ansible-ro
-ansible-playbook phases/06-ueransim-mec/playbook.yml -i inventory.ini
+testbed run-phase 06-ueransim-mec
 ```
+
+See [Phase 6](deployment/phases.md#phase-6-ueransim) for details.
 
 ## Access the Dashboard
 
-The dashboard is deployed automatically in Phase 8. Open it in your browser once provisioning completes:
+The dashboard is deployed automatically in Phase 9. Open it in your browser once provisioning completes:
 
 | Service | URL |
 |---------|-----|
-| Dashboard UI | http://192.168.56.13:31573 |
+| Dashboard UI (cluster baseline) | http://192.168.56.11:31573 |
+| Dashboard UI (dev frontend, opt-in) | http://192.168.56.13:31573 |
 | Dashboard API docs | http://192.168.56.13:31880/docs |
 | Grafana | http://192.168.56.11:30300 (admin / admin5g) |
 

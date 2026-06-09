@@ -175,7 +175,7 @@
     namespace: "{{ namespace_5g }}"
     kubeconfig: "{{ kubeconfig_path }}"
   register: mongodb_status
-  retries: 30
+  retries: 12
   delay: 10
   until: >-
     mongodb_status.resources | length > 0 and
@@ -186,6 +186,8 @@
 - name: Deploy Network Function Deployments
   kubernetes.core.k8s:
     state: present
+    apply: true
+    force: true
     kubeconfig: "{{ kubeconfig_path }}"
     template: "{{ playbook_dir }}/templates/nf-deployment.yaml.j2"
   vars:
@@ -204,5 +206,49 @@
     nf: "{{ item }}"
   loop: "{{ network_functions }}"
   when: item.name != 'mongodb'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+# ==== Experimental NFs =====================================================
+# Experimental NFs are disabled by default (enabled: false → replicas forced 0).
+# Enable via dashboard or ansible extra-vars. See docs/architecture/nf-platform.md.
+
+- name: Deploy experimental NF Deployments
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    template: "{{ playbook_dir }}/templates/nf-deployment.yaml.j2"
+  vars:
+    # Force replicas to 0 when enabled is false or absent
+    nf: "{{ item | combine({'replicas': 0 if not (item.enabled | default(false) | bool) else item.replicas | default(1)}) }}"
+  loop: "{{ experimental_nfs }}"
+  when: experimental_nfs | length > 0
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy experimental NF Services
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    template: "{{ playbook_dir }}/templates/nf-service.yaml.j2"
+  vars:
+    nf: "{{ item }}"
+  loop: "{{ experimental_nfs }}"
+  when: experimental_nfs | length > 0
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+# ── Netshoot debug pod ────────────────────────────────────────────────────────
+# Persistent pod with n3/n6 Multus interfaces and full networking tools
+# (ping, ss, tcpdump, etc.). Used by the dashboard network health checks since
+# NF images are minimal and do not include diagnostic utilities.
+# N4 check uses the SMF /pdu-info API instead (n4 IP pool is exhausted by NF pods).
+
+- name: Deploy netshoot debug pod
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    kubeconfig: "{{ kubeconfig_path }}"
+    template: "{{ playbook_dir }}/templates/netshoot-deployment.yaml.j2"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true

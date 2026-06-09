@@ -208,9 +208,19 @@ ovs-vsctl add-port br-n2 vxlan-n2 -- \
 
 The VXLAN tunnel runs over the management NIC (`eth1`, 192.168.56.0/24) between worker and edge. All six bridge tunnels share this single physical link.
 
+### Local switching versus inter-node tunnels
+
+A VXLAN tunnel only carries overlay traffic between nodes. Two pods on the same node and the same overlay communicate through local OVS switching: the bridge forwards frames between their veth ports at L2, with no encapsulation. The VXLAN port is used only to reach a pod on a different node, for example AMF on the worker and a gNB or UPF on the edge.
+
+VXLAN is therefore edge-conditional. `ovs-setup.sh` adds the per-interface VXLAN ports only when the edge node is enabled. With edge disabled (the default `server` profile without edge, or any single-node deployment) the bridges are created without VXLAN ports and every NF runs on the worker, so all overlay traffic stays local. In that case `sudo ovs-vsctl show` lists no `vxlan-*` interfaces, which is expected rather than a fault.
+
+The `flannel.1` VXLAN device present on every node belongs to the primary cluster CNI (Flannel pod network) and is unrelated to the 5G overlays.
+
 ### MTU sizing and GTP-U encapsulation
 
 VXLAN adds 50 bytes of header (14 outer Ethernet + 20 IP + 8 UDP + 8 VXLAN) to every frame, so overlay interfaces (`n1`…`n6m`) use `overlay_mtu: 1450` (defined in `ansible/group_vars/all.yml`) instead of the 1500 default of the underlying `eth1`.
+
+The N6 cloud bridge (`br-n6c`) and NAD `n6c-net` use `n6_data_mtu: 1400` so host and pod TCP stacks on the decapsulated data network match the UPF `ogstun` MTU (`1400`). **N3 bridges stay at `overlay_mtu` (1450);** that outer budget must still fit GTP-U encapsulation on the RAN path.
 
 The user plane adds a second layer of encapsulation on top of that. Packets leaving the UPF on `ogstun` are re-encapsulated by `open5gs-upfd` in GTP-U (~40 bytes of outer IP + UDP + GTP header) before being emitted on `n3` towards the gNB. Without MTU adjustment the chain is:
 
@@ -223,7 +233,7 @@ To keep UE traffic inside the overlay budget without requiring any UE-side confi
 1. Set `ogstun` and `ogstun2` MTU to **1400** (leaves 10 bytes of headroom after GTP-U over the 1450 overlay).
 2. Apply TCP MSS clamping to **1360** (= 1400 − 20 IP − 20 TCP) on both directions of the FORWARD chain for `ogstun`/`ogstun2`, so remote peers negotiate a segment size that survives GTP-U encapsulation regardless of what the UE advertises.
 
-This keeps the overlay MTU (used by Multus/OVS for VXLAN framing) decoupled from the UE-visible MTU (constrained by GTP-U overhead). Implemented in:
+This keeps the overlay MTU (used by Multus/OVS for VXLAN framing) decoupled from the UE-visible MTU (constrained by GTP-U overhead). GTP-U encapsulation is present on the N3 user plane in every topology, so the `ogstun` MTU reduction and MSS clamping apply whether or not VXLAN is in use. VXLAN adds its 50-byte overhead only on the inter-node hop when edge is enabled; the GTP-U overhead, not VXLAN, is the binding constraint on the UE-visible MTU. Implemented in:
 
 - `ansible/phases/05-5g-core/scripts/upf_cloud_init.sh`
 - `ansible/phases/05-5g-core/scripts/upf_edge_init.sh`

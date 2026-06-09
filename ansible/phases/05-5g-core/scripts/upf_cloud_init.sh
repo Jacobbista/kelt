@@ -14,7 +14,7 @@ while ! ip addr show n6m 2>/dev/null | grep -q "inet"; do
 done
 
 # Ensure log directory exists
-mkdir -p /open5gs/install/var/log/open5gs
+mkdir -p /var/log/open5gs
 
 # Configure TUN interface and routing (idempotent)
 if ! ip link show ogstun >/dev/null 2>&1; then
@@ -38,7 +38,8 @@ fi
 if ! ip addr show dev ogstun2 | grep -q "10.46.0.1/16"; then
   ip addr add 10.46.0.1/16 dev ogstun2 || true
 fi
-# Same MTU rationale as ogstun (GTP-U over VXLAN overlay).
+# Same MTU rationale as ogstun: GTP-U over the N3 overlay (VXLAN only adds
+# overhead when edge is enabled; GTP-U is the binding constraint either way).
 ip link set dev ogstun2 mtu 1400
 ip link set ogstun2 up || true
 
@@ -57,8 +58,9 @@ done
 ip rule show | grep -q "iif ogstun2 lookup 300" || ip rule add iif ogstun2 lookup 300 pref 20
 ip route replace default via 10.208.0.1 dev n6m table 300
 
-# Start iperf3 server (output to separate logfile to keep pod logs clean)
-iperf3 -B 10.45.0.1 -s -fm -i 0.1 --logfile /var/log/iperf3-server.log &
+# iperf3 server is launched via lifecycle.postStart on the main UPF container
+# (see roles/nf_deployments/defaults/main.yml). InitContainers terminate child
+# processes on exit, so launching iperf3 here would not survive.
 
 # Configure sysctls
 sysctl -w net.ipv4.ip_forward=1
@@ -88,5 +90,4 @@ echo "[UPF][init] Redirecting default route to N6 Data Network interface..."
 ip route replace default via 10.207.0.1 dev n6
 # --------------------------------------------------------------------------------
 
-echo "[UPF][init] Starting UPF daemon..."
-exec /open5gs/install/bin/open5gs-upfd -c ${UPF_CONFIG:-/etc/open5gs/upf.yaml}
+echo "[UPF][init] Network setup complete."

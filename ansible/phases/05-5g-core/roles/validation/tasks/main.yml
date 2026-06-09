@@ -22,17 +22,33 @@
   kubernetes.core.k8s_info:
     api_version: apps/v1
     kind: Deployment
-    name: "{{ item.key }}"
     namespace: "{{ namespace_5g }}"
     kubeconfig: "{{ kubeconfig_path }}"
-  register: nf_deploy
+  register: all_deploys
   retries: "{{ pod_ready_retries }}"
   delay: "{{ pod_ready_delay }}"
+  no_log: true
   until: >-
-    nf_deploy.resources | length > 0 and
-    nf_deploy.resources[0].status.availableReplicas | default(0) >= item.value
-  loop: "{{ expected_pods | dict2items }}"
-  when: item.key != 'mongodb'
+    (expected_pods | dict2items |
+     selectattr('key', 'ne', 'mongodb') |
+     rejectattr('value', 'equalto', 0) | list | length) ==
+    (all_deploys.resources |
+     selectattr('status.availableReplicas', 'defined') |
+     selectattr('status.availableReplicas', 'ge', 1) |
+     map(attribute='metadata.name') |
+     select('in', expected_pods.keys() | list) |
+     reject('equalto', 'mongodb') | list | length)
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Show NF deployment readiness summary
+  debug:
+    msg: >-
+      {{ item.metadata.name }}:
+      {{ item.status.availableReplicas | default(0) }}/{{ item.status.replicas | default(0) }}
+  loop: "{{ all_deploys.resources | selectattr('metadata.name', 'in', expected_pods.keys() | list) | list }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 

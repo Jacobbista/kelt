@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-realm-config
+  namespace: {{ iam_namespace }}
+data:
+  realm.json: |
+{{ lookup('template', role_path + '/templates/keycloak-realm.json.j2', convert_data=False) | indent(4, true) }}

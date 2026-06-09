@@ -1,0 +1,30 @@
+---
+camara_enabled: true
+camara_namespace: camara
+
+camara_gateway_image: "ghcr.io/jacobbista/5g-northbound/camara-gateway:0.1.0"
+camara_gateway_nodeport: 31920
+
+# Must match Phase 08/09. Read from env so a single CAMARA_CLIENT_SECRET /
+# KEYCLOAK_REALM / KEYCLOAK_PATH_PREFIX applies across phases without -e.
+camara_client_secret: "{{ lookup('ansible.builtin.env', 'CAMARA_CLIENT_SECRET') | default('changeme', true) }}"
+keycloak_realm: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_REALM') | default('5g-testbed', true) }}"
+# Path prefix when Keycloak runs under a relative path (KC_HTTP_RELATIVE_PATH,
+# e.g. "/auth"). Applies to internal access too, so the JWKS/issuer URL the
+# gateway builds must include it. Empty for root-path deploys.
+keycloak_path_prefix: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_PATH_PREFIX') | default('', true) }}"
+iam_namespace: iam
+keycloak_nodeport: 31910
+
+# Upstream service URLs (K8s DNS)
+smf_url: "http://smf.5g.svc.cluster.local:9090"
+positioning_engine_url: "http://positioning-engine.positioning.svc.cluster.local:8080"
+
+# Optional external base URL the gateway advertises (OpenAPI `servers`,
+# webhook callbacks, redirect-uri allow lists at the operator IdP). Empty
+# falls back to the LAN NodePort URL so clean clone runs without any
+# external exposure work.
+camara_gateway_external_origin: "{{ lookup('ansible.builtin.env', 'CAMARA_GATEWAY_EXTERNAL_ORIGIN') | default('http://' ~ hostvars[groups['workers'][0]]['ansible_host'] ~ ':' ~ camara_gateway_nodeport, true) }}"
+
+camara_ready_retries: 6
+camara_ready_delay: 10

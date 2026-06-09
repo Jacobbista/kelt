@@ -264,7 +264,7 @@ graph LR
 
 The N6m network (`br-n6m`, VNI 108, subnet `10.208.0.0/24`) is created during Phase 4 provisioning. MEC pods attach to it via the `n6m-net` NetworkAttachmentDefinition in the `mec` namespace.
 
-For the full interface specification (IPs, VXLAN key, validation commands), see the [N6m section in the Handbook](../operations/handbook.md#n6m--upf-cloud--mec-services).
+For the full interface specification (IPs, VXLAN key, validation commands), see the [N6 section in 5G Interfaces](../architecture/5g-interfaces.md#n6--upf--data-network).
 
 ---
 

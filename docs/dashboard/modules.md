@@ -1,198 +1,155 @@
 # Dashboard Modules
 
-The dashboard has 7 modules. This page describes what each one does, what data it shows, and what actions it provides.
+The dashboard has 10 modules, reachable from the sidebar. This page describes
+what each one does, the data it shows, and the actions it provides. Role gating
+follows the two-tier model: read views are open to `dashboard-viewer`, write and
+exec actions require `dashboard-admin`. See [security/iam.md](../security/iam.md)
+for the per-route matrix.
 
 See [Dashboard Overview](overview.md) for architecture and access details.
 
 ---
 
-## Module 1: Control Room
+## Overview
 
-**Area**: Cluster visibility
+**Area**: Cluster
 
-The primary day-to-day view for monitoring the 5G namespace.
+The landing view. Cluster-wide status at a glance.
 
-### Features
+- Stat cards: total pods, running, pending, failed, average CPU, average memory
+- CPU and memory sparklines (15-minute trend)
+- Node cards with status and resource usage
+- Network Function status cards; selecting one opens its detail in the 5G Core module
 
-- **Live pod monitor**: real-time list of all pods in namespace `5g` with status, restart count, age, and node
-- **Log streaming**: WebSocket-based live log tailing equivalent to `kubectl logs -f` — select pod + container and logs appear in the browser terminal
-- **Deployment restart**: one-click rolling restart for any deployment (admin token required)
-- **ConfigMap viewer**: read any ConfigMap in namespace `5g`; editing is available but disabled by default (`DASHBOARD_ALLOW_CONFIGMAP_WRITE=false`)
-
-### What you need
-
-- Kubernetes API accessible from ansible VM (kubeconfig at `DASHBOARD_KUBECONFIG_PATH`)
-- Admin token for restart and ConfigMap write operations
+Read-only.
 
 ---
 
-## Module 2: Topology Map
+## Kubernetes
 
-**Area**: Cluster visibility
+**Area**: Cluster
 
-A visual representation of the running 5G system.
+Raw Kubernetes resource browser, namespace-scoped.
 
-### Features
+- Five tabs: Namespaces, Nodes, Storage, Services, Events
+- Namespace filter on the Storage, Services, and Events tabs
+- Tables: namespace phase and labels; node roles, taints, kubelet version; PVCs; Services with ports and selectors; recent Events
+- Manual refresh plus auto-refresh every 15 seconds
 
-- **React Flow graph**: pod nodes and OVS bridge nodes laid out as a topology diagram
-- **Interface metadata**: hover over edges to see IP address, MAC, MTU, and interface name from Multus `network-status` annotations
-- **OVS flow inspection**: click on any OVS bridge node to open the bridge inspector, which shows active OpenFlow rules (`ovs-ofctl dump-flows`)
-- **Live traffic animation**: edges animate and scale with real-time PPS (packets per second) data from the traffic observer
-
-### What you need
-
-- Kubernetes API (for pod + annotation data)
-- SSH access to worker for `ovs-ofctl` commands (via `DASHBOARD_WORKER_SSH_HOST`)
+Read-only.
 
 ---
 
-## Module 3: Subscriber Management
+## 5G Core
 
-**Area**: 5G-specific
+**Area**: 5G
 
-Full CRUD interface for Open5GS subscriber records in MongoDB.
+Per-NF view of the Open5GS core, grouped into Control Plane, User Plane, Data, and Other.
 
-### Features
+- NF cards with phase, restart count, and node placement; expandable for detail
+- AMF CNI alert banner with a "Manage" action to scale the AMF controllers (repair path for the CNI/replicaset issue)
+- "Check updates" compares deployed image tags against a version manifest
 
-- **List subscribers**: table view of all registered UEs with IMSI, APN, key/opc, and status
-- **Add subscriber**: form to create a new subscriber record (IMSI, security keys, slice config)
-- **Edit subscriber**: modify an existing subscriber's parameters
-- **Delete subscriber**: remove a subscriber (requires admin token)
-- **Initialize from playbook**: trigger the Ansible subscriber import playbook (`roles/subscriber_import`) to reset to the default subscriber set
-
-### What you need
-
-- Direct MongoDB connection (from ansible VM to worker)
-- Admin token for write operations
+Admin actions: restart an NF deployment, scale the AMF controller, trigger a streamed NF image update.
 
 ---
 
-## Module 4: UE Monitoring
+## Topology
 
-**Area**: 5G-specific
+**Area**: Network
 
-Real-time visibility into active UEs and their 5G sessions.
+Visual map of the running system.
 
-### Features
+- Two tabs: Logical (NFs, interfaces, NADs, live traffic) and Infrastructure (cluster nodes)
+- Interface and NetworkAttachmentDefinition metadata
+- Live traffic indicator driven by a WebSocket stream
 
-**Summary panel** (Prometheus-backed):
-- Active gNBs (registered with AMF)
-- RAN-connected UEs
-- Active PDU sessions
-- Registration success/failure counters
-
-**UE event feed** (log-parsed):
-- Parsed AMF/SMF log stream showing: UE registration, PDU session establishment, gNB attach/detach events
-- Timestamped, colour-coded by event type
-
-**Active UE table**:
-- IMSI, registration state, PDU session IPs (UE-side), DNN
-- Reconstructed from live AMF/SMF logs
-
-**Connectivity tests**:
-- For UERANSIM UE pods: run `ping` or `iperf3` from inside a UE pod to a target IP
-- For physical UE dongles: manual command hints showing what to run inside the UE namespace
-
-### What you need
-
-- Prometheus accessible from ansible VM (for metrics)
-- Kubernetes API (for UE pod access and log reading)
-- Admin token for triggering connectivity tests
+Read-only.
 
 ---
 
-## Module 5: Metrics
+## RAN
 
-**Area**: Cluster visibility
+**Area**: 5G
 
-Infrastructure and NF-level resource metrics.
+RAN attachment control, with a tab per mode.
 
-### Features
+- "Physical RAN" tab: detect host bridge interfaces, create `br-ran` and patch it into `br-n2`/`br-n3`, patch the AMF `n2phy` annotation, and show the resulting OVS and annotation state; generates the `PHYSICAL_RAN_BRIDGE=<nic> vagrant reload worker` command
+- "UERANSIM" tab: simulated RAN controls
 
-**Node metrics** (via Prometheus / Node Exporter):
-- CPU usage percentage per node (master, worker, edge)
-- Memory usage (used / total)
-- Disk usage (used / total)
-
-**NF metrics** (via Prometheus):
-- CPU usage per NF container
-- Memory usage per NF container
-- Restart count per NF
-
-**Time-series charts**: scrollable history for all metrics (configurable window).
-
-### What you need
-
-- Prometheus accessible from ansible VM
-- Node Exporter deployed (Phase 7)
+Admin actions: bridge setup and RAN configuration changes. See [Physical RAN Integration](../deployment/physical-ran.md) and [RAN Modes](../deployment/ran-modes-dashboard.md).
 
 ---
 
-## Module 6: Physical RAN Config
+## Subscribers
 
-**Area**: Infrastructure control
+**Area**: 5G
 
-Automated setup and validation of the physical RAN integration (femtocell connection).
+CRUD for Open5GS subscriber records in MongoDB.
 
-### Features
+- Expandable list by IMSI, with slice and session detail (SST, SD, APN, QCI, AMBR)
+- Subscriber form: IMSI, K, OP/OPc, AMF, aggregate AMBR, default slice
+- Import from JSON, and "Initialize from playbook" to reset to the default subscriber set (phase 5 import)
 
-**Interface detection**:
-- Lists available bridge interfaces on the worker node
-- Reads `.physical_ran_bridge_applied` to show which NIC was last applied
-- Shows ✓ next to the matching host NIC
-
-**OVS bridge setup**:
-- Triggers Ansible playbook to create `br-ran` and patch ports into `br-n2`/`br-n3`
-- Updates AMF `n2phy` Multus annotation via the K8s API
-
-**Vagrant command generation**:
-- Generates the correct `PHYSICAL_RAN_BRIDGE=<nic> vagrant reload worker` command to bridge the host NIC into the worker VM
-
-**Status view**:
-- Shows current OVS bridge state (whether `br-ran` exists, patch ports configured)
-- Shows whether AMF has the `n2phy` annotation
-
-### What you need
-
-- SSH access to worker (for OVS commands)
-- Kubernetes API (for AMF annotation patching)
-- Admin token for all operations
-
-See [Physical RAN Integration](../deployment/physical-ran.md) for the full setup guide.
+Admin actions: create, edit, delete, import, initialize.
 
 ---
 
-## Module 7: Network Health & Traffic Observer
+## UE Monitor
 
-**Area**: Infrastructure control
+**Area**: 5G
 
-Per-interface connectivity checks and real-time traffic monitoring.
+Live view of registered UEs and RAN activity.
 
-### Features
+- Summary cards: connected gNBs, RAN UEs, active sessions, registered subscribers
+- Registration counters over a selectable window (1m to 6h), with auth-reject context
+- gNB table (id, PLMN, SCTP peer, UE count) and active UE table with per-IMSI nickname and icon personalization
+- Event feed (registration, session, attach, detach, errors) with expandable cause and debug guidance
+- Connectivity tests (ping, iperf3) from a selected UERANSIM pod
 
-**Interface health cards**:
-- One card per 5G interface (N2, N3, N4, N6c)
-- Status indicator: healthy / degraded / unreachable
-- Last latency measurement
-- Live PPS (packets per second) and throughput (Bps)
+Admin actions: run ping or iperf3, edit UE personalization. UE session data comes from a native Open5GS endpoint.
 
-**Health check**:
-- "Run Health Check" button triggers immediate in-pod `kubectl exec` probes for each interface
-- Results cached for 60 seconds between manual triggers
+---
 
-**Real-time traffic**:
-- WebSocket stream of OVS bridge counter deltas (bytes and packets per bridge)
-- Animated data path diagram: `UE → gNB → AMF → SMF → UPF → DN`
-- Path edges animate and scale with PPS intensity from the live stream
+## Diagnostics
 
-**OVS bridge traffic counters**:
-- Per-bridge: rx bytes, tx bytes, rx packets, tx packets
-- Updated every second via WebSocket
+**Area**: Network
 
-### What you need
+Connectivity and traffic inspection.
 
-- SSH access to worker (for OVS counter polling)
-- Kubernetes API (for in-pod exec probes)
+- "Network Health" tab: per-interface health (N2, N3, N4, N6c), latency, live PPS and throughput, on-demand in-pod probes, and an animated data-path diagram driven by OVS counter deltas
+- "Packet Sniffer" tab: live packet capture
+
+Admin actions: run health checks and packet captures.
+
+---
+
+## Metrics
+
+**Area**: Cluster
+
+Resource metrics from Prometheus, with a Nodes tab and an NFs tab.
+
+- Nodes: per-node CPU, memory, disk cards plus CPU and memory history charts
+- NFs: per-NF CPU (millicores) and memory (MB) bars plus a CPU trend chart
+- Range selector: 15m, 30m, 1h, 6h, 24h
+
+Read-only. A "Grafana (advanced)" link in the sidebar opens the full Grafana stack.
+
+---
+
+## IAM
+
+**Area**: Access · admin only
+
+A static reference for the identity model. No write actions; realm changes happen in the Keycloak console.
+
+- Realm info: name, issuer, current user and roles
+- Role matrix: `dashboard-admin`, `dashboard-viewer`, `camara-location-read`, with abilities and restrictions
+- Seed users (phase 08) and OIDC clients (dashboard, positioning-demo, camara-gateway, dashboard-readonly)
+- Links to the Keycloak realm and master admin consoles; M2M `client_credentials` curl snippets are shown to admins only
+
+See [security/iam.md](../security/iam.md) for the full role matrix.
 
 ---
 
@@ -210,7 +167,7 @@ The sidebar footer includes a live clock and a time synchronization monitor.
 - Starts ticking immediately on page load using the browser clock, then silently corrects when the first server response arrives
 
 **Time Sync popover** (click the clock to open):
-- Shows per-VM time readings for all 4 testbed VMs (ansible, master, worker, edge)
+- Shows per-VM time readings for all testbed VMs (ansible, master, worker, edge)
 - Times tick forward live in the browser
 - Offset column shows drift relative to the ansible VM (reference clock)
 - Color-coded: green (< 500ms), amber (500ms-2s), red (> 2s)

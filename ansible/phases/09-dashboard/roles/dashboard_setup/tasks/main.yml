@@ -129,12 +129,32 @@
       VITE_KEYCLOAK_CLIENT_ID={{ dashboard_keycloak_client_id }}
   when: dashboard_dev_enabled | bool
 
-- name: Install frontend dependencies
+- name: Stat frontend package.json
+  ansible.builtin.stat:
+    path: "{{ dashboard_frontend_dir }}/package.json"
+  register: _frontend_pkg_json
+  when: dashboard_dev_enabled | bool
+
+- name: Stat frontend node_modules install marker
+  ansible.builtin.stat:
+    path: "{{ dashboard_frontend_dir }}/node_modules/.package-lock.json"
+  register: _frontend_npm_marker
+  when: dashboard_dev_enabled | bool
+
+# Avoid spurious npm install reruns. A no-op `npm install` still rewrites
+# package-lock.json mtime, which Vite treats as a dependency change and
+# invalidates the pre-bundle cache (chunks get a new `?v=hash`). Open
+# tabs then end up holding chunks from two cache generations at once,
+# producing "Invalid hook call / more than one copy of React".
+- name: Install frontend dependencies (when package.json newer than marker)
   ansible.builtin.command:
     cmd: npm install
     chdir: "{{ dashboard_frontend_dir }}"
   changed_when: true
-  when: dashboard_dev_enabled | bool
+  when:
+    - dashboard_dev_enabled | bool
+    - (not (_frontend_npm_marker.stat.exists | default(false)))
+      or ((_frontend_pkg_json.stat.mtime | default(0)) > (_frontend_npm_marker.stat.mtime | default(0)))
 
 - name: Install backend systemd service
   become: true

@@ -1,0 +1,75 @@
+---
+# IAM phase defaults. Keycloak provides JWT authentication for the Dashboard
+# (phase 09) and the CAMARA Northbound stack (phases 10 to 12). All defaults
+# are safe placeholders; override at deploy time with -e or ansible-vault.
+
+# ── PostgreSQL (Keycloak backing store) ─────────────────────────────────────
+keycloak_db_image: "docker.io/library/postgres:16"
+keycloak_db_pvc_name: "keycloak-db-data"
+keycloak_db_pvc_size: "1Gi"
+keycloak_db_name: keycloak
+keycloak_db_user: keycloak
+keycloak_db_password: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_DB_PASSWORD') | default('changeme-db', true) }}"
+
+# ── Keycloak server ─────────────────────────────────────────────────────────
+keycloak_image: "quay.io/keycloak/keycloak:26.0"
+# Realm name is also consumed by the dashboard backend (phase 09); keep the
+# env override symmetric so a single KEYCLOAK_REALM=foo applies to both phases.
+keycloak_realm: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_REALM') | default('5g-testbed', true) }}"
+keycloak_admin_user: admin
+keycloak_admin_password: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_ADMIN_PASSWORD') | default('changeme-admin', true) }}"
+keycloak_nodeport: 31910
+
+# Relative path prefix when serving Keycloak under a shared origin (for
+# example "/auth" when the dashboard frontend reverse-proxies /auth/* to
+# Keycloak). Leave empty for root-path deploys (Keycloak on its own host
+# or subdomain). Used by the deployment template (KC_HTTP_RELATIVE_PATH).
+keycloak_path_prefix: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_PATH_PREFIX') | default('', true) }}"
+
+# External origin used to populate redirect URIs and Web Origins inside the
+# realm. Defaults to the worker LAN URL. Override when fronted by a tunnel:
+#   -e dashboard_external_origin=https://dashboard.example.com
+#   -e positioning_demo_external_origin=https://demo.example.com
+dashboard_external_origin: "{{ lookup('ansible.builtin.env', 'DASHBOARD_EXTERNAL_ORIGIN') | default('http://' ~ hostvars[groups['workers'][0]]['ansible_host'] ~ ':31573', true) }}"
+# Optional second origin for the opt-in dev frontend (Vite on ansible
+# VM). When set, added to the dashboard client redirect URIs and Web
+# Origins so OIDC works from both origins.
+dashboard_dev_external_url: "{{ lookup('ansible.builtin.env', 'DASHBOARD_DEV_EXTERNAL_URL') | default('', true) }}"
+positioning_demo_external_origin: "{{ lookup('ansible.builtin.env', 'POSITIONING_DEMO_EXTERNAL_ORIGIN') | default('http://' ~ hostvars[groups['workers'][0]]['ansible_host'] ~ ':31940', true) }}"
+
+# ── Client secrets (M2M / confidential clients) ─────────────────────────────
+# Replace before any non-lab deploy. Documentation: docs/security/iam.md
+camara_client_secret: "{{ lookup('ansible.builtin.env', 'CAMARA_CLIENT_SECRET') | default('changeme-camara', true) }}"
+dashboard_readonly_secret: "{{ lookup('ansible.builtin.env', 'DASHBOARD_READONLY_SECRET') | default('changeme-readonly', true) }}"
+
+# ── Bootstrap end-users for dashboard login (realm 5g-testbed) ──────────────
+# Two seed accounts mirror the two-role model documented in docs/security/iam.md:
+#   admin  → group g-dashboard-admins  → realm role dashboard-admin
+#   viewer → group g-dashboard-viewers → realm role dashboard-viewer
+# Both are created with temporary: true so the password must be reset on first
+# login. Subsequent phase 08 runs do not overwrite a password changed via the
+# Keycloak UI; see docs/security/iam.md.
+dashboard_bootstrap_admin_username: "{{ lookup('ansible.builtin.env', 'DASHBOARD_BOOTSTRAP_ADMIN_USERNAME') | default('admin', true) }}"
+dashboard_bootstrap_admin_password: "{{ lookup('ansible.builtin.env', 'DASHBOARD_BOOTSTRAP_ADMIN_PASSWORD') | default(keycloak_admin_password, true) }}"
+dashboard_bootstrap_viewer_username: "{{ lookup('ansible.builtin.env', 'DASHBOARD_BOOTSTRAP_VIEWER_USERNAME') | default('viewer', true) }}"
+dashboard_bootstrap_viewer_password: "{{ lookup('ansible.builtin.env', 'DASHBOARD_BOOTSTRAP_VIEWER_PASSWORD') | default(dashboard_bootstrap_admin_password, true) }}"
+
+# ── Realm reconcile toggle ──────────────────────────────────────────────────
+# Keycloak imports the realm JSON only on first boot. To propagate later edits
+# to the realm template (redirect URIs, web origins, post-logout URIs, roles,
+# groups, composites) to a running cluster, phase 08 includes a reconcile step
+# that PUTs the resolved values via the Keycloak admin API.
+#
+# Reconcile is OFF by default to avoid overwriting manual changes an operator
+# may have made through the Keycloak admin console. testbed-config asks the
+# operator interactively when phase 08 is launched from the TUI and can
+# persist the answer to .testbed.env as KEYCLOAK_REALM_RECONCILE=true|false.
+keycloak_realm_reconcile: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_REALM_RECONCILE') | default('false', true) }}"
+
+# ── Readiness tuning ────────────────────────────────────────────────────────
+# Keycloak with PostgreSQL takes ~90s on first boot (DB migration + realm import).
+# Keep retry logs readable: fewer attempts, slightly longer interval.
+keycloak_ready_retries: 12
+keycloak_ready_delay: 15
+postgres_ready_retries: 12
+postgres_ready_delay: 10

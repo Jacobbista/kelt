@@ -1,6 +1,7 @@
 import asyncio
 import re
 import logging
+import threading
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 
@@ -56,8 +57,130 @@ def _format_log_line(raw: str) -> str:
 
 INITIAL_TAIL = 200
 MAX_TAIL = 3000
+# Hard cap for from_start. The Kubernetes API read_namespaced_pod_log
+# call returns the WHOLE log in one response when tail_lines is unset;
+# a debug-level NF can produce hundreds of MB, which blocks the call
+# past LOG_CALL_TIMEOUT_S, blows the WebSocket frame limit on the
+# upstream tunnel, and pins memory on the backend. Cap at FROM_START_TAIL
+# and emit a banner so the operator knows older entries were dropped.
+FROM_START_TAIL = 10000
 POLL_INTERVAL_S = 2
 LOG_CALL_TIMEOUT_S = 8
+STREAM_PROGRESS_EVERY_N = 500
+
+
+def _is_nf_line(raw: str) -> bool:
+    m = K8S_TS_RE.match(raw)
+    if not m:
+        return False
+    return bool(APP_TS_RE.match(raw[m.end() :]))
+
+
+async def _stream_from_start(
+    websocket: WebSocket,
+    k8s: K8sService,
+    namespace: str,
+    pod: str,
+    container: str | None,
+) -> str | None:
+    """Stream the historical tail of a pod log line by line.
+
+    Uses the K8s API in raw streaming mode (`_preload_content=False`),
+    decodes lines as they arrive, and forwards each line to the
+    WebSocket. Lets the operator see progress immediately on debug-mode
+    pods instead of blocking on a single huge bulk read. Returns the
+    last K8s timestamp seen so the poll loop can resume from there.
+    """
+    loop = asyncio.get_running_loop()
+    q: asyncio.Queue = asyncio.Queue(maxsize=500)
+    cancel = threading.Event()
+
+    def _producer() -> None:
+        kwargs: dict = {
+            "name": pod,
+            "namespace": namespace,
+            "timestamps": True,
+            "tail_lines": FROM_START_TAIL,
+            "_preload_content": False,
+            "_request_timeout": (5, 600),
+        }
+        if container:
+            kwargs["container"] = container
+        resp = None
+        try:
+            resp = k8s.core.read_namespaced_pod_log(**kwargs)
+            buf = b""
+            for chunk in resp.stream(amt=8192):
+                if cancel.is_set():
+                    break
+                buf += chunk
+                while b"\n" in buf:
+                    raw, buf = buf.split(b"\n", 1)
+                    try:
+                        asyncio.run_coroutine_threadsafe(
+                            q.put(raw.decode("utf-8", errors="replace")), loop
+                        ).result(timeout=5)
+                    except Exception:
+                        cancel.set()
+                        return
+            if buf and not cancel.is_set():
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        q.put(buf.decode("utf-8", errors="replace")), loop
+                    ).result(timeout=5)
+                except Exception:
+                    pass
+        except Exception as exc:
+            log.debug("from_start stream error for %s/%s: %s", namespace, pod, exc)
+        finally:
+            try:
+                if resp is not None:
+                    resp.release_conn()
+            except Exception:
+                pass
+            try:
+                asyncio.run_coroutine_threadsafe(q.put(None), loop)
+            except Exception:
+                pass
+
+    threading.Thread(target=_producer, daemon=True).start()
+
+    last_ts_local: str | None = None
+    sent = 0
+    batch: list[str] = []
+
+    async def _flush() -> None:
+        nonlocal sent
+        if batch:
+            await websocket.send_text("\n".join(batch))
+            sent += len(batch)
+            batch.clear()
+
+    try:
+        while True:
+            line = await q.get()
+            if line is None:
+                break
+            ts = line.split(" ", 1)[0] if " " in line else ""
+            formatted = _format_log_line(line)
+            if _is_nf_line(line):
+                await _flush()
+                await websocket.send_text(formatted)
+                sent += 1
+            else:
+                batch.append(formatted)
+            if ts:
+                last_ts_local = ts
+            if sent and sent % STREAM_PROGRESS_EVERY_N == 0:
+                await _flush()
+                await websocket.send_text(
+                    f"\x1b[90m[dashboard] streamed {sent} lines...\x1b[0m"
+                )
+        await _flush()
+    finally:
+        cancel.set()
+
+    return last_ts_local
 
 
 @router.websocket("/logs/{namespace}/{pod}")
@@ -84,6 +207,22 @@ async def logs_stream(
     sent_count = 0
 
     try:
+        if from_start:
+            await websocket.send_text(
+                f"\x1b[90m[dashboard] streaming last {FROM_START_TAIL} lines from pod start "
+                f"(older entries truncated)...\x1b[0m"
+            )
+            last_ts = await _stream_from_start(websocket, k8s, namespace, pod, container)
+            await websocket.send_text(
+                "\x1b[90m[dashboard] backlog done, following live updates...\x1b[0m"
+            )
+            if last_ts is None:
+                # Stream returned nothing (fresh container, no history yet).
+                # Mark initial fetch as completed so the poll loop switches
+                # to since_seconds instead of re-running the bulk read.
+                last_ts = ""
+                sent_count = 1
+
         while True:
             kwargs: dict = {
                 "name": pod,
@@ -94,9 +233,11 @@ async def logs_stream(
                 kwargs["container"] = container
 
             if last_ts is None:
-                # from_start: fetch full log from pod start (no tail_lines)
-                if not from_start:
-                    kwargs["tail_lines"] = tail_lines
+                kwargs["tail_lines"] = tail_lines
+            elif last_ts == "":
+                # First poll after an empty from_start stream: no since
+                # filter yet so the first new line is captured.
+                pass
             else:
                 kwargs["since_seconds"] = POLL_INTERVAL_S + 2
 
@@ -117,12 +258,6 @@ async def logs_stream(
             if log_text and log_text.strip():
                 batch: list[str] = []  # consecutive non-NF lines sent together
 
-                def _is_nf_line(raw: str) -> bool:
-                    m = K8S_TS_RE.match(raw)
-                    if not m:
-                        return False
-                    return bool(APP_TS_RE.match(raw[m.end() :]))
-
                 async def _flush_batch() -> None:
                     nonlocal sent_count
                     if batch:
@@ -130,9 +265,10 @@ async def logs_stream(
                         sent_count += 1
                         batch.clear()
 
+                effective_last = last_ts if last_ts else None
                 for line in log_text.strip().split("\n"):
                     ts = line.split(" ", 1)[0] if " " in line else ""
-                    if last_ts is None or ts > last_ts:
+                    if effective_last is None or ts > effective_last:
                         formatted = _format_log_line(line)
                         if _is_nf_line(line):
                             await _flush_batch()
@@ -142,6 +278,7 @@ async def logs_stream(
                             batch.append(formatted)
                         if ts:
                             last_ts = ts
+                            effective_last = ts
 
                 await _flush_batch()
 

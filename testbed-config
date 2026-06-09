@@ -20,7 +20,12 @@ DEFAULT_DASHBOARD_KEYCLOAK_EXTERNAL_URL=""
 DEFAULT_DASHBOARD_KEYCLOAK_PATH_PREFIX=""
 DEFAULT_DASHBOARD_EXTERNAL_ORIGIN=""
 DEFAULT_DASHBOARD_DEV_EXTERNAL_URL=""
+DEFAULT_CAMARA_GATEWAY_EXTERNAL_ORIGIN=""
 DEFAULT_POSITIONING_DEMO_EXTERNAL_ORIGIN=""
+# Realm reconcile gate for phase 08. Values: ask | true | false.
+# 'ask' prompts on every phase 08 launch (interactive only); true/false skips
+# the prompt. See docs/security/iam.md.
+DEFAULT_KEYCLOAK_REALM_RECONCILE="ask"
 DEFAULT_KEYCLOAK_ADMIN_PASSWORD=""
 DEFAULT_CAMARA_CLIENT_SECRET=""
 DEFAULT_DASHBOARD_READONLY_SECRET=""
@@ -39,7 +44,9 @@ load_config() {
   DASHBOARD_KEYCLOAK_PATH_PREFIX="${DEFAULT_DASHBOARD_KEYCLOAK_PATH_PREFIX}"
   DASHBOARD_EXTERNAL_ORIGIN="${DEFAULT_DASHBOARD_EXTERNAL_ORIGIN}"
   DASHBOARD_DEV_EXTERNAL_URL="${DEFAULT_DASHBOARD_DEV_EXTERNAL_URL}"
+  CAMARA_GATEWAY_EXTERNAL_ORIGIN="${DEFAULT_CAMARA_GATEWAY_EXTERNAL_ORIGIN}"
   POSITIONING_DEMO_EXTERNAL_ORIGIN="${DEFAULT_POSITIONING_DEMO_EXTERNAL_ORIGIN}"
+  KEYCLOAK_REALM_RECONCILE="${DEFAULT_KEYCLOAK_REALM_RECONCILE}"
   KEYCLOAK_ADMIN_PASSWORD="${DEFAULT_KEYCLOAK_ADMIN_PASSWORD}"
   CAMARA_CLIENT_SECRET="${DEFAULT_CAMARA_CLIENT_SECRET}"
   DASHBOARD_READONLY_SECRET="${DEFAULT_DASHBOARD_READONLY_SECRET}"
@@ -60,7 +67,9 @@ load_config() {
         DASHBOARD_KEYCLOAK_PATH_PREFIX) DASHBOARD_KEYCLOAK_PATH_PREFIX="$value" ;;
         DASHBOARD_EXTERNAL_ORIGIN) DASHBOARD_EXTERNAL_ORIGIN="$value" ;;
         DASHBOARD_DEV_EXTERNAL_URL) DASHBOARD_DEV_EXTERNAL_URL="$value" ;;
+        CAMARA_GATEWAY_EXTERNAL_ORIGIN) CAMARA_GATEWAY_EXTERNAL_ORIGIN="$value" ;;
         POSITIONING_DEMO_EXTERNAL_ORIGIN) POSITIONING_DEMO_EXTERNAL_ORIGIN="$value" ;;
+        KEYCLOAK_REALM_RECONCILE) KEYCLOAK_REALM_RECONCILE="$value" ;;
         # Legacy fallback: migrate old .testbed.env secret to .testbed.secrets.
         KEYCLOAK_ADMIN_PASSWORD) KEYCLOAK_ADMIN_PASSWORD="$value" ;;
       esac
@@ -94,7 +103,9 @@ DASHBOARD_KEYCLOAK_EXTERNAL_URL=${DASHBOARD_KEYCLOAK_EXTERNAL_URL}
 DASHBOARD_KEYCLOAK_PATH_PREFIX=${DASHBOARD_KEYCLOAK_PATH_PREFIX}
 DASHBOARD_EXTERNAL_ORIGIN=${DASHBOARD_EXTERNAL_ORIGIN}
 DASHBOARD_DEV_EXTERNAL_URL=${DASHBOARD_DEV_EXTERNAL_URL}
+CAMARA_GATEWAY_EXTERNAL_ORIGIN=${CAMARA_GATEWAY_EXTERNAL_ORIGIN}
 POSITIONING_DEMO_EXTERNAL_ORIGIN=${POSITIONING_DEMO_EXTERNAL_ORIGIN}
+KEYCLOAK_REALM_RECONCILE=${KEYCLOAK_REALM_RECONCILE}
 EOF
   echo "Configuration saved to .testbed.env"
 }
@@ -180,12 +191,13 @@ do_secrets() {
   local action="${1:-}"
   if [[ -z "$action" ]]; then
     if $HAS_GUM; then
-      action="$(gum choose \
+      action="$(gum_choose_or_cancel \
         "Auto-generate missing secrets" \
         "Set all secrets manually" \
         "Rotate all secrets (generate new values)" \
         "Show secrets status" \
         "Clear all secrets")"
+      [[ -z "$action" ]] && { echo "Cancelled."; return 0; }
     else
       echo "Usage: $0 secrets generate-missing|manual|rotate|status|clear"
       return 1
@@ -307,14 +319,34 @@ gum_or_echo() {
 }
 
 gum_choose() {
+  # gum choose exits non-zero on Esc (nothing selected). With `set -e`
+  # active, that would kill the whole script, so swallow the failure
+  # and return an empty stdout to let callers detect cancellation.
   if $HAS_GUM; then
-    gum choose "$@"
+    gum choose "$@" || true
   else
     select choice in "$@"; do
       echo "$choice"
       return
     done
   fi
+}
+
+# Like gum_choose, but always appends a "← Cancel" item and returns an
+# empty string when the user cancels (either by selecting it or pressing
+# Esc, which gum already maps to empty). Lets every action function
+# bail out cleanly without committing to a choice.
+gum_choose_or_cancel() {
+  local result
+  result="$(gum_choose "$@" "← Cancel")"
+  [[ "$result" == "← Cancel" ]] && return 0
+  printf '%s\n' "$result"
+}
+
+prompt_continue() {
+  echo ""
+  read -rsp "↵ Press Enter to return to menu... " _ || true
+  echo ""
 }
 
 gum_confirm() {
@@ -351,6 +383,8 @@ show_status() {
   prod_url_label="${DASHBOARD_EXTERNAL_ORIGIN:-unset}"
   local dev_url_label
   dev_url_label="${DASHBOARD_DEV_EXTERNAL_URL:-unset}"
+  local camara_url_label
+  camara_url_label="${CAMARA_GATEWAY_EXTERNAL_ORIGIN:-unset}"
 
   if $HAS_GUM; then
     gum style --border rounded --padding "1 2" --border-foreground 39 \
@@ -364,6 +398,7 @@ show_status() {
       "Dev front: ${DASHBOARD_DEV_ENABLED}" \
       "Prod URL:  ${prod_url_label}" \
       "Dev URL:   ${dev_url_label}" \
+      "CAMARA:    ${camara_url_label}" \
       "Auth:      ${auth_label}" \
       "IAM admin: ${iam_admin_label}" \
       "Secrets:   ${secrets_label}"
@@ -379,6 +414,7 @@ show_status() {
     echo "  Dev front: ${DASHBOARD_DEV_ENABLED}"
     echo "  Prod URL:  ${prod_url_label}"
     echo "  Dev URL:   ${dev_url_label}"
+    echo "  CAMARA:    ${camara_url_label}"
     echo "  Auth:      ${auth_label}"
     echo "  IAM admin: ${iam_admin_label}"
     echo "  Secrets:   ${secrets_label}"
@@ -394,7 +430,8 @@ do_set_profile() {
     echo "  laptop  — 4 VMs (18 vCPU, 17 GB) with edge (current default)"
     echo "  server  — 3 VMs (7 vCPU, 14 GB) no edge, optimized for NUC/server"
     echo ""
-    profile="$(gum_choose "laptop" "server")"
+    profile="$(gum_choose_or_cancel "laptop" "server")"
+    [[ -z "$profile" ]] && { echo "Cancelled."; return 0; }
   fi
   case "$profile" in
     laptop|server) TESTBED_PROFILE="$profile" ;;
@@ -449,9 +486,10 @@ do_ran() {
     nics="$(ip -o link show | awk -F': ' '{print $2}' | grep -v '^lo$')"
     echo "$nics"
     echo ""
-    nic="$(echo "$nics" | gum_choose)"
+    nic="$({ echo "$nics"; echo "disable"; echo "← Cancel"; } | gum_choose)"
+    [[ -z "$nic" || "$nic" == "← Cancel" ]] && { echo "Cancelled."; return 0; }
   fi
-  if [[ -z "$nic" || "$nic" == "disable" ]]; then
+  if [[ "$nic" == "disable" ]]; then
     PHYSICAL_RAN_ENABLED="false"
     PHYSICAL_RAN_BRIDGE=""
   else
@@ -468,7 +506,8 @@ do_set_dashboard_dev_enabled() {
   # for live frontend development. Both can coexist on different IPs.
   local value="${1:-}"
   if [[ -z "$value" ]]; then
-    value="$(gum_choose "true" "false")"
+    value="$(gum_choose_or_cancel "true" "false")"
+    [[ -z "$value" ]] && { echo "Cancelled."; return 0; }
   fi
   case "$value" in
     true|on|enabled)   DASHBOARD_DEV_ENABLED="true" ;;
@@ -482,7 +521,8 @@ do_set_dashboard_dev_enabled() {
 do_set_dashboard_auth() {
   local value="${1:-}"
   if [[ -z "$value" ]]; then
-    value="$(gum_choose "enabled" "disabled")"
+    value="$(gum_choose_or_cancel "enabled" "disabled")"
+    [[ -z "$value" ]] && { echo "Cancelled."; return 0; }
   fi
   case "$value" in
     enabled|true) DASHBOARD_AUTH_ENABLED="true" ;;
@@ -491,6 +531,143 @@ do_set_dashboard_auth() {
   esac
   save_config
   echo "Dashboard auth: ${DASHBOARD_AUTH_ENABLED}"
+}
+
+# ─── IAM realm reconcile gate ──────────────────────────────────────────
+# Keycloak imports the realm JSON only on first boot. Phase 08 includes a
+# reconcile step that PUTs redirect URIs, web origins, post-logout URIs,
+# roles, groups, and composites via the Keycloak admin API so changes to
+# the realm template propagate without resetting the database.
+#
+# The gate has three states stored in .testbed.env:
+#   ask   -> prompt the operator on every phase 08 launch (default)
+#   true  -> reconcile without prompting
+#   false -> skip reconcile without prompting
+#
+# Prompting only happens in interactive (TTY) launches of phase 08 via
+# do_run_phase. Non-interactive callers (CI, scripted) honor the stored
+# value or the KEYCLOAK_REALM_RECONCILE environment variable directly.
+do_iam_reconcile() {
+  local value="${1:-}"
+  case "$value" in
+    "")
+      echo "Usage: testbed iam reconcile {on|off|ask|status}"
+      return 1
+      ;;
+    status)
+      echo "IAM realm reconcile: ${KEYCLOAK_REALM_RECONCILE}"
+      return 0
+      ;;
+    on|true|always)
+      KEYCLOAK_REALM_RECONCILE="true"
+      ;;
+    off|false|never)
+      KEYCLOAK_REALM_RECONCILE="false"
+      ;;
+    ask|prompt)
+      KEYCLOAK_REALM_RECONCILE="ask"
+      ;;
+    *)
+      echo "Unknown value: $value (try on|off|ask|status)"
+      return 1
+      ;;
+  esac
+  save_config
+  echo "IAM realm reconcile default: ${KEYCLOAK_REALM_RECONCILE}"
+}
+
+do_iam() {
+  local action="${1:-}"
+  if [[ -z "$action" ]] && $HAS_GUM; then
+    action="$(gum_choose_or_cancel "reconcile status" "reconcile on" "reconcile off" "reconcile ask")"
+    [[ -z "$action" ]] && { echo "Cancelled."; return 0; }
+    case "$action" in
+      "reconcile status") do_iam_reconcile status ;;
+      "reconcile on")     do_iam_reconcile on ;;
+      "reconcile off")    do_iam_reconcile off ;;
+      "reconcile ask")    do_iam_reconcile ask ;;
+    esac
+    return $?
+  fi
+  case "$action" in
+    reconcile) do_iam_reconcile "${2:-}" ;;
+    *)
+      echo "Usage: testbed iam reconcile {on|off|ask|status}"
+      return 1
+      ;;
+  esac
+}
+
+# Interactive prompt invoked before phase 08 runs. Sets the global
+# KC_RECONCILE_THIS_RUN to "true" or "false". The function writes all
+# UI to stderr so the caller can keep stdout clean for downstream
+# captures (do_run_phase used to inline this via $(...), which detached
+# gum from the tty and folded ANSI bytes into the command line).
+prompt_kc_reconcile() {
+  KC_RECONCILE_THIS_RUN=""
+
+  if ! $HAS_GUM || [[ ! -t 0 ]]; then
+    case "${KEYCLOAK_REALM_RECONCILE}" in
+      true)  KC_RECONCILE_THIS_RUN="true";  return 0 ;;
+      false) KC_RECONCILE_THIS_RUN="false"; return 0 ;;
+      # 'ask' with no operator (CI, non-interactive) defaults to false.
+      *)     KC_RECONCILE_THIS_RUN="false"; return 0 ;;
+    esac
+  fi
+
+  case "${KEYCLOAK_REALM_RECONCILE}" in
+    true|false)
+      KC_RECONCILE_THIS_RUN="${KEYCLOAK_REALM_RECONCILE}"
+      return 0
+      ;;
+  esac
+
+  # 'ask' branch: explain and prompt. All output redirected to stderr.
+  gum style --foreground 12 --bold "Keycloak realm reconcile" >&2
+  cat <<'EXPL' >&2
+
+Re-applies the dashboard client redirect URIs, web origins,
+post-logout URIs, realm roles, groups, and composites from the
+template via the Keycloak admin API. Does not touch users, passwords,
+or sessions.
+
+Run reconcile when: the realm template was edited and the change must
+reach the running cluster (skipped clusters keep the imported snapshot
+unless reconciled).
+
+Skip reconcile when: an operator has customized the dashboard client
+through the Keycloak admin console and that customization must be
+preserved.
+
+EXPL
+
+  local choice
+  choice="$(gum_choose_or_cancel \
+    "Yes (this run only)" \
+    "No (this run only)" \
+    "Yes and persist as default (always)" \
+    "No and persist as default (never)")"
+  case "$choice" in
+    "Yes (this run only)")
+      KC_RECONCILE_THIS_RUN="true"
+      ;;
+    "No (this run only)")
+      KC_RECONCILE_THIS_RUN="false"
+      ;;
+    "Yes and persist as default (always)")
+      KEYCLOAK_REALM_RECONCILE="true"
+      save_config >&2
+      KC_RECONCILE_THIS_RUN="true"
+      ;;
+    "No and persist as default (never)")
+      KEYCLOAK_REALM_RECONCILE="false"
+      save_config >&2
+      KC_RECONCILE_THIS_RUN="false"
+      ;;
+    *)
+      KC_RECONCILE_THIS_RUN="false"
+      ;;
+  esac
 }
 
 do_set_external_origin() {
@@ -558,7 +735,7 @@ do_auth_network() {
       echo "Usage: $0 auth-network status|mode|auth|origin|positioning-origin|prefix|keycloak-url|preset-cloudflare"
       return 1
     fi
-    action="$(gum_choose \
+    action="$(gum_choose_or_cancel \
       "Show status" \
       "Toggle dashboard dev frontend (true/false)" \
       "Set dashboard auth (enabled/disabled)" \
@@ -567,6 +744,7 @@ do_auth_network() {
       "Set keycloak path prefix" \
       "Set keycloak external URL" \
       "Apply cloudflare-style preset")"
+    [[ -z "$action" ]] && { echo "Cancelled."; return 0; }
   fi
 
   case "$action" in
@@ -578,6 +756,7 @@ do_auth_network() {
       echo "DASHBOARD_KEYCLOAK_PATH_PREFIX=${DASHBOARD_KEYCLOAK_PATH_PREFIX}"
       echo "DASHBOARD_EXTERNAL_ORIGIN=${DASHBOARD_EXTERNAL_ORIGIN}"
       echo "DASHBOARD_DEV_EXTERNAL_URL=${DASHBOARD_DEV_EXTERNAL_URL}"
+      echo "CAMARA_GATEWAY_EXTERNAL_ORIGIN=${CAMARA_GATEWAY_EXTERNAL_ORIGIN}"
       echo "POSITIONING_DEMO_EXTERNAL_ORIGIN=${POSITIONING_DEMO_EXTERNAL_ORIGIN}"
       ;;
     "Toggle dashboard dev frontend (true/false)"|dev)
@@ -599,12 +778,16 @@ do_auth_network() {
       do_set_keycloak_external_url
       ;;
     "Apply cloudflare-style preset"|preset-cloudflare)
+      # Sub-domain convention assumed for cloudflared ingress: each
+      # surface (prod dashboard, dev dashboard, positioning demo) lives
+      # on its own host so cloudflared routes traffic to the right
+      # NodePort without overlapping ingress rules.
       local domain="$arg"
       if [[ -z "$domain" ]]; then
         if $HAS_GUM; then
-          domain="$(gum input --placeholder "core.example.com")"
+          domain="$(gum input --placeholder "example.com (root domain, sub-domains derived)")"
         else
-          read -rp "Public domain (without scheme): " domain
+          read -rp "Public root domain (sub-domains derived): " domain
         fi
       fi
       if [[ -z "$domain" ]]; then
@@ -614,12 +797,17 @@ do_auth_network() {
       DASHBOARD_AUTH_ENABLED="true"
       KEYCLOAK_PATH_PREFIX="/auth"
       DASHBOARD_KEYCLOAK_PATH_PREFIX="/auth"
-      DASHBOARD_KEYCLOAK_EXTERNAL_URL="https://${domain}"
-      DASHBOARD_EXTERNAL_ORIGIN="https://${domain}"
+      DASHBOARD_KEYCLOAK_EXTERNAL_URL="https://core.${domain}"
+      DASHBOARD_EXTERNAL_ORIGIN="https://core.${domain}"
       DASHBOARD_DEV_EXTERNAL_URL="https://dev.${domain}"
-      POSITIONING_DEMO_EXTERNAL_ORIGIN="https://${domain}"
+      CAMARA_GATEWAY_EXTERNAL_ORIGIN="https://api.${domain}"
+      POSITIONING_DEMO_EXTERNAL_ORIGIN="https://demo.${domain}"
       save_config
-      echo "Applied preset for https://${domain}"
+      echo "Applied preset:"
+      echo "  prod dashboard: https://core.${domain}"
+      echo "  dev dashboard:  https://dev.${domain}"
+      echo "  CAMARA API:     https://api.${domain}"
+      echo "  positioning:    https://demo.${domain}"
       ;;
     *)
       echo "Usage: $0 auth-network status|dev|auth|origin|positioning-origin|prefix|keycloak-url|preset-cloudflare"
@@ -635,10 +823,11 @@ do_iam_admin_password() {
   elif [[ -z "$password" ]]; then
     if $HAS_GUM; then
       local action
-      action="$(gum choose \
+      action="$(gum_choose_or_cancel \
         "Auto-generate strong password" \
         "Enter password manually" \
         "Clear password")"
+      [[ -z "$action" ]] && { echo "Cancelled."; return 0; }
       case "$action" in
         "Auto-generate strong password")
           password="$(generate_password)"
@@ -672,7 +861,7 @@ do_up() {
     return 0
   fi
   (
-    export TESTBED_PROFILE EDGE_ENABLED DEPLOY_MODE PHYSICAL_RAN_ENABLED PHYSICAL_RAN_BRIDGE DASHBOARD_DEV_ENABLED DASHBOARD_AUTH_ENABLED KEYCLOAK_PATH_PREFIX DASHBOARD_KEYCLOAK_EXTERNAL_URL DASHBOARD_KEYCLOAK_PATH_PREFIX DASHBOARD_EXTERNAL_ORIGIN DASHBOARD_DEV_EXTERNAL_URL POSITIONING_DEMO_EXTERNAL_ORIGIN KEYCLOAK_ADMIN_PASSWORD CAMARA_CLIENT_SECRET DASHBOARD_READONLY_SECRET
+    export TESTBED_PROFILE EDGE_ENABLED DEPLOY_MODE PHYSICAL_RAN_ENABLED PHYSICAL_RAN_BRIDGE DASHBOARD_DEV_ENABLED DASHBOARD_AUTH_ENABLED KEYCLOAK_PATH_PREFIX DASHBOARD_KEYCLOAK_EXTERNAL_URL DASHBOARD_KEYCLOAK_PATH_PREFIX DASHBOARD_EXTERNAL_ORIGIN DASHBOARD_DEV_EXTERNAL_URL CAMARA_GATEWAY_EXTERNAL_ORIGIN POSITIONING_DEMO_EXTERNAL_ORIGIN KEYCLOAK_ADMIN_PASSWORD CAMARA_CLIENT_SECRET DASHBOARD_READONLY_SECRET KEYCLOAK_REALM_RECONCILE
     cd "$SCRIPT_DIR"
     vagrant up
   )
@@ -686,7 +875,7 @@ do_provision() {
   fi
   ensure_required_secrets_for_provision || return 1
   (
-    export TESTBED_PROFILE EDGE_ENABLED DEPLOY_MODE PHYSICAL_RAN_ENABLED PHYSICAL_RAN_BRIDGE DASHBOARD_DEV_ENABLED DASHBOARD_AUTH_ENABLED KEYCLOAK_PATH_PREFIX DASHBOARD_KEYCLOAK_EXTERNAL_URL DASHBOARD_KEYCLOAK_PATH_PREFIX DASHBOARD_EXTERNAL_ORIGIN DASHBOARD_DEV_EXTERNAL_URL POSITIONING_DEMO_EXTERNAL_ORIGIN KEYCLOAK_ADMIN_PASSWORD CAMARA_CLIENT_SECRET DASHBOARD_READONLY_SECRET
+    export TESTBED_PROFILE EDGE_ENABLED DEPLOY_MODE PHYSICAL_RAN_ENABLED PHYSICAL_RAN_BRIDGE DASHBOARD_DEV_ENABLED DASHBOARD_AUTH_ENABLED KEYCLOAK_PATH_PREFIX DASHBOARD_KEYCLOAK_EXTERNAL_URL DASHBOARD_KEYCLOAK_PATH_PREFIX DASHBOARD_EXTERNAL_ORIGIN DASHBOARD_DEV_EXTERNAL_URL CAMARA_GATEWAY_EXTERNAL_ORIGIN POSITIONING_DEMO_EXTERNAL_ORIGIN KEYCLOAK_ADMIN_PASSWORD CAMARA_CLIENT_SECRET DASHBOARD_READONLY_SECRET KEYCLOAK_REALM_RECONCILE
     cd "$SCRIPT_DIR"
     if worker_needs_ran_reload; then
       echo "Applying PHYSICAL_RAN_BRIDGE=${PHYSICAL_RAN_BRIDGE} to worker via vagrant reload..."
@@ -715,7 +904,8 @@ do_run_phase() {
       echo "No phase playbooks found under ansible/phases."
       return 1
     fi
-    phase="$(gum_choose "${options[@]}")"
+    phase="$(gum_choose_or_cancel "${options[@]}")"
+    [[ -z "$phase" ]] && { echo "Cancelled."; return 0; }
   fi
 
   if [[ ! -f "${SCRIPT_DIR}/ansible/phases/${phase}/playbook.yml" ]]; then
@@ -726,9 +916,24 @@ do_run_phase() {
   playbook_rel="phases/${phase}/playbook.yml"
   echo "Running single phase: ${playbook_rel}"
 
+  # Per-phase pre-prompts. Phase 08 has a guarded reconcile step the
+  # operator must opt into each run (or persist the answer). The result
+  # is passed to the playbook as KEYCLOAK_REALM_RECONCILE on this run
+  # only; persisted defaults already live in .testbed.env.
+  local phase_extra_env=""
+  local phase_extra_args=""
+  if [[ "$phase" == 08-iam* ]]; then
+    prompt_kc_reconcile
+    phase_extra_env="KEYCLOAK_REALM_RECONCILE=${KC_RECONCILE_THIS_RUN} "
+  fi
+  # Running UERANSIM standalone means you want it deployed, so enable it for this run.
+  if [[ "$phase" == 06-ueransim-mec* ]]; then
+    phase_extra_args="-e ueransim_enabled=true"
+  fi
+
   (
     cd "$SCRIPT_DIR"
-    vagrant ssh ansible -c "bash -lc 'set -euo pipefail; cd ~/ansible-ro; set -a; [ -f /vagrant/.testbed.env ] && source /vagrant/.testbed.env; [ -f /vagrant/.testbed.secrets ] && source /vagrant/.testbed.secrets; set +a; ansible-playbook ${playbook_rel} -e dashboard_dev_enabled=${DASHBOARD_DEV_ENABLED}'"
+    vagrant ssh ansible -c "bash -lc 'set -euo pipefail; cd ~/ansible-ro; set -a; [ -f /vagrant/.testbed.env ] && source /vagrant/.testbed.env; [ -f /vagrant/.testbed.secrets ] && source /vagrant/.testbed.secrets; set +a; ${phase_extra_env}ansible-playbook ${playbook_rel} -e dashboard_dev_enabled=${DASHBOARD_DEV_ENABLED} ${phase_extra_args}'"
   )
 }
 
@@ -774,71 +979,559 @@ do_tests() {
 }
 
 # ─── Interactive mode ──────────────────────────────────────────────────
-interactive_menu() {
+menu_deploy() {
   while true; do
-    show_status
+    local autostart
+    autostart="$(autostart_status)"
+    local items=(
+      "Start cluster (vagrant up)"
+      "Run provisioning (full playbook)"
+      "Run single phase playbook"
+      "Auto-start at boot: ${autostart}"
+      "← Back"
+    )
     local choice
-    # Build menu: deploy mode toggle only visible when edge is enabled
-    local menu_items=(
+    choice="$(gum_choose "${items[@]}")"
+    case "$choice" in
+      "Start cluster (vagrant up)")        do_up ;;
+      "Run provisioning (full playbook)")  do_provision ;;
+      "Run single phase playbook")         do_run_phase ;;
+      "Auto-start at boot: ${autostart}")
+        local act
+        act="$(gum_choose "Enable" "Disable" "Cancel")"
+        case "$act" in
+          "Enable")  do_autostart on ;;
+          "Disable") do_autostart off ;;
+        esac
+        ;;
+      "← Back"|"")                          break ;;
+    esac
+    case "$choice" in
+      "← Back"|"") ;;
+      *)           prompt_continue ;;
+    esac
+  done
+}
+
+menu_configure() {
+  while true; do
+    local items=(
       "Set deployment profile"
       "Toggle edge VM"
       "Configure physical RAN"
-      "Configure auth/network"
-      "Set IAM admin password"
-      "Manage IAM/CAMARA secrets"
-      "Run single phase playbook"
-      "Run tests"
     )
     if [[ "$EDGE_ENABLED" == "true" ]]; then
-      menu_items+=("Toggle UERANSIM (deploy mode)")
+      items+=("Toggle UERANSIM (deploy mode)")
     fi
-    menu_items+=(
-      "Start cluster (vagrant up)"
-      "Run provisioning"
-      "Show full status"
-      "Exit"
-    )
-    choice="$(gum_choose "${menu_items[@]}")"
+    items+=("← Back")
+    local choice
+    choice="$(gum_choose "${items[@]}")"
     case "$choice" in
-      "Set deployment profile")          do_set_profile ;;
-      "Toggle edge VM")                  do_edge ;;
-      "Configure physical RAN")          do_ran ;;
-      "Configure auth/network")          do_auth_network ;;
-      "Set IAM admin password")          do_iam_admin_password ;;
-      "Manage IAM/CAMARA secrets")       do_secrets ;;
-      "Run single phase playbook")       do_run_phase ;;
-      "Run tests")                       do_tests ;;
+      "Set deployment profile")         do_set_profile ;;
+      "Toggle edge VM")                 do_edge ;;
+      "Configure physical RAN")         do_ran ;;
       "Toggle UERANSIM (deploy mode)")
         if [[ "$DEPLOY_MODE" == "full" ]]; then
-          DEPLOY_MODE="core_only"
-          echo "UERANSIM disabled (core_only)"
+          DEPLOY_MODE="core_only"; echo "UERANSIM disabled (core_only)"
         else
-          DEPLOY_MODE="full"
-          echo "UERANSIM enabled (full)"
+          DEPLOY_MODE="full"; echo "UERANSIM enabled (full)"
         fi
-        save_config
-        ;;
-      "Start cluster (vagrant up)")      do_up ;;
-      "Run provisioning")                do_provision ;;
-      "Show full status")                show_status ;;
-      "Exit"|"")                         break ;;
+        save_config ;;
+      "← Back"|"")                       break ;;
     esac
-    echo ""
+    case "$choice" in
+      "← Back"|"") ;;
+      *)           prompt_continue ;;
+    esac
+  done
+}
+
+menu_external_access() {
+  while true; do
+    local items=(
+      "Configure auth/network (sub-menu)"
+      "Toggle dashboard dev frontend"
+      "Set dashboard auth (enabled/disabled)"
+      "IAM realm reconcile default (sub-menu)"
+      "← Back"
+    )
+    local choice
+    choice="$(gum_choose "${items[@]}")"
+    case "$choice" in
+      "Configure auth/network (sub-menu)")    do_auth_network ;;
+      "Toggle dashboard dev frontend")        do_set_dashboard_dev_enabled ;;
+      "Set dashboard auth (enabled/disabled)") do_set_dashboard_auth ;;
+      "IAM realm reconcile default (sub-menu)") do_iam ;;
+      "← Back"|"")                             break ;;
+    esac
+    case "$choice" in
+      "← Back"|"") ;;
+      *)           prompt_continue ;;
+    esac
+  done
+}
+
+menu_secrets() {
+  while true; do
+    local items=(
+      "Set IAM admin password"
+      "Manage IAM/CAMARA secrets"
+      "← Back"
+    )
+    local choice
+    choice="$(gum_choose "${items[@]}")"
+    case "$choice" in
+      "Set IAM admin password")     do_iam_admin_password ;;
+      "Manage IAM/CAMARA secrets")  do_secrets ;;
+      "← Back"|"")                   break ;;
+    esac
+    case "$choice" in
+      "← Back"|"") ;;
+      *)           prompt_continue ;;
+    esac
+  done
+}
+
+interactive_menu() {
+  while true; do
+    show_status
+    local items=(
+      "Deploy        ▸"
+      "Configure     ▸"
+      "External access ▸"
+      "Secrets       ▸"
+      "Tests"
+      "Show full status"
+      "Show service endpoints"
+      "Re-run onboarding checks"
+      "Install CLI alias + completion"
+      "Help"
+      "Exit"
+    )
+    local choice
+    choice="$(gum_choose "${items[@]}")"
+    case "$choice" in
+      "Deploy        ▸")                menu_deploy ;;
+      "Configure     ▸")                menu_configure ;;
+      "External access ▸")              menu_external_access ;;
+      "Secrets       ▸")                menu_secrets ;;
+      "Tests")                          do_tests ;;
+      "Show full status")               show_status ;;
+      "Show service endpoints")         do_endpoints ;;
+      "Re-run onboarding checks")       do_onboarding ;;
+      "Install CLI alias + completion") do_install_cli ;;
+      "Help")                           print_help ;;
+      "Exit")                           break ;;
+      "")
+        # First Esc: ask for confirmation. Block on a single keystroke so
+        # the prompt is visible until the user actually answers. Second
+        # Esc exits; any other key returns to the menu.
+        echo ""
+        echo "Press Esc again to exit, or any other key to stay."
+        local _key
+        IFS= read -rsn1 _key
+        # Drain any trailing bytes (arrow keys, F-keys send ESC + seq)
+        read -rsn3 -t 0.05 _ 2>/dev/null || true
+        if [[ "$_key" == $'\e' ]]; then
+          break
+        fi
+        continue
+        ;;
+    esac
+    # Submenu entries (containing "▸") and Exit/empty skip the pause;
+    # everything else waits for the user before redrawing the menu so
+    # command output doesn't get steamrolled by the next gum render.
+    case "$choice" in
+      *"▸"*|"Exit"|"")  ;;
+      *)                prompt_continue ;;
+    esac
   done
 }
 
 # ─── CLI mode ──────────────────────────────────────────────────────────
-check_gum() {
-  if ! $HAS_GUM; then
-    echo "gum is not installed. Install it for the best experience:"
-    echo "  sudo mkdir -p /etc/apt/keyrings"
-    echo '  curl -fsSL https://repo.charm.sh/apt/gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/charm.gpg'
-    echo '  echo "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" | sudo tee /etc/apt/sources.list.d/charm.list'
-    echo "  sudo apt update && sudo apt install gum"
-    echo ""
-    echo "Falling back to basic terminal mode."
-    echo ""
+ONBOARD_MARKER="${HOME}/.config/5g-testbed/onboarded"
+AUTOSTART_UNIT="/etc/systemd/system/5g-testbed.service"
+
+is_onboarded() { [[ -f "$ONBOARD_MARKER" ]]; }
+mark_onboarded() {
+  mkdir -p "$(dirname "$ONBOARD_MARKER")"
+  printf 'repo=%s\nat=%s\n' "$SCRIPT_DIR" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$ONBOARD_MARKER"
+}
+
+check_item() {
+  # check_item "<label>" "<probe command>"
+  local label="$1" probe="$2"
+  if eval "$probe" >/dev/null 2>&1; then
+    printf "  \033[32m✓\033[0m %s\n" "$label"
+    return 0
   fi
+  printf "  \033[31m✗\033[0m %s\n" "$label"
+  return 1
+}
+
+do_onboarding() {
+  echo ""
+  echo "════════════════════════════════════════════════════════════"
+  echo "  5G K3s KubeEdge Testbed — Onboarding"
+  echo "════════════════════════════════════════════════════════════"
+  echo ""
+  echo "Tested on Ubuntu 22.04 / 24.04. Auto-fixes use apt; on other"
+  echo "distros install the missing packages with your package manager."
+  echo ""
+  echo "Required:"
+  local missing_vagrant=false missing_vbox=false missing_virt=false missing_gum=false
+  check_item "vagrant binary"               "command -v vagrant"                  || missing_vagrant=true
+  check_item "VirtualBox (vboxmanage)"      "command -v vboxmanage"               || missing_vbox=true
+  check_item "CPU virtualization (vmx/svm)" "grep -qE '(vmx|svm)' /proc/cpuinfo"  || missing_virt=true
+  check_item "gum (TUI helper)"             "command -v gum"                      || missing_gum=true
+  echo ""
+  echo "Local config:"
+  local missing_env=false missing_alias=false
+  check_item "Config file (.testbed.env)"   "[ -f \"$ENV_FILE\" ]"                        || missing_env=true
+  check_item "Shell alias 'testbed'"        "grep -q TESTBED_CONFIG_ALIAS \"$HOME/.bashrc\"" || missing_alias=true
+  echo ""
+  echo "Optional:"
+  # vboxusers group is only needed for VirtualBox USB passthrough. Plain VM
+  # bring-up works without it, so it is reported as a hint rather than a fail.
+  if id -nG | grep -qw vboxusers; then
+    printf "  \033[32m✓\033[0m %s\n" "User in vboxusers group (needed only for USB passthrough)"
+  else
+    printf "  \033[33m·\033[0m %s\n" "User NOT in vboxusers group (only matters for USB passthrough; safe to skip)"
+  fi
+  echo ""
+
+  if ! $missing_vagrant && ! $missing_vbox && ! $missing_virt \
+     && ! $missing_gum && ! $missing_env && ! $missing_alias; then
+    echo "All required checks passed."
+    mark_onboarded
+    return 0
+  fi
+
+  read -r -p "Run auto-fixes for the items that can be fixed? [Y/n] " reply
+  reply="${reply:-Y}"
+  if [[ ! "$reply" =~ ^[yY] ]]; then
+    echo "Skipped. Re-run with: testbed-config onboarding"
+    return 1
+  fi
+
+  if $missing_gum; then
+    echo ""
+    echo "→ Installing gum via apt..."
+    install_gum_apt && HAS_GUM=true || echo "gum install failed (continuing)."
+  fi
+
+  if $missing_vagrant || $missing_vbox; then
+    echo ""
+    echo "→ vagrant / VirtualBox not installed. On Ubuntu/Debian:"
+    echo "    sudo apt-get update"
+    echo "    sudo apt-get install -y vagrant virtualbox virtualbox-dkms"
+    echo "  Then re-run: testbed-config onboarding"
+  fi
+
+  if $missing_virt; then
+    echo ""
+    echo "⚠  CPU virtualization extensions not detected. Enable VT-x/AMD-V in BIOS/UEFI."
+  fi
+
+  if $missing_alias; then
+    echo ""
+    read -r -p "→ Install 'testbed' shell alias + completion? [Y/n] " reply
+    reply="${reply:-Y}"
+    [[ "$reply" =~ ^[yY] ]] && do_install_cli
+  fi
+
+  if $missing_env; then
+    echo ""
+    read -r -p "→ Initialize config now (set profile)? [Y/n] " reply
+    reply="${reply:-Y}"
+    [[ "$reply" =~ ^[yY] ]] && do_set_profile
+  fi
+
+  echo ""
+  echo "Onboarding done. Next steps:"
+  echo "  testbed up         # start cluster"
+  echo "  testbed            # interactive menu"
+  echo "  testbed help       # full reference"
+  mark_onboarded
+}
+
+autostart_status() {
+  if [ ! -f "$AUTOSTART_UNIT" ]; then
+    echo "disabled (unit not installed)"
+    return
+  fi
+  local enabled
+  enabled="$(systemctl is-enabled 5g-testbed.service 2>/dev/null || echo unknown)"
+  echo "$enabled"
+}
+
+do_endpoints() {
+  # Worker LAN IP is fixed in the Vagrantfile (private host-only network).
+  # Override via WORKER_LAN_IP env var if a non-default Vagrantfile is used.
+  local worker="${WORKER_LAN_IP:-192.168.56.11}"
+  local dash_prod="${DASHBOARD_EXTERNAL_ORIGIN:-http://${worker}:31573}"
+  local dash_dev="${DASHBOARD_DEV_EXTERNAL_URL:-}"
+  local kc_base="${DASHBOARD_KEYCLOAK_EXTERNAL_URL:-http://${worker}:31910}"
+  local kc_prefix="${KEYCLOAK_PATH_PREFIX:-}"
+  local camara="${CAMARA_GATEWAY_EXTERNAL_ORIGIN:-http://${worker}:31920}"
+  local demo="${POSITIONING_DEMO_EXTERNAL_ORIGIN:-http://${worker}:31940}"
+
+  echo ""
+  echo "Service endpoints"
+  echo "─────────────────"
+  printf "  %-22s %s\n" "Dashboard (prod):"  "$dash_prod"
+  if [[ -n "$dash_dev" ]]; then
+    printf "  %-22s %s\n" "Dashboard (dev):"   "$dash_dev"
+  else
+    printf "  %-22s %s\n" "Dashboard (dev):"   "(disabled — set DASHBOARD_DEV_EXTERNAL_URL or 'dashboard-dev true')"
+  fi
+  printf "  %-22s %s\n" "Keycloak:"          "${kc_base}${kc_prefix}"
+  printf "  %-22s %s\n" "CAMARA Gateway:"    "$camara"
+  printf "  %-22s %s\n" "Positioning Demo:"  "$demo"
+  echo ""
+  echo "External URLs come from .testbed.env. Default LAN ports point to the"
+  echo "worker NodePort (override WORKER_LAN_IP if your worker uses a different IP)."
+}
+
+do_autostart() {
+  local action="${1:-status}"
+  case "$action" in
+    on|enable)
+      local vagrant_bin
+      vagrant_bin="$(command -v vagrant || echo /usr/bin/vagrant)"
+      echo "Installing systemd unit at $AUTOSTART_UNIT (sudo required)..."
+      sudo tee "$AUTOSTART_UNIT" >/dev/null <<EOF
+[Unit]
+Description=5G K3s KubeEdge Testbed (vagrant up)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=${USER}
+Group=${USER}
+WorkingDirectory=${SCRIPT_DIR}
+Environment=HOME=${HOME}
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=${vagrant_bin} up
+ExecStop=${vagrant_bin} halt
+RemainAfterExit=yes
+TimeoutStartSec=30m
+TimeoutStopSec=5m
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+      sudo systemctl daemon-reload
+      sudo systemctl enable 5g-testbed.service
+      echo ""
+      echo "Autostart enabled. Cluster will start on next boot."
+      echo "Follow logs with: journalctl -u 5g-testbed.service -f"
+      ;;
+    off|disable)
+      if [ -f "$AUTOSTART_UNIT" ]; then
+        sudo systemctl disable 5g-testbed.service 2>/dev/null || true
+        sudo rm -f "$AUTOSTART_UNIT"
+        sudo systemctl daemon-reload
+        echo "Autostart disabled and unit removed."
+      else
+        echo "Autostart already disabled (no unit present)."
+      fi
+      ;;
+    status|"")
+      echo "Autostart: $(autostart_status)"
+      [ -f "$AUTOSTART_UNIT" ] && echo "Unit file:  $AUTOSTART_UNIT"
+      ;;
+    *)
+      echo "Usage: testbed-config autostart [on|off|status]"
+      return 1
+      ;;
+  esac
+}
+
+install_gum_apt() {
+  local rc=0
+  sudo mkdir -p /etc/apt/keyrings || return 1
+  curl -fsSL https://repo.charm.sh/apt/gpg.key \
+    | sudo gpg --dearmor -o /etc/apt/keyrings/charm.gpg || return 1
+  echo "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" \
+    | sudo tee /etc/apt/sources.list.d/charm.list >/dev/null
+  sudo apt-get update -qq || rc=1
+  sudo apt-get install -y gum || rc=1
+  command -v gum >/dev/null && return 0 || return $rc
+}
+
+check_gum() {
+  if $HAS_GUM; then return 0; fi
+  if [[ -t 0 && -t 1 ]]; then
+    echo "gum (TUI helper) is not installed. It powers the interactive menu."
+    read -r -p "Install gum now via apt (uses sudo)? [Y/n] " reply
+    reply="${reply:-Y}"
+    if [[ "$reply" =~ ^[yY] ]]; then
+      if install_gum_apt; then
+        HAS_GUM=true
+        echo "gum installed."
+        echo ""
+        return 0
+      else
+        echo "gum install failed. Continuing in basic terminal mode."
+        echo ""
+        return 1
+      fi
+    fi
+  fi
+  echo "Continuing without gum (basic terminal mode)."
+  echo "Re-run 'testbed-config install' later to install gum + the 'testbed' alias."
+  echo ""
+}
+
+do_install_cli() {
+  local bin_path="$SCRIPT_DIR/testbed-config"
+  local rc_file="${HOME}/.bashrc"
+  local marker_alias="# TESTBED_CONFIG_ALIAS"
+  local marker_comp="# TESTBED_CONFIG_COMPLETION"
+
+  if ! $HAS_GUM; then
+    read -r -p "Install gum via apt as well? [Y/n] " reply
+    reply="${reply:-Y}"
+    if [[ "$reply" =~ ^[yY] ]]; then
+      install_gum_apt && HAS_GUM=true || echo "gum install failed (continuing with alias setup)."
+    fi
+  fi
+
+  if grep -q "$marker_alias" "$rc_file" 2>/dev/null; then
+    echo "Alias already present in $rc_file"
+  else
+    {
+      echo ""
+      echo "$marker_alias"
+      echo "alias testbed='$bin_path'"
+    } >> "$rc_file"
+    echo "Added alias 'testbed' -> $bin_path in $rc_file"
+  fi
+
+  local comp_dir="${HOME}/.bash_completion.d"
+  mkdir -p "$comp_dir"
+  local comp_file="$comp_dir/testbed"
+  cat > "$comp_file" <<'BASH'
+_testbed_complete() {
+  local cur prev opts
+  COMPREPLY=()
+  cur="${COMP_WORDS[COMP_CWORD]}"
+  prev="${COMP_WORDS[COMP_CWORD-1]}"
+  opts="show endpoints set-profile edge ran auth-network dashboard-dev dashboard-auth \
+iam iam-admin-password secrets run-phase tests up provision env install onboarding \
+autostart help"
+  case "$prev" in
+    set-profile)        COMPREPLY=( $(compgen -W "laptop server" -- "$cur") ); return ;;
+    edge|dashboard-dev) COMPREPLY=( $(compgen -W "true false on off" -- "$cur") ); return ;;
+    dashboard-auth)     COMPREPLY=( $(compgen -W "enabled disabled" -- "$cur") ); return ;;
+    auth-network)       COMPREPLY=( $(compgen -W "status dev auth origin positioning-origin prefix keycloak-url preset-cloudflare" -- "$cur") ); return ;;
+    iam)                COMPREPLY=( $(compgen -W "reconcile" -- "$cur") ); return ;;
+    reconcile)          COMPREPLY=( $(compgen -W "on off ask status" -- "$cur") ); return ;;
+    secrets)            COMPREPLY=( $(compgen -W "generate-missing manual rotate status clear" -- "$cur") ); return ;;
+    autostart)          COMPREPLY=( $(compgen -W "on off status" -- "$cur") ); return ;;
+  esac
+  COMPREPLY=( $(compgen -W "$opts" -- "$cur") )
+}
+complete -F _testbed_complete testbed
+complete -F _testbed_complete testbed-config
+BASH
+  echo "Wrote bash completion -> $comp_file"
+
+  if ! grep -q "$marker_comp" "$rc_file" 2>/dev/null; then
+    {
+      echo ""
+      echo "$marker_comp"
+      echo "[ -f $comp_file ] && source $comp_file"
+    } >> "$rc_file"
+    echo "Registered completion source in $rc_file"
+  fi
+
+  echo ""
+  echo "Done. The alias is live in any NEW shell you open."
+  echo "To use it in THIS shell right now, run one of:"
+  echo "    source $rc_file"
+  echo "    exec bash"
+  echo "Then call:  testbed help"
+}
+
+print_help() {
+  cat <<EOF
+NAME
+    testbed-config - configure and drive the 5G K3s KubeEdge testbed
+
+SYNOPSIS
+    testbed-config [command] [args...]
+
+DESCRIPTION
+    Interactive TUI when called without arguments. All commands are also
+    available non-interactively for scripts and CI. State is persisted to
+    .testbed.env (config) and .testbed.secrets (secrets) in the repo root.
+
+SETUP
+    onboarding                   First-run wizard: check host requirements
+                                 (vagrant, VirtualBox, vboxusers group,
+                                 CPU virt, gum), offer auto-fixes, install
+                                 alias, initialize config. Runs once
+                                 automatically on the very first invocation.
+    install                      Install 'testbed' alias + bash completion
+                                 in ~/.bashrc (offers to apt-install gum).
+
+DEPLOY
+    up                           vagrant up with current config
+    provision                    Full ansible provision (vagrant provision ansible)
+    run-phase [phase-dir]        Run one ansible phase playbook standalone
+    autostart [on|off|status]    Toggle systemd unit that runs 'vagrant up' on
+                                 boot (system-wide, requires sudo).
+
+CONFIGURE
+    set-profile <laptop|server>  Resource profile
+    edge <on|off>                Toggle edge VM
+    ran <nic|disable>            Physical RAN bridge
+
+EXTERNAL ACCESS
+    auth-network [subcmd]        Subcmds:
+                                   status, dev, auth, origin,
+                                   positioning-origin, prefix, keycloak-url,
+                                   preset-cloudflare <root-domain>
+    dashboard-dev [true|false]   Toggle opt-in Vite dev frontend
+    dashboard-auth [enabled|disabled]
+
+IAM (Keycloak)
+    iam reconcile {on|off|ask|status}
+                                 Realm reconcile gate for phase 08. 'ask'
+                                 (default) prompts on every phase 08 launch
+                                 from the TUI. 'on'/'off' persist the answer.
+                                 See docs/security/iam.md.
+
+SECRETS
+    iam-admin-password [pwd|--clear]
+    secrets [generate-missing|manual|rotate|status|clear]
+
+STATUS & TEST
+    show                         Print current configuration
+    endpoints                    Print service URLs (dashboard, demo, CAMARA,
+                                 Keycloak) — external if set, else LAN NodePort
+    env                          Print 'export' lines for shell eval
+    tests [suite...]             Run test suites (interactive picker if none)
+
+HELP
+    help, -h, --help             Show this page
+
+EXAMPLES
+    testbed install                          # first-run setup
+    testbed up
+    testbed auth-network preset-cloudflare mydomain.com
+    testbed run-phase 09-dashboard
+    testbed secrets rotate
+
+FILES
+    .testbed.env       persisted config (committed-safe)
+    .testbed.secrets   passwords + client secrets (gitignored)
+EOF
 }
 
 main() {
@@ -855,6 +1548,9 @@ main() {
       do_ran "${2:-}" ;;
     iam-admin-password)
       do_iam_admin_password "${2:-}" ;;
+    iam)
+      shift
+      do_iam "$@" ;;
     secrets)
       do_secrets "${2:-}" ;;
     auth-network)
@@ -886,37 +1582,29 @@ main() {
       echo "export DASHBOARD_KEYCLOAK_PATH_PREFIX=${DASHBOARD_KEYCLOAK_PATH_PREFIX}"
       echo "export DASHBOARD_EXTERNAL_ORIGIN=${DASHBOARD_EXTERNAL_ORIGIN}"
       echo "export DASHBOARD_DEV_EXTERNAL_URL=${DASHBOARD_DEV_EXTERNAL_URL}"
+      echo "export CAMARA_GATEWAY_EXTERNAL_ORIGIN=${CAMARA_GATEWAY_EXTERNAL_ORIGIN}"
       echo "export POSITIONING_DEMO_EXTERNAL_ORIGIN=${POSITIONING_DEMO_EXTERNAL_ORIGIN}"
+      echo "export KEYCLOAK_REALM_RECONCILE=${KEYCLOAK_REALM_RECONCILE}"
       echo "# Secrets are stored in .testbed.secrets:"
       echo "#   KEYCLOAK_ADMIN_PASSWORD"
       echo "#   CAMARA_CLIENT_SECRET"
       echo "#   DASHBOARD_READONLY_SECRET"
       ;;
+    install)
+      do_install_cli ;;
+    endpoints)
+      do_endpoints ;;
+    onboarding)
+      do_onboarding ;;
+    autostart)
+      do_autostart "${2:-}" ;;
     help|--help|-h)
-      echo "Usage: $0 [command] [args]"
-      echo ""
-      echo "Interactive mode (no arguments):"
-      echo "  $0                        Launch interactive TUI menu"
-      echo ""
-      echo "Commands:"
-      echo "  show                      Show current configuration"
-      echo "  set-profile <laptop|server>  Set deployment profile"
-      echo "  edge <on|off>             Enable/disable edge VM"
-      echo "  ran <nic|disable>         Configure physical RAN bridge"
-      echo "  auth-network [status|dev|auth|origin|positioning-origin|prefix|keycloak-url|preset-cloudflare]"
-      echo "                            Configure auth/domain/path values (gum-guided by default)"
-      echo "  dashboard-dev [true|false]   Toggle the opt-in Vite dev frontend on the ansible VM"
-      echo "  dashboard-auth [enabled|disabled] Set dashboard auth"
-      echo "  iam-admin-password [pwd|--clear]  Set or clear Keycloak admin bootstrap password"
-      echo "  secrets [generate-missing|manual|rotate|status|clear]  Manage IAM/CAMARA secrets"
-      echo "  run-phase [phase-dir]     Run one ansible phase playbook with env auto-load"
-      echo "  tests [suite...]          Run test suites (interactive picker if no args)"
-      echo "  up                        Run vagrant up with current config"
-      echo "  provision                 Run vagrant provision ansible (full playbook)"
-      echo "  env                       Print export commands for current config"
-      echo "  help                      Show this help"
-      ;;
+      print_help ;;
     "")
+      if ! is_onboarded; then
+        do_onboarding
+        echo ""
+      fi
       check_gum
       interactive_menu ;;
     *)

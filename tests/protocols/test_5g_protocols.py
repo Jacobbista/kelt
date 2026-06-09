@@ -315,36 +315,54 @@ class ProtocolTestSuite:
             return False
     
     def test_vxlan_tunnels(self) -> bool:
-        """Test VXLAN tunnel configuration"""
+        """Test VXLAN tunnel configuration.
+
+        ovs-setup.sh builds per-interface VXLAN tunnels only in multi-node
+        (edge-enabled) topology; with edge disabled the bridges are local and
+        carry no VXLAN (the only kernel vxlan device is flannel, unrelated to
+        the 5G overlays). The check is therefore gated on edge node presence:
+        skipped when edge is off, asserted when edge is on.
+        """
         self.logger.info("Testing VXLAN tunnel configuration...")
-        
+
         try:
-            # OVS setup is done by ds-net-setup-* DaemonSets, not pods named "ovs"
-            ovs_pods = [p for p in self.kubectl.get_pods("kube-system") 
-                       if "ds-net-setup" in p["metadata"]["name"].lower() 
-                       or "ovs" in p["metadata"]["name"].lower()]
-            
-            if not ovs_pods:
-                # Not an error - OVS might be configured directly on nodes
-                self.logger.warning("No OVS setup pods found (this may be normal)")
+            nodes = self.kubectl.get_nodes()
+            edge_nodes = [n for n in nodes if "edge" in n["metadata"]["name"].lower()]
+            if not edge_nodes:
+                self.logger.warning(
+                    "Edge disabled: 5G overlays use local bridges, no VXLAN tunnels expected (skipping)"
+                )
                 return True
-            
+
+            # OVS setup is done by ds-net-setup-* DaemonSets, not pods named "ovs"
+            ovs_pods = [p for p in self.kubectl.get_pods("kube-system")
+                        if "ds-net-setup" in p["metadata"]["name"].lower()
+                        or "ovs" in p["metadata"]["name"].lower()]
             running_ovs = [p for p in ovs_pods if p["status"]["phase"] == "Running"]
-            if running_ovs:
-                self.logger.success(f"Found {len(running_ovs)} running OVS setup pods")
-            
+            if not running_ovs:
+                self.logger.warning("Edge enabled but no running OVS setup pods found")
+                return True
+
+            self.logger.success(f"Found {len(running_ovs)} running OVS setup pods")
+
+            found_vxlan = False
             for ovs_pod in running_ovs:
                 pod_name = ovs_pod["metadata"]["name"]
                 try:
                     result = self.kubectl.exec_in_pod(pod_name, "kube-system", ["ovs-vsctl", "show"])
                     if "vxlan" in result.stdout.lower():
                         self.logger.success(f"VXLAN interfaces found on {pod_name}")
+                        found_vxlan = True
                     else:
                         self.logger.warning(f"No VXLAN interfaces found on {pod_name}")
                 except Exception as e:
                     self.logger.warning(f"Could not check VXLAN on {pod_name}: {e}")
+
+            if not found_vxlan:
+                self.logger.error("Edge enabled but no VXLAN tunnels found on any OVS pod")
+                return False
             return True
-            
+
         except Exception as e:
             self.logger.error(f"VXLAN tunnel test failed: {e}")
             return False

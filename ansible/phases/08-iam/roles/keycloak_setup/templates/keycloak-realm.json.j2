@@ -108,7 +108,8 @@
       ],
       "protocol": "openid-connect",
       "attributes": {
-        "pkce.code.challenge.method": "S256"
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "{{ dashboard_external_origin }}/*{% if dashboard_dev_external_url %}##{{ dashboard_dev_external_url }}/*{% endif %}"
       }
     },
     {

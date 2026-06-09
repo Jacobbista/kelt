@@ -49,7 +49,7 @@ sudo k3s kubectl -n 5g exec deploy/ue -- cat /etc/ueransim/ue.yaml | grep -A5 up
 ```bash
 # Check UPF-edge N3 interface
 sudo k3s kubectl -n 5g exec deploy/upf-edge -- ip -o -4 addr show dev n3
-# Expected: 10.203.0.100/24
+# Expected: 10.203.0.102/24
 
 # Check UPF-cloud N3 interface
 sudo k3s kubectl -n 5g exec deploy/upf-cloud -- ip -o -4 addr show dev n3
@@ -91,16 +91,16 @@ If `10.203.0.1` is missing on `br-n3`, PDU setup can fail before user-plane traf
 
 ```bash
 # Test gNB → UPF-edge connectivity
-sudo k3s kubectl -n 5g exec deploy/gnb -- ping -c 3 -I n3 10.203.0.100
+sudo k3s kubectl -n 5g exec deploy/gnb -- ping -c 3 -I n3 10.203.0.102
 
 # Test gNB → UPF-cloud connectivity
 sudo k3s kubectl -n 5g exec deploy/gnb -- ping -c 3 -I n3 10.203.0.101
 
 # Test UE → UPF-edge connectivity
-sudo k3s kubectl -n 5g exec deploy/ue -- ping -c 3 -I n3 10.203.0.100
+sudo k3s kubectl -n 5g exec deploy/ue -- ping -c 3 -I n3 10.203.0.102
 
 # Test GTP-U port connectivity
-sudo k3s kubectl -n 5g exec deploy/gnb -- nc -zuvw1 10.203.0.100 2152
+sudo k3s kubectl -n 5g exec deploy/gnb -- nc -zuvw1 10.203.0.102 2152
 sudo k3s kubectl -n 5g exec deploy/gnb -- nc -zuvw1 10.203.0.101 2152
 ```
 
@@ -208,7 +208,7 @@ sudo k3s kubectl -n 5g exec deploy/upf-edge -- cat /etc/open5gs/upf-edge.yaml | 
 
 **Symptoms:**
 
-- `nc -zuvw1 10.203.0.100 2152` fails
+- `nc -zuvw1 10.203.0.102 2152` fails
 - gNB/UE logs show "connection refused" or "timeout"
 
 **Diagnosis:**
@@ -301,13 +301,13 @@ sudo tcpdump -i br-n3 -n port 2152
 
 ```bash
 # Test GTP-U data flow
-sudo k3s kubectl -n 5g exec deploy/gnb -- iperf3 -c 10.203.0.100 -p 2152 -t 10
+sudo k3s kubectl -n 5g exec deploy/gnb -- iperf3 -c 10.203.0.102 -p 2152 -t 10
 
 # Test with different packet sizes
-sudo k3s kubectl -n 5g exec deploy/gnb -- ping -c 10 -s 1472 -I n3 10.203.0.100
+sudo k3s kubectl -n 5g exec deploy/gnb -- ping -c 10 -s 1472 -I n3 10.203.0.102
 
 # Test UDP throughput
-sudo k3s kubectl -n 5g exec deploy/gnb -- iperf3 -u -c 10.203.0.100 -p 2152 -b 100M -t 10
+sudo k3s kubectl -n 5g exec deploy/gnb -- iperf3 -u -c 10.203.0.102 -p 2152 -b 100M -t 10
 ```
 
 ### Configuration Validation
@@ -317,7 +317,7 @@ sudo k3s kubectl -n 5g exec deploy/gnb -- iperf3 -u -c 10.203.0.100 -p 2152 -b 1
 sudo k3s kubectl -n 5g exec deploy/upf-edge -- cat /etc/open5gs/upf-edge.yaml | grep -A20 gtpu
 
 # Check static IP assignments
-sudo k3s kubectl -n 5g exec deploy/upf-edge -- ip addr show dev n3 | grep 10.203.0.100
+sudo k3s kubectl -n 5g exec deploy/upf-edge -- ip addr show dev n3 | grep 10.203.0.102
 sudo k3s kubectl -n 5g exec deploy/upf-cloud -- ip addr show dev n3 | grep 10.203.0.101
 
 # Check gNB configuration

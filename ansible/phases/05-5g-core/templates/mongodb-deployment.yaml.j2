@@ -5,7 +5,7 @@ metadata:
   namespace: {{ namespace_5g }}
   annotations:
     checksum/config: "{{ lookup('file', playbook_dir + '/configs/mongodb.conf') | hash('sha256') }}"
-    checksum/scripts: "{{ lookup('file', playbook_dir + '/scripts/mongo_webui_init.sh') | hash('sha256') }}"
+    checksum/scripts: "{{ lookup('file', playbook_dir + '/scripts/mongo_init.sh') | hash('sha256') }}"
 spec:
   replicas: 1
   strategy:
@@ -26,13 +26,15 @@ spec:
     spec:
       nodeSelector:
         kubernetes.io/hostname: worker
+      # mongo:6 runs as UID/GID 999 (mongodb user); fsGroup ensures PVC mount is group-accessible
+      # when migrating from a root-owned data directory.
+      securityContext:
+        fsGroup: 999
       containers:
       - name: mongodb
         image: {{ mongodb_image }}
         imagePullPolicy: IfNotPresent
         ports:
-        - containerPort: 3000
-          name: webui
         - containerPort: 27017
           name: mongodb
         readinessProbe:
@@ -40,24 +42,27 @@ spec:
             port: 27017
           initialDelaySeconds: 5
           periodSeconds: 5
-          failureThreshold: 30
-        command: ["bash", "/open5gs/install/scripts/mongo_webui_init.sh"]
+          failureThreshold: 12
+        livenessProbe:
+          tcpSocket:
+            port: 27017
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          failureThreshold: 6
+        command: ["bash", "/scripts/mongo_init.sh"]
         env:
-        - name: COMPONENT_NAME
-          value: "mongo"
-        - name: HEALTH_CHECK_TYPE
-          value: "mongo"
         - name: SUBSCRIBER_SNAPSHOT_PATH
           value: "/etc/subscribers-snapshot/snapshot.json"
         volumeMounts:
         - name: mongodb-data
           mountPath: /var/lib/mongodb
         - name: mongodb-config
-          mountPath: /open5gs/install/etc/open5gs
+          mountPath: /etc/mongod.conf
+          subPath: mongodb.conf
         - name: nf-scripts
-          mountPath: /open5gs/install/scripts
+          mountPath: /scripts
         - name: mongodb-logs
-          mountPath: /open5gs/install/var/log/open5gs
+          mountPath: /var/log/mongodb
         - name: subscribers-snapshot
           mountPath: /etc/subscribers-snapshot
           readOnly: true

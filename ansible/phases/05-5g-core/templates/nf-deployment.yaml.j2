@@ -8,7 +8,6 @@ spec:
   replicas: {{ nf.replicas | default(1) }}
 {% if has_static_secondary_ips %}
   # Static Multus IPs cannot be safely rolled with overlapping old/new pods.
-  # rollingUpdate: null removes it when patching from RollingUpdate (forbidden with Recreate)
   strategy:
     rollingUpdate: null
     type: Recreate
@@ -22,7 +21,9 @@ spec:
         app: {{ nf.name }}
       annotations:
         checksum/config: "{{ lookup('template', playbook_dir + '/configs/' ~ (nf.name | replace('-', '_')) ~ '.yaml') | hash('sha256') }}"
-        checksum/scripts: "{{ lookup('file', playbook_dir + '/scripts/' ~ (nf.name | replace('-', '_')) ~ '_init.sh') | hash('sha256') }}"
+{% if nf.setup_script is defined %}
+        checksum/setup: "{{ lookup('file', playbook_dir + '/scripts/' ~ nf.setup_script) | hash('sha256') }}"
+{% endif %}
 {% if nf.networks is defined %}
         k8s.v1.cni.cncf.io/networks: |
           {{ nf.networks | to_json }}
@@ -31,24 +32,58 @@ spec:
       terminationGracePeriodSeconds: 15
       nodeSelector:
         kubernetes.io/hostname: {{ nf.node | default('worker') }}
-{% if nf.enable_rp_filter_fix | default(false) %}
       initContainers:
+{% if nf.enable_rp_filter_fix | default(false) %}
       - name: sysctl-init
         image: busybox
         command: ["/bin/sh", "-c"]
         args:
           - |
-            sysctl -w net.ipv4.conf.all.rp_filter=0;
-            sysctl -w net.ipv4.conf.default.rp_filter=0;
-            sysctl -w net.ipv4.ip_forward=1;
-            echo "Multi-homed routing enabled for {{ nf.name }}"
+            sysctl -w net.ipv4.conf.all.rp_filter=0
+            sysctl -w net.ipv4.conf.default.rp_filter=0
+            sysctl -w net.ipv4.ip_forward=1
+            echo "sysctl ready for {{ nf.name }}"
         securityContext:
           privileged: true
 {% endif %}
+      - name: wait-deps
+        image: busybox
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+{% if nf.db_required | default(true) %}
+            until nc -z mongodb 27017; do echo "waiting mongodb..."; sleep 2; done
+{% endif %}
+{% if nf.name != 'nrf' %}
+            until nc -z nrf 7777; do echo "waiting nrf..."; sleep 2; done
+{% endif %}
+{% for iface in nf.wait_interfaces | default([]) %}
+            until ip addr show {{ iface }} 2>/dev/null | grep -q "inet"; do echo "waiting {{ iface }} IP..."; sleep 1; done
+{% endfor %}
+            echo "deps ready"
+{% if nf.setup_script is defined %}
+      # Testbed-specific network setup (TUN interfaces, policy routing, iptables).
+      # Uses netshoot image for ip/iptables/sysctl tools (NF images are minimal).
+      - name: network-setup
+        image: {{ network_setup_image }}
+        command: ["/bin/sh", "/scripts/{{ nf.setup_script }}"]
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: nf-scripts
+          mountPath: /scripts
+{% endif %}
       containers:
       - name: {{ nf.name }}
-        image: {{ nf_image }}
+        image: {{ nf.image }}
         imagePullPolicy: IfNotPresent
+{% if nf.lifecycle_post_start is defined %}
+        lifecycle:
+          postStart:
+            exec:
+              command: ["/bin/sh", "-c", "{{ nf.lifecycle_post_start }}"]
+{% endif %}
+        args: ["-c", "/etc/open5gs/{{ nf.name | replace('-', '_') }}.yaml"]
         ports:
 {% for port in nf.ports %}
         - containerPort: {{ port.port }}
@@ -62,8 +97,6 @@ spec:
           privileged: true
 {% endif %}
         env:
-        - name: {{ nf.name | replace('-', '_') | upper }}_CONFIG
-          value: "/etc/open5gs/{{ nf.name | replace('-', '_') }}.yaml"
 {% if nf.db_required | default(true) %}
         - name: DB_URI
           value: "mongodb://mongodb:27017/open5gs"
@@ -74,17 +107,15 @@ spec:
           value: "{{ env.value }}"
 {% endfor %}
 {% endif %}
-        command: ["bash", "/open5gs/install/scripts/{{ nf.name | replace('-', '_') }}_init.sh"]
         volumeMounts:
         - name: {{ nf.name }}-config
           mountPath: /etc/open5gs
-        - name: {{ nf.name }}-scripts
-          mountPath: /open5gs/install/scripts
       volumes:
       - name: {{ nf.name }}-config
         configMap:
           name: {{ nf.name }}-config
-      - name: {{ nf.name }}-scripts
+{% if nf.setup_script is defined %}
+      - name: nf-scripts
         configMap:
           name: nf-scripts
-
+{% endif %}

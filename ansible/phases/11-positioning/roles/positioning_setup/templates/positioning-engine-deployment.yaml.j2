@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: positioning-engine
+  namespace: {{ positioning_namespace }}
+  labels:
+    app: positioning-engine
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: positioning-engine
+  template:
+    metadata:
+      labels:
+        app: positioning-engine
+      annotations:
+        checksum/config: "{{ lookup('template', role_path + '/templates/positioning-config.yaml.j2') | hash('sha256') }}"
+        checksum/floor-plan: "{{ lookup('template', role_path + '/templates/floor-plan.json.j2') | hash('sha256') }}"
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: worker
+      terminationGracePeriodSeconds: 15
+      containers:
+        - name: positioning-engine
+          image: {{ positioning_engine_image }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: positioning-config
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 6
+          volumeMounts:
+            - name: floor-plan
+              mountPath: /app/config/floor-plan.json
+              subPath: floor-plan.json
+      volumes:
+        - name: floor-plan
+          configMap:
+            name: positioning-floor-plan

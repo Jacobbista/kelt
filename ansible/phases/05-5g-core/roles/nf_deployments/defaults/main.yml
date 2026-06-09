@@ -4,8 +4,8 @@ kubeconfig_path: "/home/vagrant/kubeconfig"
 namespace_5g: "5g"
 
 # Container images
-mongodb_image: "jacobbista/comnetsemu-5gc:latest"
-nf_image: "jacobbista/comnetsemu-5gc:latest"
+# mongodb_image defined in all.yml (shared across roles)
+# Per-NF images come from nf_images in all.yml (immutable tags: <upstream>-p<N>)
 
 # MongoDB persistence
 # Use K3s default dynamic local-path provisioner so subscribers survive pod restarts.
@@ -24,12 +24,12 @@ network_functions:
     replicas: 1
     node: worker
     ports:
-      - { port: 3000, name: webui }
       - { port: 27017, name: mongodb }
     db_required: false
 
   # NRF (Network Repository Function)
   - name: nrf
+    image: "{{ nf_images.nrf }}"
     replicas: 1
     node: worker
     ports:
@@ -38,6 +38,7 @@ network_functions:
 
   # AMF (Access and Mobility Management Function)
   - name: amf
+    image: "{{ nf_images.amf }}"
     replicas: 1
     node: worker
     privileged: true
@@ -49,12 +50,14 @@ network_functions:
       - { name: "n1-net", interface: "n1", ips: ["{{ amf_n1_ip }}/24"] }
       - { name: "n2-net", interface: "n2", ips: ["{{ amf_n2_ip }}/24"] }
     # Per-cell N2 interfaces will be added dynamically via amf_cell_networks
+    wait_interfaces: ["n2"]
     extra_env:
       - { name: "STATIC_IP", value: "{{ amf_n2_ip }}" }
-    enable_rp_filter_fix: true # Enable initContainer for multi-homed routing
+    enable_rp_filter_fix: true
 
   # SMF (Session Management Function)
   - name: smf
+    image: "{{ nf_images.smf }}"
     replicas: 1
     node: worker
     privileged: true
@@ -68,6 +71,7 @@ network_functions:
   # UPF Edge (User Plane Function - Edge)
   # DISABLED: CNI route conflict on edge node - see docs/known-issues/upf-edge-cni-route-conflict.md
   - name: upf-edge
+    image: "{{ nf_images.upf }}"
     replicas: 0
     node: edge
     privileged: true
@@ -79,11 +83,15 @@ network_functions:
       - { name: "n3-net", interface: "n3", ips: ["{{ upf_edge_n3_ip }}/24"] }
       - { name: "n4-net", interface: "n4", ips: ["{{ upf_edge_n4_ip }}/24"] }
       - { name: "n6e-net", namespace: "mec", interface: "n6" }
-    extra_env:
-      - { name: "UPF_CONFIG", value: "/etc/open5gs/upf_edge.yaml" }
+    wait_interfaces: ["n3", "n6"]
+    setup_script: "upf_edge_init.sh"
+    # iperf3 server runs in main container cgroup (postStart -D daemonize survives).
+    # Started here, not in init script, because initContainers terminate child procs on exit.
+    lifecycle_post_start: "mkdir -p /var/log && iperf3 -s -B 10.46.0.1 -fm --logfile /var/log/iperf3-server.log -D"
 
   # UPF Cloud (User Plane Function - Cloud)
   - name: upf-cloud
+    image: "{{ nf_images.upf }}"
     replicas: 1
     node: worker
     privileged: true
@@ -96,11 +104,15 @@ network_functions:
       - { name: "n4-net", interface: "n4", ips: ["{{ upf_cloud_n4_ip }}/24"] }
       - { name: "n6c-net", interface: "n6" }
       - { name: "n6m-net", namespace: "mec", interface: "n6m" }
-    extra_env:
-      - { name: "UPF_CONFIG", value: "/etc/open5gs/upf_cloud.yaml" }
+    wait_interfaces: ["n3", "n6"]
+    setup_script: "upf_cloud_init.sh"
+    # iperf3 server runs in main container cgroup (postStart -D daemonize survives).
+    # Started here, not in init script, because initContainers terminate child procs on exit.
+    lifecycle_post_start: "mkdir -p /var/log && iperf3 -s -B 10.45.0.1 -fm -i 0.1 --logfile /var/log/iperf3-server.log -D"
 
   # UDM (Unified Data Management)
   - name: udm
+    image: "{{ nf_images.udm }}"
     replicas: 1
     node: worker
     ports:
@@ -109,6 +121,7 @@ network_functions:
 
   # UDR (Unified Data Repository)
   - name: udr
+    image: "{{ nf_images.udr }}"
     replicas: 1
     node: worker
     ports:
@@ -117,6 +130,7 @@ network_functions:
 
   # PCF (Policy Control Function)
   - name: pcf
+    image: "{{ nf_images.pcf }}"
     replicas: 1
     node: worker
     ports:
@@ -125,6 +139,7 @@ network_functions:
 
   # BSF (Binding Support Function)
   - name: bsf
+    image: "{{ nf_images.bsf }}"
     replicas: 1
     node: worker
     ports:
@@ -133,6 +148,7 @@ network_functions:
 
   # NSSF (Network Slice Selection Function)
   - name: nssf
+    image: "{{ nf_images.nssf }}"
     replicas: 1
     node: worker
     ports:
@@ -141,8 +157,16 @@ network_functions:
 
   # AUSF (Authentication Server Function)
   - name: ausf
+    image: "{{ nf_images.ausf }}"
     replicas: 1
     node: worker
     ports:
       - { port: 7777, name: sbi }
       - { port: 9090, name: metrics }
+
+# Experimental NFs — disabled by default (replicas: 0).
+# Enable individual NFs via dashboard or ansible extra-vars.
+# Each entry follows the same schema as network_functions entries plus:
+#   enabled: false  → replicas forced to 0 regardless of replicas field
+# See docs/architecture/nf-platform.md for adding new experimental NFs.
+experimental_nfs: []

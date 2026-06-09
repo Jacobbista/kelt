@@ -42,6 +42,8 @@
 - name: Apply ConfigMap for NF init scripts via API
   kubernetes.core.k8s:
     state: present
+    apply: true
+    force: true
     kubeconfig: "/home/vagrant/kubeconfig"
     definition:
       apiVersion: v1

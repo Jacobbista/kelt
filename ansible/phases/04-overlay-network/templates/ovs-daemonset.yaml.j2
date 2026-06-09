@@ -59,6 +59,25 @@ spec:
           value: "{{ ran_bridge_mode | default('disabled') }}"
         - name: RAN_SUBNET
           value: "{{ physical_ran_subnet | default('') }}"
+        - name: OVERLAY_MTU
+          value: "{{ overlay_mtu }}"
+        - name: N6_DATA_MTU
+          value: "{{ n6_data_mtu }}"
+        # VXLAN VNIs per interface (from all.yml)
+        - name: N1_VNI
+          value: "{{ n1_vni }}"
+        - name: N2_VNI
+          value: "{{ n2_vni }}"
+        - name: N3_VNI
+          value: "{{ n3_vni }}"
+        - name: N4_VNI
+          value: "{{ n4_vni }}"
+        - name: N6E_VNI
+          value: "{{ n6e_vni }}"
+        - name: N6C_VNI
+          value: "{{ n6c_vni }}"
+        - name: N6M_VNI
+          value: "{{ n6m_vni }}"
         command: ["sh","-c"]
         args:
           - |

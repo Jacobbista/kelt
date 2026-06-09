@@ -397,6 +397,7 @@ class RanService:
         nad_exists = self._nad_exists()
         amf_has_phy = any(n.get("name") == NAD_NAME for n in self._get_amf_networks())
         upf_has_route = self._upf_has_physical_ran_subnet()
+        bridge_just_created = False
 
         extra = {
             "physical_ran_enabled": "true",
@@ -437,16 +438,59 @@ class RanService:
                     "steps": steps,
                     "error": "br-ran not detected. Aborting to avoid stuck AMF pod.",
                 }
+            bridge_just_created = True
         else:
             prog("ovs_daemonset_updated", "ok", "Skipped (br-ran already exists)")
             steps.append({"step": "ovs_daemonset_updated", "status": "ok (skipped)"})
             prog("ovs_bridge_created", "ok", "Already existed")
             steps.append({"step": "ovs_bridge_created", "status": "ok (already existed)"})
 
+        # Debounce: Ansible preflight on the worker races right after OVS creates br-ran.
+        if bridge_just_created:
+            time.sleep(4)
+            if not self._br_ran_exists():
+                return {
+                    "enabled": False,
+                    "steps": steps,
+                    "error": "br-ran disappeared on worker after setup. Check OVS DaemonSet logs.",
+                }
+
         # 2. NAD: only if missing
+        # The multus play can take several minutes; 120s was too tight for dashboard enables.
+        # Ansible may also skip NAD creation if preflight still misses the bridge (exit 0) —
+        # we verify the object exists before continuing.
         if not nad_exists:
             prog("nad_creation", "in_progress", "Creating NAD via Ansible…")
-            self._run_playbook(PHASE4_PLAYBOOK, tags=["nad"], extra_vars=extra)
+
+            def _run_nad_ansible() -> None:
+                self._run_playbook(
+                    PHASE4_PLAYBOOK, tags=["nad"], extra_vars=extra, timeout=420,
+                )
+
+            _run_nad_ansible()
+            if not self._nad_exists() and self._br_ran_exists():
+                prog("nad_creation", "in_progress", "NAD still missing; retrying after preflight delay…")
+                time.sleep(12)
+                _run_nad_ansible()
+            if not self._nad_exists():
+                prog("nad_creation", "error", "n2-physical not found in cluster after Ansible")
+                steps.append({
+                    "step": "nad_creation",
+                    "status": "error",
+                    "hint": (
+                        "Ansible finished but NAD was not created (often a preflight race or skipped task). "
+                        "On the worker run: sudo ovs-vsctl br-exists br-ran && echo OK. "
+                        "Then click Reconfigure or Enable again."
+                    ),
+                })
+                return {
+                    "enabled": False,
+                    "steps": steps,
+                    "error": (
+                        "NAD n2-physical was not created. "
+                        "Confirm br-ran on the worker, then Reconfigure."
+                    ),
+                }
             steps.append({"step": "nad_creation", "status": "ok"})
             prog("nad_creation", "ok", "Done")
         else:

@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak-db
+  namespace: {{ iam_namespace }}
+  labels:
+    app: keycloak-db
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: keycloak-db
+  template:
+    metadata:
+      labels:
+        app: keycloak-db
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: worker
+      securityContext:
+        fsGroup: 999
+      terminationGracePeriodSeconds: 15
+      containers:
+        - name: postgres
+          image: {{ keycloak_db_image }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5432
+              name: postgres
+              protocol: TCP
+          env:
+            - name: POSTGRES_DB
+              value: "{{ keycloak_db_name }}"
+            - name: POSTGRES_USER
+              value: "{{ keycloak_db_user }}"
+            - name: POSTGRES_PASSWORD
+              value: "{{ keycloak_db_password }}"
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            tcpSocket:
+              port: 5432
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            tcpSocket:
+              port: 5432
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 6
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: {{ keycloak_db_pvc_name }}

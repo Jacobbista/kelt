@@ -19,6 +19,7 @@ use_ovs_cni: true
 
 # Overlay networks (N1/N2/N3/N4/N6e/N6c)
 overlay_mtu: 1450
+n6_data_mtu: 1400
 overlay_networks:
   - {
       name: "n1-net",

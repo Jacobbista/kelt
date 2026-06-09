@@ -96,6 +96,8 @@ The backend applies the prerequisites idempotently:
 
 Enable is **idempotent**: re-running it does not restart OVS or AMF if the configuration is already correct.
 
+After `br-ran` is first created, the dashboard waits briefly before the NAD playbook so Ansible's worker preflight sees the bridge (avoids a silent NAD skip while still returning playbook success). It then checks that `n2-physical` exists in the API; if not, it retries the NAD playbook once and surfaces an error instead of claiming success.
+
 ### Disable
 
 ```
@@ -148,4 +150,4 @@ The Topology Map module shows actual pod placement via `pod.spec.nodeName`.
 - [Dashboard Overview](../dashboard/overview.md) — dashboard architecture and access
 - [Dashboard API Reference](../dashboard/api-reference.md) — full API endpoint listing
 - [Physical RAN Integration](physical-ran.md) — hardware setup for femtocell connection
-- [Dashboard Module: Physical RAN Config](../dashboard/modules.md#module-6-physical-ran-config) — UI walkthrough
+- [Dashboard Module: RAN](../dashboard/modules.md#ran) — UI walkthrough

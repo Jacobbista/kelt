@@ -1,6 +1,4 @@
 logger:
-  file:
-    path: /open5gs/install/var/log/open5gs/upf-cloud.log
   level: info
 upf:
   pfcp:

@@ -2,13 +2,13 @@
 
 - name: "PHASE 2 | Setup k3s Master"
   hosts: masters
-  become: yes
+  become: true
   roles:
     - roles/k3s_master
 
 - name: "PHASE 2 | Setup k3s Agents (workers only)"
   hosts: workers
-  become: yes
+  become: true
   roles:
     - role: roles/k3s_agent
       vars:
@@ -16,19 +16,19 @@
 
 - name: "PHASE 2 | kube-proxy guard (only if missing)"
   hosts: masters
-  become: yes
+  become: true
   roles:
     - roles/kube_proxy_guard
 
 - name: "PHASE 2 | Smoke tests"
   hosts: masters
-  become: yes
+  become: true
   roles:
     - roles/cluster_smoke
 
 - name: "PHASE 2 | Verify cluster"
   hosts: masters
-  become: yes
+  become: true
   tasks:
     - name: Wait for all Nodes Ready (master + worker)
       kubernetes.core.k8s_info:

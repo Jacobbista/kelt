@@ -4,22 +4,22 @@ The testbed includes an out-of-band control and observability dashboard — a we
 
 ## Why Out-of-Band
 
-The dashboard runs on the **ansible VM** (192.168.56.13), not inside the Kubernetes cluster:
+The dashboard backend runs on the **ansible VM** (192.168.56.13), out-of-band from the Kubernetes workloads. The baseline frontend is a cluster pod on the worker (NodePort); an optional dev frontend runs on the ansible VM:
 
 ```mermaid
 graph LR
     subgraph Cluster["Kubernetes Cluster"]
         W["Worker
-        5G Core pods
-        namespace: 5g"]
+        5G Core pods (ns: 5g)
+        Dashboard frontend (nginx · NodePort 31573)"]
         E["Edge
         gNB + UE pods"]
     end
     subgraph Ansible["Ansible VM  192.168.56.13"]
         DB_B["Dashboard Backend
         FastAPI · port 31880"]
-        DB_F["Dashboard Frontend
-        React · port 31573"]
+        DB_F["Dashboard Frontend (dev, opt-in)
+        Vite · port 31573"]
     end
     Grafana["Grafana
     192.168.56.11:30300"]
@@ -79,27 +79,26 @@ graph TB
 
 | Service | URL | Notes |
 |---------|-----|-------|
-| Dashboard UI | http://192.168.56.13:31573 | Web interface |
-| Dashboard API | http://192.168.56.13:31880/docs | FastAPI interactive docs (Swagger) |
+| Dashboard UI (cluster baseline) | http://192.168.56.11:31573 | nginx pod on the worker, NodePort; always on |
+| Dashboard UI (dev frontend) | http://192.168.56.13:31573 | Vite dev server on the ansible VM; opt-in (`dashboard_dev_enabled`) |
+| Dashboard API | http://192.168.56.13:31880/docs | FastAPI on the ansible VM (Swagger at /docs) |
 
-The dashboard is deployed automatically in **Phase 9** and starts immediately after provisioning. No additional setup is required to access it after `vagrant up`.
+The cluster frontend is deployed automatically in **Phase 9** and starts after provisioning. See the [Phase 9 README](https://github.com/Jacobbista/5g-k3s-kubedge-testbed/blob/main/ansible/phases/09-dashboard/README.md) for the cluster-versus-dev frontend model.
 
 ## Security Model
 
-| Operation type | Auth required | Notes |
-|---------------|--------------|-------|
-| Read (pods, logs, topology, metrics) | No | Open by default |
-| Write (restart deployments, edit ConfigMaps) | Bearer token | `Authorization: Bearer <DASHBOARD_ADMIN_TOKEN>` |
-| OVS shell operations | Bearer token + allowlist | Only specific `ovs-vsctl` / `ovs-ofctl` commands permitted |
+Authentication uses the Keycloak realm from phase 08. The backend validates the `Authorization: Bearer <jwt>` header against the realm JWKS and reads `realm_access.roles`. Two roles gate access:
 
-The admin token is set in `backend/.env` (`DASHBOARD_ADMIN_TOKEN`). All mutating actions are audit-logged to `backend/logs/audit.log` in NDJSON format.
+- `dashboard-viewer`: all `GET` endpoints and the log stream.
+- `dashboard-admin`: everything viewer can do, plus writes, pod exec, sniffer, subscribers, NF rollout, and restart.
 
-**OVS operation allowlist** (shell commands that can be executed via the dashboard):
-- `sudo ovs-vsctl list-br`
-- `sudo ovs-vsctl list-ports <bridge>`
-- `sudo ovs-ofctl dump-flows <bridge>`
+WebSocket upgrades carry the token as a `?access_token=<jwt>` query parameter. Enforcement is applied at router-include time in `dashboard/backend/app/main.py`.
 
-Remote command output is size-capped and subject to a timeout.
+Auth is controlled by the single switch `dashboard_auth_enabled`. While disabled (the default until the realm is wired into production, `skip_auth=true`), the backend runs a break-glass bypass that treats every request as a synthetic admin. The legacy `admin` router (emergency restart) stays gated by the `DASHBOARD_ADMIN_TOKEN` header, independent of Keycloak.
+
+All mutating actions are audit-logged to `backend/logs/audit.log` in NDJSON format. OVS shell operations run through an allowlist (`ovs-vsctl list-br`, `ovs-vsctl list-ports <bridge>`, `ovs-ofctl dump-flows <bridge>`) with size-capped, time-bounded output.
+
+Full role model, client list, and the per-route matrix: [security/iam.md](../security/iam.md).
 
 ## Deployment
 
@@ -145,32 +144,30 @@ sudo journalctl -u dashboard-backend -f   # live logs
 
 ## Backend Configuration
 
-Copy `dashboard/backend/.env.example` to `dashboard/backend/.env` and set at minimum:
+Copy `dashboard/backend/.env.example` to `dashboard/backend/.env`. The settings model lives in `dashboard/backend/app/config.py`; the values most often changed are:
 
-```env
-DASHBOARD_KUBECONFIG_PATH=/home/vagrant/.kube/config
-DASHBOARD_WORKER_SSH_HOST=worker
-DASHBOARD_ADMIN_TOKEN=<strong-random-token>
-DASHBOARD_ALLOW_CONFIGMAP_WRITE=false
-```
-
-`DASHBOARD_ALLOW_CONFIGMAP_WRITE` is `false` by default. Set to `true` to enable ConfigMap editing from the UI (requires admin token on all requests).
+- Cluster access: `kubeconfig_path`, `worker_ssh_host`
+- Data sources: `prometheus_url`, `mongodb_url`
+- Auth: `keycloak_url`, `keycloak_realm`, `skip_auth` (see [security/iam.md](../security/iam.md))
+- Legacy emergency restart: `admin_token`
+- `allow_configmap_write` (default `false`): set `true` to enable ConfigMap editing from the UI
 
 ## Modules
 
-The dashboard has 7 modules grouped into three areas:
+The dashboard has 10 modules, grouped into four areas:
 
 | Area | Modules |
 |------|---------|
-| Cluster visibility | [Control Room](modules.md#module-1-control-room), [Topology Map](modules.md#module-2-topology-map), [Metrics](modules.md#module-5-metrics) |
-| 5G-specific | [UE Monitoring](modules.md#module-4-ue-monitoring), [Subscriber Management](modules.md#module-3-subscriber-management) |
-| Infrastructure control | [Physical RAN Config](modules.md#module-6-physical-ran-config), [Network Health](modules.md#module-7-network-health--traffic-observer) |
+| Cluster | [Overview](modules.md#overview), [Kubernetes](modules.md#kubernetes), [Metrics](modules.md#metrics) |
+| 5G | [5G Core](modules.md#5g-core), [RAN](modules.md#ran), [Subscribers](modules.md#subscribers), [UE Monitor](modules.md#ue-monitor) |
+| Network | [Topology](modules.md#topology), [Diagnostics](modules.md#diagnostics) |
+| Access | [IAM](modules.md#iam) (admin only) |
 
 See [Dashboard Modules](modules.md) for full details on each module.
 
 ## Related Documentation
 
-- [Dashboard Modules](modules.md) — detailed feature description for each of the 7 modules
+- [Dashboard Modules](modules.md) — detailed feature description for each of the 10 modules
 - [API Reference](api-reference.md) — full REST and WebSocket endpoint listing
 - [RAN Modes](../deployment/ran-modes-dashboard.md) — how to switch between physical and simulated RAN
 - [Deployment Phases](../deployment/phases.md#phase-9-dashboard-control-plane) — Phase 9 detail

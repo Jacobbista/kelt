@@ -10,7 +10,7 @@ while ! ip addr show n3 | grep -q "inet" || ! ip addr show n6 | grep -q "inet"; 
 done
 
 # Ensure log directory exists
-mkdir -p /open5gs/install/var/log/open5gs
+mkdir -p /var/log/open5gs
 
 # Configure TUN interface and routing (idempotent)
 if ! ip link show ogstun >/dev/null 2>&1; then
@@ -36,8 +36,9 @@ iptables -t mangle -C FORWARD -p tcp --tcp-flags SYN,RST SYN -o ogstun -j TCPMSS
 iptables -t mangle -C FORWARD -p tcp --tcp-flags SYN,RST SYN -i ogstun -j TCPMSS --set-mss 1360 2>/dev/null || \
   iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -i ogstun -j TCPMSS --set-mss 1360
 
-# Start iperf3 server
-iperf3 -B 10.46.0.1 -s -fm &
+# iperf3 server is launched via lifecycle.postStart on the main UPF container
+# (see roles/nf_deployments/defaults/main.yml). InitContainers terminate child
+# processes on exit, so launching iperf3 here would not survive.
 
 # Configure sysctls
 sysctl -w net.ipv4.ip_forward=1
@@ -49,5 +50,4 @@ ip route show table 100 | grep -q "default via 10.203.0.1 dev n3" || ip route ad
 ip rule show | grep -q "iif n6 lookup 200" || ip rule add iif n6 lookup 200
 ip route show table 200 | grep -q "default via 10.206.0.1 dev n6" || ip route add default via 10.206.0.1 dev n6 table 200
 
-echo "[UPF-Edge][init] Starting UPF-Edge daemon..."
-exec /open5gs/install/bin/open5gs-upfd -c ${UPF_CONFIG:-/etc/open5gs/upf.yaml}
+echo "[UPF-Edge][init] Network setup complete."

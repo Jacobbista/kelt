@@ -119,7 +119,7 @@ sudo ovs-vsctl list interface vxlan-n3 | grep -E "status|admin_state"
 sudo ovs-vsctl list interface vxlan-n3 | grep -E "statistics"
 
 # Test VXLAN tunnel connectivity
-ping -c 3 10.203.0.100  # UPF-edge N3 IP
+ping -c 3 10.203.0.102  # UPF-edge N3 IP
 ping -c 3 10.203.0.101  # UPF-cloud N3 IP
 ```
 
@@ -237,7 +237,7 @@ sudo ovs-vsctl list interface vxlan-n3 | grep -E "remote_ip|local_ip"
 sudo ovs-vsctl list interface vxlan-n3 | grep -E "status|admin_state"
 
 # Test connectivity
-ping -c 3 10.203.0.100
+ping -c 3 10.203.0.102
 ping -c 3 10.203.0.101
 ```
 
@@ -280,13 +280,13 @@ sudo ovs-vsctl list interface vxlan-n3 | grep -E "error|drop"
 
 ```bash
 # Test VXLAN tunnel performance
-iperf3 -c 10.203.0.100 -t 10
+iperf3 -c 10.203.0.102 -t 10
 
 # Test VXLAN tunnel with different packet sizes
-ping -c 10 -s 1472 10.203.0.100
+ping -c 10 -s 1472 10.203.0.102
 
 # Test VXLAN tunnel with UDP
-iperf3 -u -c 10.203.0.100 -b 100M -t 10
+iperf3 -u -c 10.203.0.102 -b 100M -t 10
 ```
 
 ### OVS Flow Table Analysis

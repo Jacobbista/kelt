@@ -21,6 +21,8 @@ function resolveDevUrl(serverUrl) {
 export default function DevModeIndicator() {
   const auth = useAuth();
   const isAdmin = auth.roles.includes("dashboard-admin");
+  const frontendMode = (env("VITE_FRONTEND_MODE") || "").toLowerCase();
+  const isDevFrontend = frontendMode === "dev";
   const [status, setStatus] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -37,13 +39,14 @@ export default function DevModeIndicator() {
   }, []);
 
   useEffect(() => {
-    if (!isAdmin) return undefined;
+    if (!isAdmin || isDevFrontend) return undefined;
     refresh();
     const id = setInterval(refresh, POLL_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [isAdmin, refresh]);
+  }, [isAdmin, isDevFrontend, refresh]);
 
   if (!isAdmin) return null;
+  if (isDevFrontend) return null;
 
   const toggle = async () => {
     if (busy || !status) return;

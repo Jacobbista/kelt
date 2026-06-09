@@ -4,7 +4,7 @@
 
 - name: "PHASE 5 | Create Namespaces"
   hosts: masters
-  become: no
+  become: false
   tags:
     - phase5
     - namespaces
@@ -39,7 +39,7 @@
 
 - name: "PHASE 5 | Infrastructure Setup"
   hosts: "masters,workers{{ ',edges' if (edge_enabled | default(false) | bool) else '' }}"
-  become: yes
+  become: true
   tags:
     - phase5
     - infrastructure_setup
@@ -50,7 +50,7 @@
 
 - name: "PHASE 5 | ConfigMaps Setup"
   hosts: masters
-  become: yes
+  become: true
   tags:
     - phase5
     - configmaps_setup
@@ -60,7 +60,7 @@
 
 - name: "PHASE 5 | Deploy Network Functions"
   hosts: masters
-  become: no
+  become: false
   tags:
     - phase5
     - nf_deployments
@@ -70,7 +70,7 @@
 
 - name: "PHASE 5 | Import Subscribers"
   hosts: masters
-  become: no
+  become: false
   tags:
     - phase5
     - subscriber_import
@@ -80,9 +80,20 @@
 
 - name: "PHASE 5 | Validate Deployment"
   hosts: masters
-  become: no
+  become: false
   tags:
     - phase5
     - validation
   roles:
     - roles/validation
+
+- name: "PHASE 5 | Prune unused container images"
+  hosts: workers
+  become: true
+  tags:
+    - phase5
+    - image_prune
+  tasks:
+    - name: Prune unreferenced images on worker (k3s containerd)
+      command: k3s ctr images prune --all
+      changed_when: false

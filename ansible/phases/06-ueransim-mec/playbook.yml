@@ -4,7 +4,7 @@
 
 - name: "PHASE 6 | Infrastructure Setup"
   hosts: "masters,workers{{ ',edges' if (edge_enabled | default(false) | bool) else '' }}"
-  become: yes
+  become: true
   tags:
     - phase6
     - infrastructure_setup
@@ -12,11 +12,12 @@
   vars_files:
     - vars/topology.yml
   roles:
-    - roles/infrastructure_setup
+    - role: roles/infrastructure_setup
+      when: ueransim_enabled | default(false) | bool
 
 - name: "PHASE 6 | Deploy gNB (simulated base station)"
   hosts: masters
-  become: no
+  become: false
   tags:
     - phase6
     - gnb_deployment
@@ -24,22 +25,24 @@
   vars_files:
     - vars/topology.yml
   roles:
-    - roles/gnb_deployment
+    - role: roles/gnb_deployment
+      when: ueransim_enabled | default(false) | bool
 
 - name: "PHASE 6 | Sync gNB Endpoints (DNS)"
   hosts: masters
-  become: no
+  become: false
   tags:
     - phase6
     - endpoints_sync
   vars_files:
     - vars/topology.yml
   roles:
-    - roles/endpoints_sync
+    - role: roles/endpoints_sync
+      when: ueransim_enabled | default(false) | bool
 
 - name: "PHASE 6 | Deploy UE (simulated user equipment)"
   hosts: masters
-  become: no
+  become: false
   tags:
     - phase6
     - ue_deployment
@@ -47,11 +50,12 @@
   vars_files:
     - vars/topology.yml
   roles:
-    - roles/ue_deployment
+    - role: roles/ue_deployment
+      when: ueransim_enabled | default(false) | bool
 
 - name: "PHASE 6 | Validate Connectivity"
   hosts: masters
-  become: no
+  become: false
   tags:
     - phase6
     - connectivity_validation
@@ -59,11 +63,12 @@
   vars_files:
     - vars/topology.yml
   roles:
-    - roles/connectivity_validation
+    - role: roles/connectivity_validation
+      when: ueransim_enabled | default(false) | bool
 
 - name: "PHASE 6 | Deploy MEC Application (optional)"
   hosts: masters
-  become: no
+  become: false
   tags:
     - phase6
     - mec_deployment
@@ -71,4 +76,5 @@
   vars_files:
     - vars/topology.yml
   roles:
-    - roles/mec_deployment
+    - role: roles/mec_deployment
+      when: ueransim_enabled | default(false) | bool

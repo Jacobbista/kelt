@@ -1,10 +1,9 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useLocation } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import TimeSyncPopover from "./TimeSyncPopover";
 import DevModeIndicator from "./DevModeIndicator";
 import { env } from "../runtime-env";
-import { KEYCLOAK_AUTHORITY } from "../auth/oidc";
 
 const NAV_ITEMS = [
   { id: "overview",      label: "Overview",    icon: "\u25A3", path: "/"           },
@@ -16,6 +15,8 @@ const NAV_ITEMS = [
   { id: "ue-monitoring", label: "UE Monitor",  icon: "\u25C9", path: "/ue-monitor" },
   { id: "diagnostics",   label: "Diagnostics", icon: "\u2295", path: "/diagnostics"},
   { id: "metrics",       label: "Metrics",     icon: "\u2261", path: "/metrics"    },
+  // IAM entry is rendered conditionally below: visible only to dashboard-admin.
+  { id: "iam",           label: "IAM",         icon: "\u26BF", path: "/iam",        adminOnly: true },
 ];
 
 const _localFmt = new Intl.DateTimeFormat(undefined, {
@@ -63,24 +64,6 @@ export default function Sidebar({ onNavigate, runtime, serverTime }) {
       ? "role: viewer"
       : "role: none";
 
-  const keycloakAdminUrl = useMemo(() => {
-    if (!KEYCLOAK_AUTHORITY) return null;
-    try {
-      const u = new URL(KEYCLOAK_AUTHORITY);
-      const seg = u.pathname.split("/").filter(Boolean);
-      const realmsIdx = seg.indexOf("realms");
-      if (realmsIdx < 0) return null;
-      const prefix = seg.slice(0, realmsIdx).join("/");
-      // Keycloak administration privileges live in the master realm console.
-      u.pathname = `/${prefix ? `${prefix}/` : ""}admin/master/console/`;
-      u.search = "";
-      u.hash = "";
-      return u.toString();
-    } catch {
-      return null;
-    }
-  }, []);
-
   const handleLogout = useCallback(async () => {
     if (loggingOut) return;
     const ok = window.confirm("Logout from dashboard session?");
@@ -114,7 +97,7 @@ export default function Sidebar({ onNavigate, runtime, serverTime }) {
       </div>
 
       <nav className="flex-1 px-2">
-        {NAV_ITEMS.map((item) => (
+        {NAV_ITEMS.filter((item) => !item.adminOnly || auth.roles.includes("dashboard-admin")).map((item) => (
           <button
             key={item.id}
             type="button"
@@ -156,18 +139,6 @@ export default function Sidebar({ onNavigate, runtime, serverTime }) {
           <span className="text-[10px]">&#x2197;</span>
           Grafana (advanced)
         </a>
-
-        {keycloakAdminUrl && (
-          <a
-            href={keycloakAdminUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="mt-1 flex items-center gap-2 rounded px-2 py-1.5 text-xs text-slate-500 hover:bg-slate-800 hover:text-slate-300 transition-colors"
-          >
-            <span className="text-[10px]">&#x2197;</span>
-            IAM Admin (master)
-          </a>
-        )}
 
         <div className="mt-2 flex items-center gap-2">
           <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${modeBadgeClass}`}>

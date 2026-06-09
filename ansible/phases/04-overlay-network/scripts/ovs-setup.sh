@@ -15,15 +15,42 @@ echo "  CELL_COUNT=${CELL_COUNT:-0}"
 echo "  RAN_INTERFACE=${RAN_INTERFACE:-}"
 echo "  RAN_BRIDGE_MODE=${RAN_BRIDGE_MODE:-disabled}"
 echo "  RAN_SUBNET=${RAN_SUBNET:-}"
+# Set by ds-net-setup DaemonSet from Ansible (group_vars); defaults match overlay / ogstun sizing.
+OVERLAY_MTU="${OVERLAY_MTU:-1450}"
+N6_DATA_MTU="${N6_DATA_MTU:-1400}"
+echo "  OVERLAY_MTU=${OVERLAY_MTU}"
+echo "  N6_DATA_MTU=${N6_DATA_MTU}"
+
+# VXLAN VNIs per interface (set by the OVS DaemonSet from all.yml; defaults match docs).
+N1_VNI="${N1_VNI:-101}"
+N2_VNI="${N2_VNI:-102}"
+N3_VNI="${N3_VNI:-103}"
+N4_VNI="${N4_VNI:-104}"
+N6E_VNI="${N6E_VNI:-106}"
+N6C_VNI="${N6C_VNI:-107}"
+N6M_VNI="${N6M_VNI:-108}"
 
 BRIDGES=(br-n1 br-n2 br-n3 br-n4 br-n6e br-n6c br-n6m)
 
+bridge_mtu_for() {
+  local br="$1"
+  if [[ "$br" == "br-n6c" ]]; then
+    printf '%s' "$N6_DATA_MTU"
+  else
+    printf '%s' "$OVERLAY_MTU"
+  fi
+}
+
 create_br() {
   local br="$1"
-  echo "  -> add-br $br"
+  local target_mtu="${2:-}"
+  if [[ -z "${target_mtu}" ]]; then
+    target_mtu="$(bridge_mtu_for "$br")"
+  fi
+  echo "  -> add-br $br (MTU ${target_mtu})"
   ovs-vsctl --may-exist add-br "$br"
   ip link set "$br" up || true
-  ip link set "$br" mtu 1450 || true
+  ip link set "$br" mtu "$target_mtu" || true
 }
 
 ensure_bridge_ip() { # $1=bridge $2=cidr
@@ -86,19 +113,19 @@ echo "🌐 Creating global network bridges..."
 if [[ -n "$PEER" ]]; then
   # Edge enabled: create bridges with VXLAN tunnels
   if [[ "$NODE_NAME" == "edge" ]]; then
-    create_vx br-n1 vxlan-n1 101 "$PEER" "$LOCAL_TUN_IP"
-    create_vx br-n2 vxlan-n2 102 "$PEER" "$LOCAL_TUN_IP"
-    create_vx br-n3 vxlan-n3 103 "$PEER" "$LOCAL_TUN_IP"
-    create_vx br-n4 vxlan-n4 104 "$PEER" "$LOCAL_TUN_IP"
-    create_vx br-n6e vxlan-n6e 106 "$PEER" "$LOCAL_TUN_IP"
-    create_vx br-n6m vxlan-n6m 108 "$PEER" "$LOCAL_TUN_IP"
+    create_vx br-n1 vxlan-n1 "$N1_VNI" "$PEER" "$LOCAL_TUN_IP"
+    create_vx br-n2 vxlan-n2 "$N2_VNI" "$PEER" "$LOCAL_TUN_IP"
+    create_vx br-n3 vxlan-n3 "$N3_VNI" "$PEER" "$LOCAL_TUN_IP"
+    create_vx br-n4 vxlan-n4 "$N4_VNI" "$PEER" "$LOCAL_TUN_IP"
+    create_vx br-n6e vxlan-n6e "$N6E_VNI" "$PEER" "$LOCAL_TUN_IP"
+    create_vx br-n6m vxlan-n6m "$N6M_VNI" "$PEER" "$LOCAL_TUN_IP"
   else
-    create_vx br-n1 vxlan-n1 101 "$PEER" "$LOCAL_TUN_IP"
-    create_vx br-n2 vxlan-n2 102 "$PEER" "$LOCAL_TUN_IP"
-    create_vx br-n3 vxlan-n3 103 "$PEER" "$LOCAL_TUN_IP"
-    create_vx br-n4 vxlan-n4 104 "$PEER" "$LOCAL_TUN_IP"
-    create_vx br-n6c vxlan-n6c 107 "$PEER" "$LOCAL_TUN_IP"
-    create_vx br-n6m vxlan-n6m 108 "$PEER" "$LOCAL_TUN_IP"
+    create_vx br-n1 vxlan-n1 "$N1_VNI" "$PEER" "$LOCAL_TUN_IP"
+    create_vx br-n2 vxlan-n2 "$N2_VNI" "$PEER" "$LOCAL_TUN_IP"
+    create_vx br-n3 vxlan-n3 "$N3_VNI" "$PEER" "$LOCAL_TUN_IP"
+    create_vx br-n4 vxlan-n4 "$N4_VNI" "$PEER" "$LOCAL_TUN_IP"
+    create_vx br-n6c vxlan-n6c "$N6C_VNI" "$PEER" "$LOCAL_TUN_IP"
+    create_vx br-n6m vxlan-n6m "$N6M_VNI" "$PEER" "$LOCAL_TUN_IP"
   fi
 else
   # Edge disabled: create local bridges only (no VXLAN)
@@ -127,10 +154,10 @@ if [[ "${CELL_COUNT:-0}" -gt 0 ]]; then
   for cell_id in $(seq 1 "$CELL_COUNT"); do
     if [[ -n "$PEER" ]]; then
       # Edge enabled: per-cell bridges use VXLAN between worker and edge.
-      vni_n2="102${cell_id}"
+      vni_n2="${N2_VNI}${cell_id}"
       create_vx "br-n2-cell-${cell_id}" "vxlan-n2-cell-${cell_id}" "$vni_n2" "$PEER" "$LOCAL_TUN_IP"
 
-      vni_n3="103${cell_id}"
+      vni_n3="${N3_VNI}${cell_id}"
       create_vx "br-n3-cell-${cell_id}" "vxlan-n3-cell-${cell_id}" "$vni_n3" "$PEER" "$LOCAL_TUN_IP"
     else
       # Edge disabled: keep per-cell bridges local-only, same as the global bridges above.

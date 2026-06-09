@@ -6,15 +6,13 @@
 #   DEPLOY_MODE=full vagrant provision ansible  - Include UERANSIM (phase 6)
 # PHYSICAL RAN (optional, disabled by default):
 #   PHYSICAL_RAN_ENABLED=true PHYSICAL_RAN_BRIDGE=<host_nic> vagrant provision ansible
-# DASHBOARD MODE (hot-reload toggle, no full reprovision):
-#   DASHBOARD_MODE=dev vagrant reload ansible   - Switch dashboard to dev mode
-#   vagrant reload ansible                      - Back to normal (no provisioning)
 # TESTBED PROFILE (resource profiles for different hosts):
 #   TESTBED_PROFILE=server vagrant up           - NUC/server: 3 VMs, no edge
 #   TESTBED_PROFILE=server EDGE_ENABLED=true vagrant up  - NUC/server with edge VM
 #   TESTBED_PROFILE=laptop vagrant up           - Laptop: 4 VMs (default, unchanged)
 #
-# Configuration can also be persisted in .testbed.env (see testbed-config tool).
+# Configuration can also be persisted in .testbed.env and .testbed.secrets
+# (see testbed-config tool).
 #
 # Manual phase runs from ansible VM:
 #   vagrant ssh ansible
@@ -35,11 +33,30 @@ Vagrant.configure("2") do |config|
     end
   end
 
+  # Load persisted secrets from .testbed.secrets.
+  secrets_path = File.join(File.dirname(__FILE__), ".testbed.secrets")
+  if File.exist?(secrets_path)
+    File.readlines(secrets_path).each do |line|
+      line = line.strip
+      next if line.empty? || line.start_with?('#')
+      key, value = line.split('=', 2)
+      ENV[key] ||= value if key && value
+    end
+  end
+
   # Deployment mode: "core_only" (default) or "full"
   deploy_mode = ENV['DEPLOY_MODE'] || 'core_only'
   physical_ran_enabled = (ENV['PHYSICAL_RAN_ENABLED'] || 'false').downcase == 'true'
   physical_ran_bridge = ENV['PHYSICAL_RAN_BRIDGE']
-  dashboard_mode = ENV['DASHBOARD_MODE'] || 'prod'
+  dashboard_auth_enabled = ENV['DASHBOARD_AUTH_ENABLED'] || 'true'
+  keycloak_path_prefix = ENV['KEYCLOAK_PATH_PREFIX'] || ''
+  dashboard_keycloak_external_url = ENV['DASHBOARD_KEYCLOAK_EXTERNAL_URL'] || ''
+  dashboard_keycloak_path_prefix = ENV['DASHBOARD_KEYCLOAK_PATH_PREFIX'] || ''
+  dashboard_external_origin = ENV['DASHBOARD_EXTERNAL_ORIGIN'] || ''
+  positioning_demo_external_origin = ENV['POSITIONING_DEMO_EXTERNAL_ORIGIN'] || ''
+  keycloak_admin_password = ENV['KEYCLOAK_ADMIN_PASSWORD'] || ''
+  camara_client_secret = ENV['CAMARA_CLIENT_SECRET'] || ''
+  dashboard_readonly_secret = ENV['DASHBOARD_READONLY_SECRET'] || ''
 
   # Testbed profile: "laptop" (default) or "server"
   testbed_profile = ENV['TESTBED_PROFILE'] || 'laptop'
@@ -131,6 +148,10 @@ Vagrant.configure("2") do |config|
         vb.name = "#{name}-5g-k8s-testbed"
         vb.customize ["modifyvm", :id, "--ioapic", "on"]
         vb.customize ["modifyvm", :id, "--nestedpaging", "on"]
+        # Paravirtualized NIC (virtio-net); better throughput/CPU than 82540EM emulation.
+        vb.customize ["modifyvm", :id, "--nictype1", "virtio"]
+        vb.customize ["modifyvm", :id, "--nictype2", "virtio"]
+        vb.customize ["modifyvm", :id, "--nictype3", "virtio"]
 
         # Enable promiscuous mode on RAN interface for OVS bridging
         if ran_network.key?(name)
@@ -323,6 +344,22 @@ INVENTORY
       if ! grep -q 'export ANSIBLE_CONFIG=/home/vagrant/ansible-work/ansible.cfg' ~/.bashrc; then
         echo 'export ANSIBLE_CONFIG=/home/vagrant/ansible-work/ansible.cfg' >> ~/.bashrc
       fi
+
+    SHELL
+
+    # --- Autosource .testbed.env + .testbed.secrets in interactive shells.
+    # Runs on every `vagrant up` and `vagrant reload` (run: "always") so the
+    # bashrc snippet is in place even when the main provisioner is skipped.
+    # Without this, manual `ansible-playbook` reruns see empty env vars and
+    # the dashboard frontend rebuilds with the NodePort URL baked into
+    # VITE_KEYCLOAK_AUTHORITY instead of the configured tunnel.
+    ansible.vm.provision "bashrc-autosource", type: "shell", run: "always", privileged: false,
+      inline: <<-'SHELL'
+      if ! grep -q 'TESTBED_ENV_AUTOSOURCE' ~/.bashrc; then
+        echo '# TESTBED_ENV_AUTOSOURCE' >> ~/.bashrc
+        echo '[ -f /vagrant/.testbed.env ]     && { set -a; . /vagrant/.testbed.env;     set +a; }' >> ~/.bashrc
+        echo '[ -f /vagrant/.testbed.secrets ] && { set -a; . /vagrant/.testbed.secrets; set +a; }' >> ~/.bashrc
+      fi
     SHELL
 
     # --- Full playbook: only on explicit `vagrant provision ansible`
@@ -332,6 +369,15 @@ INVENTORY
         "DEPLOY_MODE" => deploy_mode,
         "PHYSICAL_RAN_ENABLED" => physical_ran_enabled.to_s,
         "EDGE_ENABLED" => edge_enabled.to_s,
+        "DASHBOARD_AUTH_ENABLED" => dashboard_auth_enabled,
+        "KEYCLOAK_PATH_PREFIX" => keycloak_path_prefix,
+        "DASHBOARD_KEYCLOAK_EXTERNAL_URL" => dashboard_keycloak_external_url,
+        "DASHBOARD_KEYCLOAK_PATH_PREFIX" => dashboard_keycloak_path_prefix,
+        "DASHBOARD_EXTERNAL_ORIGIN" => dashboard_external_origin,
+        "POSITIONING_DEMO_EXTERNAL_ORIGIN" => positioning_demo_external_origin,
+        "KEYCLOAK_ADMIN_PASSWORD" => keycloak_admin_password,
+        "CAMARA_CLIENT_SECRET" => camara_client_secret,
+        "DASHBOARD_READONLY_SECRET" => dashboard_readonly_secret,
       },
       inline: <<-'SHELL'
       set -euo pipefail
@@ -380,9 +426,9 @@ INVENTORY
 
       if [ "${deploy_mode}" = "full" ]; then
         echo "Full deployment mode: including UERANSIM (phase 6)"
-        ansible-playbook /home/vagrant/ansible-ro/phases/00-main-playbook.yml ${ran_extra} ${edge_extra}
+        ansible-playbook /home/vagrant/ansible-ro/phases/00-main-playbook.yml ${ran_extra} ${edge_extra} -e ueransim_enabled=true
       else
-        echo "Core-only mode (default): deploying phases 1-5 + phase 7 + phase 8"
+        echo "Core-only mode (default): deploying phases 1-5 + phase 7 + phases 8-9"
         echo "   To add UERANSIM later, run from ansible VM:"
         echo "   cd ~/ansible-ro && ansible-playbook phases/06-ueransim-mec/playbook.yml -i inventory.ini"
         ansible-playbook /home/vagrant/ansible-ro/phases/00-main-playbook.yml ${ran_extra} ${edge_extra} --skip-tags phase6,ueransim,mec
@@ -402,22 +448,6 @@ INVENTORY
         echo "provision_seconds=$((t1 - t0))"
       } > /home/vagrant/ansible-work/logs/provision.timings
     SHELL
-
-    # --- Dashboard mode switch: runs on reload when DASHBOARD_MODE is set
-    # Usage: DASHBOARD_MODE=dev vagrant reload ansible
-    if dashboard_mode != 'prod'
-      ansible.vm.provision "dashboard-mode", type: "shell", run: "always", privileged: false,
-        env: { "DASHBOARD_MODE" => dashboard_mode },
-        inline: <<-'SHELL'
-        set -euo pipefail
-        export PATH="$HOME/.local/bin:$PATH"
-        export ANSIBLE_CONFIG=/home/vagrant/ansible-work/ansible.cfg
-        echo "=== Switching dashboard to ${DASHBOARD_MODE} mode (phase 8 only) ==="
-        ansible-playbook /home/vagrant/ansible-ro/phases/08-dashboard/playbook.yml \
-          -e dashboard_mode="${DASHBOARD_MODE}"
-        echo "=== Dashboard now running in ${DASHBOARD_MODE} mode ==="
-      SHELL
-    end
 
   end
 end

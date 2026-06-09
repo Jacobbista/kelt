@@ -710,7 +710,7 @@
                 "cniVersion": "0.3.1",
                 "type": (use_ovs_cni | ternary("ovs","bridge")),
                 (use_ovs_cni | ternary("bridge","bridge")): item.bridge,
-                "mtu": overlay_mtu
+                "mtu": (n6_data_mtu if item.name == "n6c-net" else overlay_mtu)
               } | combine(
                 ({"ipam": {"type": "whereabouts","range": item.cidr,"range_start": item.start,"range_end": item.end,"gateway": item.gw,"exclude": (item.exclude | default([])),"kubernetes": {"kubeconfig": cni_conf_dir_worker + "/" + whereabouts_kubeconfig_relpath}}}
                  if item.ns == "5g"

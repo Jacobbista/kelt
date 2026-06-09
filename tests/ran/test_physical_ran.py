@@ -38,6 +38,7 @@ class PhysicalRANTestSuite:
             ("AMF Overlay IP Reachable", self.test_amf_overlay_reachable),
             ("UPF Overlay IP Reachable", self.test_upf_overlay_reachable),
             ("gNB Connection Status", self.test_gnb_connection),
+            ("UE NGAP Context (physical UE)", self.test_ue_ngap_context),
         ]
         
         passed = 0
@@ -279,43 +280,83 @@ class PhysicalRANTestSuite:
             self.logger.error(f"Failed to test UPF reachability: {e}")
             return False
     
+    def _amf_logs(self, tail_lines: int = 500) -> str:
+        """Return recent AMF logs, or '' if no running AMF pod."""
+        pods = self.kubectl.get_pods("5g")
+        amf_pods = [p for p in pods if "amf" in p["metadata"]["name"].lower() and p["status"]["phase"] == "Running"]
+        if not amf_pods:
+            return ""
+        return self.kubectl.get_pod_logs(amf_pods[0]["metadata"]["name"], "5g", tail_lines=tail_lines)
+
     def test_gnb_connection(self) -> bool:
-        """Test if any gNB is connected to AMF (UERANSIM or physical)"""
+        """Test that a gNB (physical or simulated) is connected to the AMF.
+
+        Open5GS logs the gNB-level NG Setup separately from per-UE NGAP
+        context. The NG Setup line can age out of a busy log, so a connected
+        gNB is also inferred from active RAN_UE_NGAP_ID / CellID entries.
+        """
         self.logger.info("Checking gNB connection to AMF...")
-        
+
         try:
-            pods = self.kubectl.get_pods("5g")
-            amf_pods = [p for p in pods if "amf" in p["metadata"]["name"].lower() and p["status"]["phase"] == "Running"]
-            
-            if not amf_pods:
-                self.logger.error("No AMF pod found")
+            logs = self._amf_logs()
+            if not logs:
+                self.logger.error("No running AMF pod found")
                 return False
-            
-            amf_pod = amf_pods[0]["metadata"]["name"]
-            
-            # Get AMF logs and check for gNB connections
-            logs = self.kubectl.get_pod_logs(amf_pod, "5g", tail_lines=100)
-            
-            if "Number of gNBs is now" in logs:
-                # Extract the count
-                import re
-                match = re.search(r"Number of gNBs is now (\d+)", logs)
-                if match:
-                    gnb_count = int(match.group(1))
-                    if gnb_count > 0:
-                        self.logger.success(f"AMF has {gnb_count} connected gNB(s)")
-                        return True
-            
-            # Check for recent gNB accept messages
-            if "gNB-N2 accepted" in logs:
-                self.logger.success("gNB connection detected in AMF logs")
+
+            import re
+            match = re.search(r"Number of gNBs is now (\d+)", logs)
+            if match and int(match.group(1)) > 0:
+                self.logger.success(f"AMF has {match.group(1)} connected gNB(s)")
                 return True
-            
-            self.logger.warning("No gNB connections found in AMF logs")
+
+            for sig in ("gNB-N2 accepted", "NGSetupResponse", "NG Setup"):
+                if sig in logs:
+                    self.logger.success(f"gNB NG Setup detected in AMF logs ('{sig}')")
+                    return True
+
+            # Active per-UE NGAP context implies a gNB is serving the core.
+            if "RAN_UE_NGAP_ID" in logs or "CellID" in logs:
+                self.logger.success("gNB inferred from active NGAP context (RAN_UE_NGAP_ID/CellID)")
+                return True
+
+            self.logger.warning("No gNB connection found in AMF logs")
             return False
-            
+
         except Exception as e:
             self.logger.error(f"Failed to check gNB connection: {e}")
+            return False
+
+    def test_ue_ngap_context(self) -> bool:
+        """Test that a real UE reached the core through the physical gNB.
+
+        Asserts NGAP-level UE context (the UE is seen by the AMF via the
+        gNB). Full NAS registration is not asserted here: a UE may attach and
+        release without completing 5GMM registration, which is a separate
+        operational concern from RAN connectivity.
+        """
+        self.logger.info("Checking UE NGAP context in AMF logs...")
+
+        try:
+            logs = self._amf_logs()
+            if not logs:
+                self.logger.error("No running AMF pod found")
+                return False
+
+            import re
+            counts = [int(c) for c in re.findall(r"Number of gNB-UEs is now (\d+)", logs)]
+            if any(c > 0 for c in counts):
+                self.logger.success(f"AMF saw UE NGAP context (peak gNB-UEs={max(counts)})")
+                return True
+
+            if "RAN_UE_NGAP_ID" in logs:
+                self.logger.success("AMF logs show RAN_UE_NGAP_ID (UE reached core via gNB)")
+                return True
+
+            self.logger.warning("No UE NGAP context found in AMF logs (no UE attached?)")
+            return False
+
+        except Exception as e:
+            self.logger.error(f"Failed to check UE NGAP context: {e}")
             return False
 
 

@@ -27,6 +27,7 @@ spec:
             - --config.file=/etc/prometheus/prometheus.yml
             - --storage.tsdb.path=/prometheus
             - --storage.tsdb.retention.time={{ prometheus.retention }}
+            - --storage.tsdb.retention.size={{ prometheus.retention_size | default('4GB') }}
             - --web.enable-lifecycle
             - --web.enable-admin-api
           ports:

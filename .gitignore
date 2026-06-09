@@ -18,6 +18,7 @@ Thumbs.db
 .vagrant/
 .physical_ran_bridge_applied
 .testbed.env
+.testbed.secrets
 *.vmdk
 *.vdi
 *.vbox
@@ -59,3 +60,7 @@ venv/
 
 # AI
 .claude/
+
+# Local scratch (not committed)
+kelt-logo-prompt.md
+kelt-todo.md

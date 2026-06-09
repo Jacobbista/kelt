@@ -11,7 +11,9 @@ import PodTerminal from "./components/PodTerminal";
 import CallbackPage from "./pages/CallbackPage";
 import CorePage from "./pages/CorePage";
 import DiagnosticsPage from "./pages/DiagnosticsPage";
+import IamPage from "./pages/IamPage";
 import KubernetesPage from "./pages/KubernetesPage";
+import LoggedOutPage from "./pages/LoggedOutPage";
 import MetricsPage from "./pages/MetricsPage";
 import OverviewPage from "./pages/OverviewPage";
 import RanPage from "./pages/RanPage";
@@ -29,6 +31,7 @@ const ROUTES = {
   "ue-monitoring": "/ue-monitor",
   diagnostics:    "/diagnostics",
   metrics:        "/metrics",
+  iam:            "/iam",
 };
 
 export default function App() {
@@ -51,8 +54,17 @@ function AppInner() {
   useEffect(() => {
     // When auth is enabled but the user is not signed in, redirect to
     // Keycloak immediately. The auth/callback route handles the return
-    // trip; everything else requires a token.
-    if (auth.enabled && !auth.loading && !auth.user && window.location.pathname !== "/auth/callback") {
+    // trip; the /logged-out landing renders a manual "sign in again"
+    // button so an explicit logout does not bounce straight back through
+    // the still-alive Keycloak SSO session.
+    const path = window.location.pathname;
+    if (
+      auth.enabled
+      && !auth.loading
+      && !auth.user
+      && path !== "/auth/callback"
+      && path !== "/logged-out"
+    ) {
       auth.login();
     }
   }, [auth.enabled, auth.loading, auth.user, auth.login]);
@@ -111,6 +123,7 @@ function AppInner() {
     >
       <Routes>
         <Route path="/auth/callback" element={<CallbackPage />} />
+        <Route path="/logged-out" element={<LoggedOutPage />} />
         <Route path="/" element={<OverviewPage onNavigateToNf={handleNavigateToNf} />} />
         <Route path="/kubernetes" element={<KubernetesPage />} />
         <Route path="/core" element={
@@ -122,6 +135,7 @@ function AppInner() {
         <Route path="/ue-monitor" element={<UEMonitoringPage />} />
         <Route path="/diagnostics" element={<DiagnosticsPage />} />
         <Route path="/metrics" element={<MetricsPage />} />
+        <Route path="/iam" element={<IamPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
 

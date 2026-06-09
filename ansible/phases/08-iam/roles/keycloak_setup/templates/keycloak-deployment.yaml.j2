@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: {{ iam_namespace }}
+  labels:
+    app: keycloak
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: keycloak
+  template:
+    metadata:
+      labels:
+        app: keycloak
+      annotations:
+        checksum/realm: "{{ lookup('template', role_path + '/templates/keycloak-realm.json.j2') | hash('sha256') }}"
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: worker
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: keycloak
+          image: {{ keycloak_image }}
+          imagePullPolicy: IfNotPresent
+          # --import-realm: load realm JSON from /opt/keycloak/data/import/ on first start.
+          # Keycloak skips import if realm already exists — idempotent across restarts.
+          command: ["/opt/keycloak/bin/kc.sh", "start", "--import-realm"]
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+            - containerPort: 9000
+              name: management
+              protocol: TCP
+          env:
+            - name: KC_DB
+              value: postgres
+            - name: KC_DB_URL
+              value: "jdbc:postgresql://keycloak-db.{{ iam_namespace }}.svc.cluster.local:5432/{{ keycloak_db_name }}"
+            - name: KC_DB_USERNAME
+              value: "{{ keycloak_db_user }}"
+            - name: KC_DB_PASSWORD
+              value: "{{ keycloak_db_password }}"
+            - name: KC_HOSTNAME_STRICT
+              value: "false"
+            # External base URL used by Keycloak to build browser redirects.
+            # Keeps scheme/host stable behind reverse proxies and tunnels.
+            - name: KC_HOSTNAME
+              value: "{{ dashboard_external_origin }}{{ keycloak_path_prefix }}"
+            # Trust X-Forwarded-* headers when running behind a proxy.
+            - name: KC_PROXY_HEADERS
+              value: "xforwarded"
+            - name: KC_HTTP_ENABLED
+              value: "true"
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+{% if keycloak_path_prefix %}
+            # Serve Keycloak under a path prefix when fronted by a single-origin
+            # reverse proxy (for example the dashboard Vite proxy /auth/*).
+            # Leave keycloak_path_prefix empty for subdomain deploys.
+            - name: KC_HTTP_RELATIVE_PATH
+              value: "{{ keycloak_path_prefix }}"
+{% endif %}
+            - name: KEYCLOAK_ADMIN
+              value: "{{ keycloak_admin_user }}"
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              value: "{{ keycloak_admin_password }}"
+          readinessProbe:
+            httpGet:
+              path: "{{ keycloak_path_prefix }}/health/ready"
+              port: 9000
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: "{{ keycloak_path_prefix }}/health/live"
+              port: 9000
+            initialDelaySeconds: 90
+            periodSeconds: 15
+            failureThreshold: 6
+          volumeMounts:
+            - name: realm-config
+              mountPath: /opt/keycloak/data/import
+      volumes:
+        - name: realm-config
+          configMap:
+            name: keycloak-realm-config

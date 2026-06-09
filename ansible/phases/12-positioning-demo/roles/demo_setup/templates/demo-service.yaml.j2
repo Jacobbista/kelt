@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: positioning-demo
+  namespace: {{ demo_namespace }}
+  labels:
+    app: positioning-demo
+spec:
+  selector:
+    app: positioning-demo
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+      nodePort: {{ positioning_demo_nodeport }}
+      name: http
+  type: NodePort

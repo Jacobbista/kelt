@@ -20,7 +20,7 @@ graph LR
     10.203.0.101 N3
     10.204.0.101 N4"]
     UPF_E["UPF-Edge
-    10.203.0.100 N3
+    10.203.0.102 N3
     10.204.0.102 N4"]
     DN_C["Internet (N6c)"]
     DN_E["MEC (N6e)"]
@@ -101,7 +101,7 @@ sudo k3s kubectl -n 5g exec deploy/amf -- ip -o -4 addr show dev n2
 | Port | 2152 |
 | Subnet | 10.203.0.0/24 |
 | Gateway | 10.203.0.1 |
-| UPF-Edge static IP | 10.203.0.100 |
+| UPF-Edge static IP | 10.203.0.102 |
 | UPF-Cloud static IP | 10.203.0.101 |
 | OVS bridge | br-n3 |
 | VXLAN VNI | 103 |
@@ -195,7 +195,7 @@ All static IPs are defined in `ansible/group_vars/all.yml` and excluded from Whe
 | AMF | 10.201.0.100 | 10.202.0.100 | — | — | — | — | — |
 | SMF | — | — | — | 10.204.0.100 | — | — | — |
 | UPF-Cloud | — | — | 10.203.0.101 | 10.204.0.101 | 10.207.0.101 | 10.208.0.101 | — |
-| UPF-Edge | — | — | 10.203.0.100 | 10.204.0.102 | — | — | 10.206.0.100 |
+| UPF-Edge | — | — | 10.203.0.102 | 10.204.0.102 | — | — | 10.206.0.100 |
 
 ---
 

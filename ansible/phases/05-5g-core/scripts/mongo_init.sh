@@ -1,13 +1,12 @@
 #!/bin/bash
 set -e
 
-echo "[MongoDB][init] Starting MongoDB initialization..."
+echo "[MongoDB][init] Starting MongoDB..."
 
 mkdir -p /var/lib/mongodb
-mkdir -p /open5gs/install/var/log/open5gs
+mkdir -p /var/log/mongodb
 
-echo "[MongoDB][init] Starting MongoDB daemon..."
-mongod --config /open5gs/install/etc/open5gs/mongodb.conf &
+mongod --config /etc/mongod.conf &
 MONGO_PID=$!
 
 echo "[MongoDB][init] Waiting for MongoDB to be ready..."
@@ -25,9 +24,6 @@ done
 SNAP="${SUBSCRIBER_SNAPSHOT_PATH:-/etc/subscribers-snapshot/snapshot.json}"
 if [ -s "$SNAP" ]; then
   echo "[MongoDB][init] Reconciling subscribers from snapshot: $SNAP"
-  # Read the JSON via Node's fs module inside mongosh to avoid shell-quoting
-  # of snapshot contents. Single-quoted heredoc so nothing in the script body
-  # is expanded by the shell.
   export SNAP
   if ! mongosh --quiet open5gs <<'MONGOSH_EOF'
 const fs = require('fs');
@@ -57,15 +53,10 @@ MONGOSH_EOF
     echo "[MongoDB][init] WARNING: snapshot reconcile failed, continuing startup."
   fi
 else
-  echo "[MongoDB][init] No subscriber snapshot present at $SNAP, skipping reconcile."
+  echo "[MongoDB][init] No subscriber snapshot at $SNAP, skipping reconcile."
 fi
 
-echo "[MongoDB][init] Starting Open5GS WebUI..."
-cd /open5gs/webui
-DB_URI=mongodb://localhost/open5gs NODE_ENV=production node server/index.js &
-WEBUI_PID=$!
-
-# Keep container alive — exit if either process dies
-wait -n $MONGO_PID $WEBUI_PID
-echo "[MongoDB][init] A process exited unexpectedly, stopping container."
+echo "[MongoDB][init] Ready."
+wait $MONGO_PID
+echo "[MongoDB][init] mongod exited unexpectedly."
 exit 1

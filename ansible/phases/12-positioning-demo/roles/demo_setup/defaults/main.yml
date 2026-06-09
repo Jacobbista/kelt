@@ -1,0 +1,25 @@
+---
+positioning_demo_enabled: true
+
+# mec namespace already created by Phase 05; no namespace task needed here.
+demo_namespace: mec
+
+positioning_demo_image: "ghcr.io/jacobbista/5g-northbound/positioning-demo:0.1.0"
+positioning_demo_nodeport: 31940
+
+# Must match Phase 09 and 10 defaults
+keycloak_realm: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_REALM') | default('5g-testbed', true) }}"
+keycloak_path_prefix: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_PATH_PREFIX') | default('/auth', true) }}"
+iam_namespace: iam
+camara_namespace: camara
+keycloak_nodeport: 31910
+camara_gateway_nodeport: 31920
+
+# Absolute Keycloak origin the demo SPA targets for OIDC. Must match the
+# canonical Keycloak hostname (KC_HOSTNAME in phase 08) so login cookies
+# stay on a single domain across the auth flow. The realm allowlist
+# (webOrigins) already covers this demo origin for CORS.
+dashboard_external_origin: "{{ lookup('ansible.builtin.env', 'DASHBOARD_EXTERNAL_ORIGIN') | default('http://' ~ hostvars[groups['workers'][0]]['ansible_host'] ~ ':31573', true) }}"
+
+demo_ready_retries: 6
+demo_ready_delay: 10

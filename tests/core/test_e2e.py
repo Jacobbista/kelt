@@ -55,6 +55,7 @@ class E2ETestSuite:
                     failed += 1
             except Exception as e:
                 self.logger.error(f"{test_name} failed with exception: {e}")
+                success = False
                 failed += 1
             self.logger.test_end(test_name, success)
         
@@ -115,36 +116,36 @@ class E2ETestSuite:
             return False
     
     def test_kubeedge_integration(self) -> bool:
-        """Test KubeEdge integration"""
+        """Test KubeEdge integration.
+
+        The testbed runs with or without the edge VM. When no edge node is
+        present (edge disabled), the KubeEdge checks are skipped rather than
+        failed, mirroring the edge_enabled gating used across the deployment.
+        """
         self.logger.info("Testing KubeEdge integration...")
-        
+
         try:
+            nodes = self.kubectl.get_nodes()
+            edge_nodes = [n for n in nodes if "edge" in n["metadata"]["name"].lower()]
+            if not edge_nodes:
+                self.logger.warning("No edge nodes (edge disabled); skipping KubeEdge checks")
+                return True
+
             kubeedge_pods = self.kubectl.get_pods("kubeedge")
             if not kubeedge_pods:
-                self.logger.error("No KubeEdge pods found")
+                self.logger.error("Edge nodes present but no KubeEdge pods found")
                 return False
-            
+
             cloudcore_pods = [p for p in kubeedge_pods if "cloudcore" in p["metadata"]["name"].lower()]
-            if not cloudcore_pods:
-                self.logger.error("No CloudCore pods found")
-                return False
-            
             running_cloudcore = [p for p in cloudcore_pods if p["status"]["phase"] == "Running"]
             if not running_cloudcore:
                 self.logger.error("CloudCore is not running")
                 return False
-            
+
             self.logger.success("KubeEdge CloudCore is running")
-            
-            nodes = self.kubectl.get_nodes()
-            edge_nodes = [n for n in nodes if "edge" in n["metadata"]["name"].lower()]
-            if not edge_nodes:
-                self.logger.error("No edge nodes found")
-                return False
-            
             self.logger.success(f"Found {len(edge_nodes)} edge nodes")
             return True
-            
+
         except Exception as e:
             self.logger.error(f"KubeEdge integration test failed: {e}")
             return False
@@ -162,10 +163,12 @@ class E2ETestSuite:
                 return False
             
             running_multus = [p for p in multus_pods if p["status"]["phase"] == "Running"]
-            if len(running_multus) < 2:
-                self.logger.error(f"Not enough Multus pods running: {len(running_multus)}")
+            # Multus is intentionally pinned to the worker (nodeSelector), where
+            # the overlays live, so placement is deployment-defined: require at
+            # least one running pod rather than one per node.
+            if not running_multus:
+                self.logger.error("No Multus pods running")
                 return False
-            
             self.logger.success(f"Found {len(running_multus)} running Multus pods")
             
             nads = self.kubectl.get_network_attachments()
@@ -292,35 +295,36 @@ class E2ETestSuite:
             return False
     
     def test_ueransim_deployment(self) -> bool:
-        """Test UERANSIM deployment"""
-        self.logger.info("Testing UERANSIM deployment...")
-        
+        """UERANSIM simulated RAN (parked).
+
+        UERANSIM is not deployed in the current testbed; a physical gNB and
+        real UEs are used instead. This test skips when no gnb/ue pods exist,
+        and only validates them if simulated RAN is re-enabled. The physical
+        RAN path is validated by the `ran` suite (make ran).
+        """
+        self.logger.info("Testing UERANSIM deployment (parked)...")
+
         try:
             gnb_pods = [p for p in self.kubectl.get_pods("5g") if "gnb" in p["metadata"]["name"].lower()]
-            if not gnb_pods:
-                self.logger.error("No gNB pods found")
-                return False
-            
-            running_gnb = [p for p in gnb_pods if p["status"]["phase"] == "Running"]
-            if not running_gnb:
-                self.logger.error("gNB is not running")
-                return False
-            
-            self.logger.success("gNB is running")
-            
             ue_pods = [p for p in self.kubectl.get_pods("5g") if "ue" in p["metadata"]["name"].lower()]
-            if not ue_pods:
-                self.logger.error("No UE pods found")
+
+            if not gnb_pods and not ue_pods:
+                self.logger.warning("UERANSIM not deployed (parked); physical gNB/UE in use. See: make ran")
+                return True
+
+            running_gnb = [p for p in gnb_pods if p["status"]["phase"] == "Running"]
+            if gnb_pods and not running_gnb:
+                self.logger.error("UERANSIM gNB pod present but not Running")
                 return False
-            
+
             running_ue = [p for p in ue_pods if p["status"]["phase"] == "Running"]
-            if not running_ue:
-                self.logger.error("UE is not running")
+            if ue_pods and not running_ue:
+                self.logger.error("UERANSIM UE pod present but not Running")
                 return False
-            
-            self.logger.success("UE is running")
+
+            self.logger.success("UERANSIM simulated RAN is running")
             return True
-            
+
         except Exception as e:
             self.logger.error(f"UERANSIM deployment test failed: {e}")
             return False
@@ -434,23 +438,23 @@ class E2ETestSuite:
         self.logger.info("Testing end-to-end connectivity...")
         
         try:
-            fiveg_pods = self.kubectl.get_pods("5g")
-            if len(fiveg_pods) < 2:
-                self.logger.error("Need at least 2 pods for connectivity testing")
+            # Pick a running target pod and read its cluster IP from the API
+            # (NF pods lack `hostname -i`); ping it from netshoot.
+            running = [p for p in self.kubectl.get_pods("5g")
+                       if p["status"].get("phase") == "Running" and p["status"].get("pod_ip")]
+            target = next((p for p in running if "netshoot" not in p["metadata"]["name"].lower()), None)
+            if not target:
+                self.logger.error("No running 5G pod with an IP to probe")
                 return False
-            
-            pod1 = fiveg_pods[0]["metadata"]["name"]
-            pod2 = fiveg_pods[1]["metadata"]["name"]
-            
-            # Exec returns ExecResult with .stdout attribute
-            pod1_ip = self.kubectl.exec_in_pod(pod1, "5g", ["hostname", "-i"]).stdout.strip()
-            pod2_ip = self.kubectl.exec_in_pod(pod2, "5g", ["hostname", "-i"]).stdout.strip()
-            
-            if not self.network_validator.check_connectivity(pod1, pod2, "5g", pod2_ip):
-                self.logger.error(f"Pod {pod1} cannot reach pod {pod2}")
+
+            target_name = target["metadata"]["name"]
+            target_ip = target["status"]["pod_ip"]
+
+            if not self.network_validator.check_connectivity("netshoot", target_name, "5g", target_ip):
+                self.logger.error(f"netshoot cannot reach {target_name} ({target_ip})")
                 return False
-            
-            self.logger.success(f"Pod {pod1} can reach pod {pod2}")
+
+            self.logger.success(f"netshoot can reach {target_name} ({target_ip})")
             return True
             
         except Exception as e:

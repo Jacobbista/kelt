@@ -34,6 +34,13 @@ class K8sClient:
 
     def __init__(self, kubeconfig_path: Optional[str] = None, context: Optional[str] = None):
         kubeconfig_path = kubeconfig_path or os.environ.get("KUBECONFIG")
+        # The configured path is often a VM path (/home/vagrant/kubeconfig) that
+        # does not exist on a host run. Fall back to the KUBECONFIG env the test
+        # runner fetches into tests/ so suites work from the host too.
+        if not (kubeconfig_path and os.path.exists(kubeconfig_path)):
+            env_kc = os.environ.get("KUBECONFIG")
+            if env_kc and os.path.exists(env_kc):
+                kubeconfig_path = env_kc
         if kubeconfig_path and os.path.exists(kubeconfig_path):
             config.load_kube_config(config_file=kubeconfig_path, context=context)
         else:

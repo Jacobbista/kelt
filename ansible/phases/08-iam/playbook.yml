@@ -1,0 +1,49 @@
+---
+# PHASE 8: IAM (Keycloak + PostgreSQL)
+# Deploys Keycloak OAuth2/OIDC server backed by PostgreSQL.
+# Provides authentication for the Dashboard (phase 09), CAMARA gateway
+# (phase 10), positioning demo (phase 12), and any other service that
+# validates JWTs against the realm JWKS.
+
+- name: "PHASE 8 | Create Namespace"
+  hosts: masters
+  become: false
+  tags:
+    - phase8
+    - iam
+    - namespaces
+  tasks:
+    - name: Ensure iam namespace exists
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ iam_namespace }}"
+        state: present
+        definition:
+          metadata:
+            name: "{{ iam_namespace }}"
+            labels:
+              name: iam
+        kubeconfig: "{{ kubeconfig_path }}"
+      run_once: true
+
+- name: "PHASE 8 | Deploy IAM Stack"
+  hosts: masters
+  become: true
+  tags:
+    - phase8
+    - iam
+  roles:
+    - roles/keycloak_setup
+  post_tasks:
+    # Surface the validation command at provision time. The iam test suite is
+    # decoupled from deploy (a flaky probe must not fail provisioning), so the
+    # operator is pointed at it explicitly here. See tests/iam/test_iam.py.
+    - name: Show phase 08 validation hint
+      ansible.builtin.debug:
+        msg:
+          - "Phase 08 (IAM) deployed."
+          - "Validate from the HOST machine (not this VM):  cd tests && make iam"
+          - "make iam needs the vagrant CLI and host access to the NodePort."
+          - "Token checks read CAMARA_CLIENT_SECRET / KEYCLOAK_ADMIN_PASSWORD from .testbed.secrets."
+      run_once: true

@@ -35,6 +35,7 @@ The test runner automatically:
 |-------|-------------|--------|---------|
 | `e2e` | End-to-end deployment validation | ✅ Enabled | `make e2e` |
 | `protocols` | 5G protocol tests (NGAP, PFCP, GTP-U) | ✅ Enabled | `make protocols` |
+| `iam` | Keycloak realm + token validation (phase 08) | ✅ Enabled | `make iam` |
 | `performance` | Throughput and latency benchmarks | ⏸️ Disabled* | `make performance` |
 | `resilience` | Failure recovery tests | ⏸️ Disabled* | `make resilience` |
 | `ran` | Physical RAN integration tests | ✅ Enabled | `make ran` |
@@ -59,6 +60,8 @@ tests/
 │   └── test_e2e.py
 ├── protocols/          # 5G protocol tests
 │   └── test_5g_protocols.py
+├── iam/                # Keycloak realm + token tests
+│   └── test_iam.py
 ├── performance/        # Performance benchmarks
 │   └── test_performance.py
 ├── resilience/         # Failure recovery tests
@@ -71,6 +74,51 @@ tests/
     ├── kubectl_client.py   # Backward compat alias
     └── test_helpers.py     # Test utilities
 ```
+
+## IAM Suite
+
+Validates the Keycloak realm deployed by phase 08: pods Running, the OIDC
+discovery document, the master admin credential, the imported clients and
+realm roles, and a CAMARA gateway service-account token. It is an
+integration suite (it talks to the live NodePort), not a unit test, so it
+requires the testbed to be up and phase 08 deployed.
+
+Run it after deploying phase 08:
+
+```bash
+make iam
+
+# Verbose: prints discovery endpoints, full client/role lists, and token
+# claims (azp, expires_in, roles). Never prints secrets or the bearer token.
+# (make consumes a bare -v, so verbose is passed as V=1.)
+make iam V=1
+```
+
+Token tests need secrets. They are read from the environment first
+(`KEYCLOAK_ADMIN_PASSWORD`, `CAMARA_CLIENT_SECRET`), then from the
+project-root `.testbed.secrets` file as a convenience. When a secret is
+absent, the dependent test is **skipped, not failed**, so the suite still
+runs in a secret-less checkout. The `iam` block in `test_config.yaml` must
+mirror the phase 08 role defaults (NodePort, path prefix, realm, expected
+clients and roles).
+
+Application-level auth logic (JWT validation, 401 on bad token) belongs in
+each downstream service's own repository, where it runs in cloud CI without
+a cluster. This suite only validates the deployed identity provider.
+
+## Network probes (netshoot)
+
+The per-NF images are minimal and ship no `ip`/`ss`/`ping`, so the e2e and
+protocols suites do not exec network tools inside NF pods. Instead:
+
+- Interface IPs are read from the Multus `k8s.v1.cni.cncf.io/network-status`
+  annotation (no exec).
+- Reachability and port checks run from the `netshoot` pod in the `5g`
+  namespace (ping, nc, and nmap for SCTP/UDP), which is attached to the
+  overlays for testing.
+
+A running `netshoot` pod in `5g` is therefore required for the reachability
+and port-listening checks; without it those checks report an error.
 
 ## Disabled Suites
 

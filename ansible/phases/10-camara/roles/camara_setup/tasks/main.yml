@@ -1,0 +1,79 @@
+---
+# CAMARA GATEWAY SETUP
+
+- name: Ensure camara namespace exists
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Namespace
+    state: present
+    definition:
+      metadata:
+        name: "{{ camara_namespace }}"
+        labels:
+          name: "{{ camara_namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Pre-pull CAMARA gateway image on worker
+  command: >
+    k3s ctr -n k8s.io images pull {{ camara_gateway_image }}
+  delegate_to: "{{ groups['workers'][0] }}"
+  run_once: true
+  changed_when: false
+  register: prepull_camara
+  failed_when: prepull_camara.rc != 0 and 'already exists' not in (prepull_camara.stderr | default(''))
+
+- name: Apply camara-config ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    force: true
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/camara-config.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy CAMARA gateway Deployment
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    force: true
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/camara-gateway-deployment.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy CAMARA gateway Service
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/camara-gateway-service.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Wait for CAMARA gateway to be ready
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: camara-gateway
+    namespace: "{{ camara_namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: camara_deploy
+  retries: "{{ camara_ready_retries }}"
+  delay: "{{ camara_ready_delay }}"
+  until: >-
+    camara_deploy.resources | length > 0 and
+    camara_deploy.resources[0].status.availableReplicas | default(0) >= 1
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Display CAMARA gateway summary
+  debug:
+    msg:
+      - "CAMARA gateway deployed"
+      - "Location Retrieval: POST http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ camara_gateway_nodeport }}/location-retrieval/v0.5/retrieve"
+      - "Location Verification: POST http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ camara_gateway_nodeport }}/location-verification/v3/verify"
+      - "OpenAPI docs: http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ camara_gateway_nodeport }}/docs"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true

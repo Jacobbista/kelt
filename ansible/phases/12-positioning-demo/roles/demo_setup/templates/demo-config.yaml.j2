@@ -1,0 +1,48 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: positioning-demo-config
+  namespace: {{ demo_namespace }}
+data:
+  # Browser env. The demo SPA reads window.__ENV__ with fallback to
+  # import.meta.env. CAMARA API stays same-origin (proxied below).
+  # Keycloak is cross-origin to the canonical IAM hostname so the OIDC
+  # cookies stay on a single domain across login redirects; realm
+  # webOrigins must include this demo origin for CORS to succeed.
+  env-config.js: |
+    window.__ENV__ = {
+      VITE_CAMARA_API_BASE:    "/api/camara",
+      VITE_KEYCLOAK_URL:       "{{ dashboard_external_origin }}{{ keycloak_path_prefix | default('/auth') }}",
+      VITE_KEYCLOAK_REALM:     "{{ keycloak_realm }}",
+      VITE_KEYCLOAK_CLIENT_ID: "positioning-demo"
+    };
+
+  # nginx reverse proxy. Mounted at /etc/nginx/conf.d/default.conf so
+  # the demo image stays generic; all operator routing is delivered at
+  # deploy time. CAMARA is reached via in-cluster DNS so the gateway
+  # does not need a NodePort. Keycloak is NOT proxied here: the OIDC
+  # flow targets the canonical IAM hostname directly to keep auth
+  # cookies on a single domain.
+  default.conf: |
+    server {
+      listen 80 default_server;
+      server_name _;
+      root /usr/share/nginx/html;
+      index index.html;
+
+      # CAMARA Location API. Demo code calls `${VITE_CAMARA_API_BASE}/...`
+      # so the `/api/camara/` prefix is stripped before forwarding.
+      location /api/camara/ {
+        proxy_pass http://camara-gateway.{{ camara_namespace | default('camara') }}.svc.cluster.local:8080/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+      }
+
+      # SPA fallback for client-side routes.
+      location / {
+        try_files $uri $uri/ /index.html;
+      }
+    }

@@ -1,0 +1,94 @@
+site_name: KELT
+site_description: "A lightweight, reproducible cloud-native 5G core and edge testbed"
+site_url: "https://jacobbista.github.io/5g-k3s-kubedge-testbed/"
+repo_url: "https://github.com/Jacobbista/5g-k3s-kubedge-testbed"
+repo_name: "Jacobbista/5g-k3s-kubedge-testbed"
+docs_dir: docs
+
+theme:
+  name: material
+  logo: assets/kelt-mark.svg
+  favicon: assets/kelt-mark.svg
+  features:
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - content.code.copy
+    - search.suggest
+  palette:
+    - scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+plugins:
+  - search
+
+nav:
+  - Home: README.md
+  - Architecture:
+      - Overview: architecture/overview.md
+      - Virtualization Layers: architecture/virtualization-layers.md
+      - Network Topology: architecture/network-topology.md
+      - 5G Interfaces: architecture/5g-interfaces.md
+      - Subscriber Persistence: architecture/subscriber-persistence.md
+      - Positioning Adapters: architecture/positioning-adapters.md
+      - NF Platform: architecture/nf-platform.md
+  - Deployment:
+      - Phases: deployment/phases.md
+      - Server / NUC Setup: deployment/server-setup.md
+      - Physical RAN: deployment/physical-ran.md
+      - RAN Modes (dashboard): deployment/ran-modes-dashboard.md
+      - External Tunnel: deployment/external-tunnel.md
+  - Dashboard:
+      - Overview: dashboard/overview.md
+      - Modules: dashboard/modules.md
+      - API Reference: dashboard/api-reference.md
+  - Operations:
+      - Troubleshooting: operations/troubleshooting.md
+      - Handbook (cheat-sheet): operations/handbook.md
+  - Runbooks:
+      - Overview: runbooks/README.md
+      - NGAP: runbooks/ngap-diagnostics.md
+      - PFCP: runbooks/pfcp-diagnostics.md
+      - GTP-U: runbooks/gtpu-path.md
+      - OVS / VXLAN: runbooks/ovs-vxlan-health.md
+      - Multus / IPAM: runbooks/multus-nad-ipam.md
+  - Security:
+      - IAM: security/iam.md
+      - External Access: security/external-access.md
+  - Tools:
+      - 5G UE Probe: tools/5g-probe.md
+      - testbed-config: tools/testbed-config.md
+  - Development:
+      - Contributing: development/contributing.md
+      - Testing: development/testing.md
+  - Known Issues:
+      - KubeEdge Edge Discovery: known-issues/kubeedge-edge-discovery.md
+      - KubeEdge Multus Env Injection: known-issues/kubeedge-multus-env-injection.md
+      - KubeEdge ServiceAccount Tokens: known-issues/kubeedge-serviceaccount-token.md
+      - UPF-Edge CNI Route Conflict: known-issues/upf-edge-cni-route-conflict.md
+      - TCP Performance over 5G DRX: known-issues/tcp-performance-5g-drx.md
+  - Project:
+      - Requirements: requirements.md
+      - Getting Started: getting-started.md
+      - Feature Maturity: status.md
+      - Roadmap: roadmap.md
+      - Gaps: gaps.md

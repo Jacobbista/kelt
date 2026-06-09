@@ -1,17 +1,11 @@
 ---
-# Infrastructure setup for 5G Core deployment
-kubeconfig_path: "/home/vagrant/kubeconfig"
+# CRI endpoints (k3s uses its own containerd socket; edge uses standalone containerd)
+worker_cri_endpoint: "unix:///run/k3s/containerd/containerd.sock"
+edge_cri_endpoint: "unix:///run/containerd/containerd.sock"
 
 # Storage class configuration
 storage_class_name: "hostpath-storage"
 storage_provisioner: "kubernetes.io/no-provisioner"
 
-# Container images to pre-pull
-container_images:
-  - "docker.io/jacobbista/comnetsemu-5gc:latest"
-  - "docker.io/jacobbista/comnetsemu-ueransim:latest"
-  - "docker.io/jacobbista/comnetsemu-mec:latest"
-
-# CRI endpoints
-worker_cri_endpoint: "unix:///run/k3s/containerd/containerd.sock"
-edge_cri_endpoint: "unix:///run/containerd/containerd.sock"
+# NF images come from nf_images in all.yml; no legacy images needed.
+container_images: []

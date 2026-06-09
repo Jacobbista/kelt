@@ -2,6 +2,19 @@ import { createContext, useCallback, useContext, useEffect, useState } from "rea
 import { AUTH_ENABLED, extractRoles, getUserManager, KEYCLOAK_AUTHORITY } from "./oidc";
 import { env } from "../runtime-env";
 
+// Keycloak end-session URL without post_logout_redirect_uri. The SPA
+// drives navigation locally to /logged-out so behavior does not depend
+// on Keycloak resolving redirect URI patterns (KC 26 + cross-origin
+// hostnames sometimes fall back to the client's first redirectUri
+// instead of /logged-out, sending the user straight to /auth/callback
+// and re-authenticating via SSO).
+function buildEndSessionUrl(idToken, clientId) {
+  const params = new URLSearchParams();
+  params.set("client_id", clientId);
+  if (idToken) params.set("id_token_hint", idToken);
+  return `${KEYCLOAK_AUTHORITY}/protocol/openid-connect/logout?${params.toString()}`;
+}
+
 // AuthContext exposes the currently authenticated user (or null), the role
 // list extracted from the JWT, and helpers for login/logout. When
 // VITE_AUTH_ENABLED is false the context returns a permissive
@@ -22,6 +35,12 @@ export function AuthProvider({ children }) {
     }
 
     let mounted = true;
+
+    // Warm the OIDC metadata cache so signinRedirect/signoutRedirect do not
+    // pay a cross-origin .well-known round-trip on the first user click. On
+    // tunneled dev (cross-origin to the IAM authority) that round-trip is
+    // ~1s and made the logout button appear unresponsive on the first press.
+    um.metadataService?.getMetadata().catch(() => {});
 
     um.getUser()
       .then((u) => {
@@ -57,8 +76,27 @@ export function AuthProvider({ children }) {
   const logout = useCallback(async () => {
     const um = getUserManager();
     if (!um) return;
-    await um.signoutRedirect();
-  }, []);
+    const idToken = user?.id_token;
+    const clientId = env("VITE_KEYCLOAK_CLIENT_ID", "dashboard");
+    try {
+      await um.removeUser();
+    } catch {
+      // ignore: still proceed with SPA navigation
+    }
+    // Best-effort Keycloak SSO termination via hidden iframe. The SPA
+    // does not depend on the iframe completing; the local logout (SPA
+    // route + cleared sessionStorage) is authoritative for this tab.
+    try {
+      const iframe = document.createElement("iframe");
+      iframe.style.display = "none";
+      iframe.src = buildEndSessionUrl(idToken, clientId);
+      document.body.appendChild(iframe);
+      setTimeout(() => { try { iframe.remove(); } catch { /* noop */ } }, 4000);
+    } catch {
+      // noop: SPA navigation below is what the user sees regardless
+    }
+    window.location.assign("/logged-out");
+  }, [user]);
 
   const roles = extractRoles(user);
   const value = {

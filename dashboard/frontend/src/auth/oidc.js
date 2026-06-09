@@ -38,7 +38,7 @@ function buildUserManager() {
     authority: AUTHORITY,
     client_id: CLIENT_ID,
     redirect_uri: `${window.location.origin}/auth/callback`,
-    post_logout_redirect_uri: window.location.origin,
+    post_logout_redirect_uri: `${window.location.origin}/logged-out`,
     response_type: "code",
     scope: "openid profile email",
     automaticSilentRenew: true,

@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: positioning-floor-plan
+  namespace: {{ positioning_namespace }}
+data:
+  floor-plan.json: |
+{{ lookup('template', role_path + '/templates/floor-plan.json.j2', convert_data=False) | indent(4, True) }}

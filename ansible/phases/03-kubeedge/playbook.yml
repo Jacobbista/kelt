@@ -2,14 +2,14 @@
 
 - name: "PHASE 3 | CloudCore on worker"
   hosts: workers
-  become: yes
+  become: true
   roles:
     - roles/kubeedge_common
     - roles/kubeedge_cloudcore
 
 - name: "PHASE 3 | EdgeCore on edge"
   hosts: edges
-  become: yes
+  become: true
   roles:
     - role: roles/edge_containerd
       when: edge_enabled | default(false) | bool
@@ -20,7 +20,7 @@
 
 - name: "PHASE 3 | Verify"
   hosts: masters
-  become: yes
+  become: true
   tasks:
     - name: Ensure kubeedge namespace exists
       kubernetes.core.k8s:

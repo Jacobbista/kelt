@@ -1,6 +1,6 @@
 ---
 - name: "PHASE 1 | Infrastructure Setup"
   hosts: all:!ansible
-  become: yes
+  become: true
   roles:
     - roles/infra_setup

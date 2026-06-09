@@ -95,50 +95,109 @@ class TestLogger:
 
 
 class NetworkValidator:
-    """Network validation utilities"""
+    """Network validation utilities.
+
+    The per-NF images are minimal and ship no ip/ss/ping, so probes do not exec
+    inside the NF pods. Interface IPs are read from the Multus network-status
+    annotation, and reachability/port probes run from the netshoot pod (which
+    carries ip/ss/ping/nc/nmap and is attached to the overlays for testing).
+    """
 
     def __init__(self, kubectl: K8sClient, config: TestConfig):
         self.kubectl = kubectl
         self.config = config
+        self._netshoot_cache = None
+
+    def _netshoot_pod(self, namespace: str = "5g"):
+        """Return a running netshoot pod name in the namespace, or None."""
+        if self._netshoot_cache:
+            return self._netshoot_cache
+        for p in self.kubectl.get_pods(namespace):
+            if "netshoot" in p["metadata"]["name"].lower() and p["status"].get("phase") == "Running":
+                self._netshoot_cache = p["metadata"]["name"]
+                return self._netshoot_cache
+        return None
+
+    def _pod_network_ips(self, pod_name: str, namespace: str) -> dict:
+        """Map interface -> [ips] from a pod's Multus network-status annotation."""
+        import json
+        pod = next((p for p in self.kubectl.get_pods(namespace)
+                    if p["metadata"]["name"] == pod_name), None)
+        if not pod:
+            return {}
+        raw = (pod["metadata"].get("annotations", {}) or {}).get(
+            "k8s.v1.cni.cncf.io/network-status", ""
+        )
+        if not raw:
+            return {}
+        try:
+            return {n.get("interface", ""): (n.get("ips", []) or []) for n in json.loads(raw)}
+        except Exception:
+            return {}
 
     def check_interface_ip(
         self, pod_name: str, namespace: str, interface: str, expected_ip: str, capture: bool = False
     ):
-        """Return True/False; if capture=True return (ok, output)."""
-        try:
-            result = self.kubectl.exec_in_pod(
-                pod_name, namespace, ["ip", "addr", "show", interface]
-            )
-            out = result.stdout
-            ok = expected_ip in out
-            return (ok, out) if capture else ok
-        except Exception as e:
-            return (False, f"ERROR: {e}") if capture else False
+        """Verify an interface holds expected_ip, read from network-status."""
+        ips_by_iface = self._pod_network_ips(pod_name, namespace)
+        matched = []
+        for iface, ips in ips_by_iface.items():
+            if iface == interface or iface.startswith(interface):
+                matched.extend(ips)
+        ok = expected_ip in matched
+        out = f"{interface} ips={matched} (network-status annotation)"
+        return (ok, out) if capture else ok
 
     def check_port_listening(
         self, pod_name: str, namespace: str, port: int, protocol: str = "tcp", capture: bool = False
     ):
-        """Return True/False; if capture=True return (ok, output)."""
-        try:
-            if protocol.upper() == "SCTP":
-                result = self.kubectl.exec_in_pod(pod_name, namespace, ["ss", "-S", "-na"])
-            elif protocol.upper() == "UDP":
-                result = self.kubectl.exec_in_pod(pod_name, namespace, ["ss", "-unap"])
-            else:
-                result = self.kubectl.exec_in_pod(pod_name, namespace, ["ss", "-tnap"])
-            out = result.stdout
-            ok = str(port) in out
-            return (ok, out) if capture else ok
-        except Exception as e:
-            return (False, f"ERROR: {e}") if capture else False
+        """Probe a port on the pod's overlay IPs from netshoot.
+
+        SCTP uses an nmap INIT scan, TCP uses nc, UDP uses nmap -sU (which can
+        only report open|filtered, so a listening but silent UDP service still
+        counts as open).
+        """
+        netshoot = self._netshoot_pod(namespace)
+        if not netshoot:
+            out = "ERROR: no running netshoot pod for probing"
+            return (False, out) if capture else False
+
+        targets = [ip for ips in self._pod_network_ips(pod_name, namespace).values() for ip in ips]
+        if not targets:
+            out = f"ERROR: no IPs in network-status for {pod_name}"
+            return (False, out) if capture else False
+
+        proto = protocol.upper()
+        outputs = []
+        for ip in targets:
+            try:
+                if proto == "SCTP":
+                    r = self.kubectl.exec_in_pod(netshoot, namespace, ["nmap", "-sY", "-p", str(port), "-oG", "-", ip])
+                    hit = f"{port}/open" in r.stdout
+                elif proto == "UDP":
+                    r = self.kubectl.exec_in_pod(netshoot, namespace, ["nmap", "-sU", "-p", str(port), "-oG", "-", ip])
+                    hit = f"{port}/open" in r.stdout
+                else:
+                    r = self.kubectl.exec_in_pod(netshoot, namespace, ["nc", "-z", "-w", "3", ip, str(port)])
+                    hit = r.returncode == 0
+                outputs.append(f"{ip}:{port}/{proto} -> {'open' if hit else 'closed'}")
+                if hit:
+                    return (True, "\n".join(outputs)) if capture else True
+            except Exception as e:
+                outputs.append(f"{ip}:{port}/{proto} ERROR: {e}")
+        return (False, "\n".join(outputs)) if capture else False
 
     def check_connectivity(
         self, pod1_name: str, pod2_name: str, namespace: str, target_ip: str, capture: bool = False
     ):
-        """ping - returns True/False; if capture=True return (ok, output)."""
+        """Ping target_ip from the netshoot pod (NF pods lack ping)."""
+        netshoot = self._netshoot_pod(namespace)
+        if not netshoot:
+            out = "ERROR: no running netshoot pod for probing"
+            return (False, out) if capture else False
         try:
             result = self.kubectl.exec_in_pod(
-                pod1_name, namespace, ["ping", "-c", "3", "-W", "5", target_ip]
+                netshoot, namespace, ["ping", "-c", "3", "-W", "5", target_ip]
             )
             out = result.stdout
             ok = (" 0% packet loss" in out) or ("bytes from" in out) or ("ttl=" in out)

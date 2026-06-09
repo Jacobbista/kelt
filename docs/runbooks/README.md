@@ -111,7 +111,7 @@ sudo k3s kubectl -n 5g get pod -l app=amf -o json | jq -r '.items[0].metadata.an
 
 ```bash
 # Test VXLAN tunnel performance
-sudo k3s kubectl -n 5g exec deploy/gnb -- iperf3 -c 10.203.0.100 -t 30
+sudo k3s kubectl -n 5g exec deploy/gnb -- iperf3 -c 10.203.0.102 -t 30
 
 # Test PFCP message exchange
 sudo k3s kubectl -n 5g exec deploy/smf -- bash -c 'for i in {1..10}; do nc -zuvw1 10.204.0.101 8805 && echo "Success $i" || echo "Failed $i"; sleep 1; done'

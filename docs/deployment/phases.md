@@ -4,26 +4,32 @@ The testbed is deployed in multiple sequential phases, each building on the prev
 
 ## Phase Overview
 
-| Phase | Name            | Duration | Description                               |
-| ----- | --------------- | -------- | ----------------------------------------- |
-| 1     | Infrastructure  | ~2 min   | System packages, OVS installation         |
-| 2     | Kubernetes      | ~3 min   | K3s cluster setup                         |
-| 3     | KubeEdge        | ~2 min   | CloudCore and EdgeCore                    |
-| 4     | Overlay Network | ~3 min   | Multus, OVS bridges, VXLAN                |
-| 5     | 5G Core         | ~5 min   | Open5GS network functions                 |
-| 6     | UERANSIM        | ~3 min   | gNB and UE simulators                     |
-| 7     | Observability   | ~3 min   | Prometheus, Loki, Grafana                 |
-| 8     | Dashboard       | ~2 min   | Out-of-band FastAPI + React control plane |
+Phases fall into three classes. **Core** phases always run. **Optional** phases are addons not required for a working core. Some Core phases are **edge-conditional** (behavior depends on `edge_enabled`). See [status.md](../status.md) for the core versus optional split.
 
-**Total deployment time**: ~18-23 minutes (depending on optional phases)
+| Phase | Name | Class | Description |
+| ----- | ---- | ----- | ----------- |
+| 1  | Infrastructure     | Core                          | System packages, Open vSwitch |
+| 2  | Kubernetes         | Core                          | K3s cluster |
+| 3  | KubeEdge           | Core (edge-conditional)       | CloudCore always; EdgeCore when `edge_enabled` |
+| 4  | Overlay Network    | Core (edge-conditional)       | Multus, OVS bridges, VXLAN tunnels |
+| 5  | 5G Core            | Core                          | Open5GS network functions, MongoDB |
+| 6  | UERANSIM & MEC     | Optional (`DEPLOY_MODE=full`) | Simulated gNB and UE |
+| 7  | Observability      | Core                          | Prometheus, Loki, Grafana |
+| 8  | IAM                | Core                          | Keycloak realm and PostgreSQL |
+| 9  | Dashboard          | Core                          | Out-of-band FastAPI + React control plane |
+| 10 | CAMARA Gateway     | Optional addon                | CAMARA Location API gateway |
+| 11 | Positioning Engine | Optional addon                | Positioning engine with pluggable adapters |
+| 12 | Positioning Demo   | Optional addon                | Positioning demo SPA |
+
+Optional addons are off by default (opt-in). Phase 6 (UERANSIM) is gated by `ueransim_enabled`, set automatically by `DEPLOY_MODE=full` or by `testbed run-phase 06-ueransim-mec`. Phases 10-12 are gated by `camara_enabled` / `positioning_enabled` / `positioning_demo_enabled` in `all.yml`. See [gaps.md](../gaps.md) for the remaining CAMARA/positioning rework.
 
 ## Running Phases
 
 ### Provisioning Flags (`vagrant up`)
 
-| Flag          | Values              | Default     | Behavior                                                                        |
-| ------------- | ------------------- | ----------- | ------------------------------------------------------------------------------- |
-| `DEPLOY_MODE` | `core_only`, `full` | `core_only` | `core_only`: phases 1-5 + 7 + 8, `full`: also includes phase 6 (UERANSIM + MEC) |
+| Flag          | Values              | Default     | Behavior                                                                |
+| ------------- | ------------------- | ----------- | ----------------------------------------------------------------------- |
+| `DEPLOY_MODE` | `core_only`, `full` | `core_only` | `core_only`: all phases except 6; `full`: also phase 6 (UERANSIM + MEC) |
 | `TESTBED_PROFILE` | `laptop`, `server` | `laptop` | `server` creates 3 VMs with optimized resources; `laptop` creates 4 VMs including edge |
 | `EDGE_ENABLED` | `true`, `false` | `true` (laptop) / `false` (server) | Controls edge VM creation and all edge-related Ansible tasks |
 
@@ -49,7 +55,7 @@ DEPLOY_MODE=full vagrant up
 ### Core Only (Default)
 
 ```bash
-# Runs phases 1-5 and 7-8
+# Runs all phases except 6 (UERANSIM)
 DEPLOY_MODE=core_only vagrant up
 ```
 
@@ -217,6 +223,8 @@ sudo k3s kubectl logs -n 5g deploy/amf -c amf --tail=20
 
 **Location**: `ansible/phases/06-ueransim-mec/`
 
+Optional. Runs only with `DEPLOY_MODE=full`.
+
 ### What it does
 
 - Creates discovery token for edge pods
@@ -314,7 +322,29 @@ curl http://192.168.56.11:30300/api/health
 
 ---
 
-## Phase 8: Dashboard Control Plane
+## Phase 8: IAM (Keycloak)
+
+**Location**: `ansible/phases/08-iam/`
+
+### What it does
+
+- Deploys Keycloak and its PostgreSQL backend
+- Creates the `5g-testbed` realm with the dashboard and CAMARA OIDC clients
+- Defines the role model (`dashboard-admin`, `dashboard-viewer`, `camara-location-read`)
+- Seeds two end users (`admin`, `viewer`) with temporary passwords
+- Realm reconcile behavior is gated (`ask` / `on` / `off`) via `testbed iam reconcile`
+
+### Verify
+
+```bash
+sudo k3s kubectl get pods -n iam
+```
+
+See [security/iam.md](../security/iam.md) for the realm structure and role matrix.
+
+---
+
+## Phase 9: Dashboard Control Plane
 
 **Purpose**: Prepare an out-of-band dashboard on the ansible VM without impacting namespace `5g` runtime.
 
@@ -325,7 +355,7 @@ vagrant ssh ansible
 cd ~/ansible-ro
 
 # Prepare dashboard workspace and dependencies
-ansible-playbook phases/08-dashboard/playbook.yml
+ansible-playbook phases/09-dashboard/playbook.yml
 ```
 
 ### Development mode (live reload)
@@ -333,7 +363,7 @@ ansible-playbook phases/08-dashboard/playbook.yml
 ```bash
 vagrant ssh ansible
 cd ~/ansible-ro
-ansible-playbook phases/08-dashboard/playbook.yml -e dashboard_mode=dev
+ansible-playbook phases/09-dashboard/playbook.yml -e dashboard_mode=dev
 ```
 
 ### What it does
@@ -357,10 +387,35 @@ sudo systemctl restart dashboard-backend dashboard-frontend
 
 ### Access
 
-| Service       | URL                       |
-| ------------- | ------------------------- |
-| Dashboard UI  | http://192.168.56.13:31573 |
-| Dashboard API | http://192.168.56.13:31880 |
+Access URLs (cluster baseline, dev frontend, API): see [Dashboard Overview](../dashboard/overview.md#access).
+
+---
+
+## Phase 10: CAMARA Gateway (optional)
+
+**Location**: `ansible/phases/10-camara/`
+
+Optional addon, gated by `camara_enabled`. Deploys the CAMARA Location API gateway in front of the 5G core. Images are built in the `5g-northbound` companion repository and pulled by tag.
+
+See [architecture/positioning-adapters.md](../architecture/positioning-adapters.md).
+
+---
+
+## Phase 11: Positioning Engine (optional)
+
+**Location**: `ansible/phases/11-positioning/`
+
+Optional addon, gated by `positioning_enabled`. Deploys the positioning engine that the CAMARA Location API relays to, with a pluggable adapter model.
+
+See [architecture/positioning-adapters.md](../architecture/positioning-adapters.md).
+
+---
+
+## Phase 12: Positioning Demo (optional)
+
+**Location**: `ansible/phases/12-positioning-demo/`
+
+Optional addon, gated by `positioning_demo_enabled`. Deploys the positioning demo SPA that exercises the CAMARA Location API end to end.
 
 ---
 

@@ -14,6 +14,9 @@ k3s_containerd_sock: unix:///run/k3s/containerd/containerd.sock
 
 kubeconfig_path: /home/vagrant/kubeconfig
 
+# Shared namespace for IAM stack (phase 08 Keycloak + PostgreSQL).
+iam_namespace: iam
+
 # IPs Nx centralizzati (statici)
 # N1 AMF static IP (must be within n1-net NAD range)
 amf_n1_ip: 10.201.0.100
@@ -44,6 +47,9 @@ whereabouts_version: 0.7.0
 cni_plugins_version: 1.5.1
 alpine_image: alpine:3.20
 overlay_mtu: 1450
+# N6 cloud (br-n6c): decapsulated data plane; align with ogstun (1400) so TCP MSS matches GTP-U path.
+# See docs/architecture/network-topology.md (MTU sizing and GTP-U encapsulation)
+n6_data_mtu: 1400
 
 # Interfacce e NAD (parametrizzabili)
 # N1
@@ -78,7 +84,7 @@ n6e_interface_regex: ^(n6|net[0-9]+)$
 
 # N6 Cloud
 nad_n6c_namespace: 5g
-nad_n6c_name: n6-cld-net
+nad_n6c_name: n6c-net
 n6c_interface_expected: n6
 n6c_interface_regex: ^(n6|net[0-9]+)$
 
@@ -102,6 +108,25 @@ nad_n6m_namespace: mec
 nad_n6m_name: n6m-net
 n6m_interface_expected: n6m
 n6m_interface_regex: "^(n6m|net[0-9]+)$"
+
+# VXLAN VNIs per 5G interface (overlay keys). Consumed by ovs-setup.sh via the
+# OVS DaemonSet env. n6m_vni is defined in the N6 MEC block above.
+n1_vni: 101
+n2_vni: 102
+n3_vni: 103
+n4_vni: 104
+n6e_vni: 106
+n6c_vni: 107
+
+# Optional addon toggles (off by default; opt-in). See docs/status.md for maturity.
+# UERANSIM (simulated RAN, phase 6): set true to deploy gNB/UE. DEPLOY_MODE=full
+# and `testbed run-phase 06-ueransim-mec` set this automatically.
+ueransim_enabled: false
+# CAMARA/positioning/demo phase structure is being reworked in the 5g-northbound
+# repo; the showcase default-on decision is deferred (see docs/gaps.md).
+camara_enabled: false
+positioning_enabled: false
+positioning_demo_enabled: false
 
 # Physical RAN Integration (for femtocell/small cell connectivity)
 # See docs/deployment/physical-ran.md for details
@@ -132,3 +157,22 @@ ran_interface: "{{ physical_ran_interface }}"
 use_upf_edge: false
 
 # Phase 6 topology variables moved to ansible/phases/06-ueransim-mec/vars/topology.yml
+
+# ── 5G NF container images ───────────────────────────────────────────────────
+mongodb_image: "docker.io/library/mongo:6"
+# Used as initContainer for UPF/AMF network setup (ip, iptables, sysctl).
+network_setup_image: "ghcr.io/nicolaka/netshoot:latest"
+# Source: https://github.com/Jacobbista/5g-nf-platform
+# Tag format: <upstream-open5gs-version>-p<patch-revision>
+# p0 = no patches; p1+ = research patches applied (see repo for changelog)
+nf_images:
+  amf:  "ghcr.io/jacobbista/5g-nf-platform/amf:2.7.7-p0"
+  smf:  "ghcr.io/jacobbista/5g-nf-platform/smf:2.7.7-p0"
+  upf:  "ghcr.io/jacobbista/5g-nf-platform/upf:2.7.7-p2"
+  udm:  "ghcr.io/jacobbista/5g-nf-platform/udm:2.7.7-p0"
+  ausf: "ghcr.io/jacobbista/5g-nf-platform/ausf:2.7.7-p0"
+  udr:  "ghcr.io/jacobbista/5g-nf-platform/udr:2.7.7-p0"
+  nrf:  "ghcr.io/jacobbista/5g-nf-platform/nrf:2.7.7-p0"
+  pcf:  "ghcr.io/jacobbista/5g-nf-platform/pcf:2.7.7-p0"
+  bsf:  "ghcr.io/jacobbista/5g-nf-platform/bsf:2.7.7-p0"
+  nssf: "ghcr.io/jacobbista/5g-nf-platform/nssf:2.7.7-p0"

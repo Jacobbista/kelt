@@ -14,12 +14,21 @@ suites:
   e2e:
     enabled: true
     timeout: 1800
-    phases: [infrastructure, 5g-core, ueransim, e2e]
+    # ueransim phase parked: simulated RAN not deployed, physical gNB/UE used.
+    phases: [infrastructure, 5g-core, e2e]
   
   protocols:
     enabled: true
     timeout: 600
-  
+
+  iam:
+    # Validates the Keycloak realm deployed by phase 08. Requires the iam
+    # namespace to be running. Token tests are skipped (not failed) when
+    # KEYCLOAK_ADMIN_PASSWORD / CAMARA_CLIENT_SECRET are absent from the
+    # environment and .testbed.secrets.
+    enabled: true
+    timeout: 300
+
   performance:
     # DISABLED: Requires iperf3 installed in 5G containers
     # To enable:
@@ -50,6 +59,27 @@ cluster:
   master_host: "192.168.56.10"
   worker_host: "192.168.56.11"
   edge_host: "192.168.56.12"
+
+# IAM (Keycloak) configuration for the iam suite.
+# Must mirror ansible/phases/08-iam/roles/keycloak_setup/defaults/main.yml.
+# keycloak_path_prefix matches KEYCLOAK_PATH_PREFIX (empty for root-path deploys).
+iam:
+  namespace: "iam"
+  keycloak_host: "192.168.56.11"   # worker NodePort
+  keycloak_nodeport: 31910
+  keycloak_path_prefix: "/auth"
+  realm: "5g-testbed"
+  admin_user: "admin"
+  request_timeout: 15
+  expected_clients:
+    - camara-gateway
+    - positioning-demo
+    - dashboard
+    - dashboard-readonly
+  expected_realm_roles:
+    - camara-location-read
+    - dashboard-admin
+    - dashboard-viewer
 
 # Network configuration (from ansible/group_vars/all.yml)
 network:
@@ -143,13 +173,16 @@ core_components:
     ports: [2152, 8805]  # GTP-U for N3, PFCP for N4
     interfaces: ["n3", "n4"]
 
-# UERANSIM components
+# UERANSIM components (PARKED).
+# Simulated RAN is not deployed; a physical gNB and real UEs are used. This
+# block is retained so the e2e UERANSIM checks can validate simulated RAN if
+# it is re-enabled. The physical RAN path is validated by the `ran` suite.
 ueransim:
   gnb:
     name: "gnb"
     namespace: "5g"
     interfaces: ["n2", "n3"]
-  
+
   ue:
     name: "ue"
     namespace: "5g"

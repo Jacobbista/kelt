@@ -44,7 +44,7 @@ Relevant files:
 
 ### Read path (MongoDB pod startup)
 
-The MongoDB deployment mounts the ConfigMap read-only at `/etc/subscribers-snapshot/`. After `mongod` becomes reachable and before the WebUI starts, `mongo_webui_init.sh` runs a `mongosh` reconcile that:
+The MongoDB deployment mounts the ConfigMap read-only at `/etc/subscribers-snapshot/`. After `mongod` becomes reachable, `mongo_init.sh` runs a `mongosh` reconcile that:
 
 1. Parses `snapshot.json` via `require('fs')` (quotes/escapes in subscriber fields are preserved).
 2. Upserts every entry keyed by `imsi`.
@@ -54,7 +54,7 @@ The ConfigMap volume is marked `optional: true`, so the pod still comes up on a 
 
 Relevant files:
 
-- `ansible/phases/05-5g-core/scripts/mongo_webui_init.sh`
+- `ansible/phases/05-5g-core/scripts/mongo_init.sh`
 - `ansible/phases/05-5g-core/templates/mongodb-deployment.yaml.j2`
 
 ### Seed path (Ansible `subscriber_import`)

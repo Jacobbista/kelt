@@ -180,16 +180,9 @@ See [Physical RAN Integration](../deployment/physical-ran.md) for setup.
 
 ## Control Plane: Out-of-Band Dashboard
 
-The dashboard runs on the **ansible VM** — separate from the 5G workloads by design. This mirrors professional network management architectures where the control surface is isolated from the production data/control plane to reduce blast radius.
+The dashboard is deployed out-of-band, separate from the 5G workloads, so a fault in the control surface cannot affect the data or control plane. This mirrors professional network management, where the OAM plane is isolated from the production data and control plane.
 
-| Service | URL | Purpose |
-|---------|-----|---------|
-| Dashboard UI | http://192.168.56.13:31573 | Web control plane |
-| Dashboard API | http://192.168.56.13:31880/docs | REST API (FastAPI) |
-| Grafana | http://192.168.56.11:30300 | Metrics & logs |
-| Prometheus | http://192.168.56.11:30090 | Metrics scraping |
-
-See [Dashboard Overview](../dashboard/overview.md) for full documentation.
+Access URLs and the cluster-versus-dev frontend model: [Dashboard Overview](../dashboard/overview.md#access). Grafana and Prometheus URLs: [Phase 7](../deployment/phases.md).
 
 ---
 
@@ -222,7 +215,10 @@ flowchart TD
     P7["Phase 7 · Observability ~3min
     Prometheus + Loki + Grafana"]
     
-    P8["Phase 8 · Dashboard ~2min
+    P8["Phase 8 · IAM ~2min
+    Keycloak + PostgreSQL"]
+
+    P9["Phase 9 · Dashboard ~2min
     FastAPI + React on ansible VM"]
     DONE(["5G testbed ready"])
 
@@ -230,7 +226,7 @@ flowchart TD
     P5 --> P6
     P5 --> P7
     P6 --> P7
-    P7 --> P8 --> DONE
+    P7 --> P8 --> P9 --> DONE
 
     style P6 stroke-dasharray: 5 5
 ```

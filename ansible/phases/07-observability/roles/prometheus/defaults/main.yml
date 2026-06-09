@@ -7,4 +7,5 @@ prometheus:
   port: 9090
   nodeport: 30090
   retention: 15d
+  retention_size: 4GB
   storage_size: 10Gi

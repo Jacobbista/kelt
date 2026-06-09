@@ -1,0 +1,16 @@
+---
+# PHASE 10: CAMARA Gateway
+# Deploys the CAMARA Location API gateway. Requires Phase 08 (Keycloak/IAM) for JWT
+# validation. Phase 11 (Positioning Engine) is optional: the gateway mocks the
+# position internally until POSITIONING_ENGINE_URL points to a live engine.
+# Image built from the 5g-northbound monorepo and published to GHCR.
+
+- name: "PHASE 10 | CAMARA Gateway"
+  hosts: masters
+  become: true
+  tags:
+    - phase10
+    - camara
+  roles:
+    - role: roles/camara_setup
+      when: camara_enabled | default(true) | bool

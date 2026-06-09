@@ -4,13 +4,13 @@
 
 - name: "🚀 5G KUBERNETES TESTBED DEPLOYMENT"
   hosts: localhost
-  gather_facts: yes
+  gather_facts: true
   vars:
     deployment_start_time: "{{ ansible_date_time.iso8601 }}"
     deployment_t0: "{{ lookup('pipe','date +%s') | int }}"
   tasks:
     - name: "Deps | Enable Ubuntu Universe on master"
-      become: yes
+      become: true
       apt_repository:
         repo: "deb http://archive.ubuntu.com/ubuntu jammy universe"
         state: present
@@ -20,7 +20,7 @@
         - deps
 
     - name: "Deps | Update apt cache on master"
-      become: yes
+      become: true
       apt:
         update_cache: yes
         cache_valid_time: 3600
@@ -31,7 +31,7 @@
         - deps
 
     - name: "Deps | Ensure python3-pip on master"
-      become: yes
+      become: true
       apt:
         name: python3-pip
         state: present
@@ -43,7 +43,7 @@
         - deps
 
     - name: "Deps | Ensure Python Kubernetes client on master"
-      become: yes
+      become: true
       pip:
         name: "kubernetes>=29.0.0"
         executable: pip3
@@ -59,21 +59,25 @@
           Start Time: {{ deployment_start_time }}
 
           Deployment phases:
-          1️⃣  Infrastructure Setup
-          2️⃣  Kubernetes Cluster (k3s)
-          3️⃣  KubeEdge Integration
-          4️⃣  Overlay Network (OVS + Multus)
-          5️⃣  5G Core Network Functions
-          6️⃣  UERANSIM & MEC (optional via DEPLOY_MODE=full)
-          7️⃣  Observability
-          8️⃣  Dashboard Control Plane
+          1️⃣   Infrastructure Setup
+          2️⃣   Kubernetes Cluster (k3s)
+          3️⃣   KubeEdge Integration
+          4️⃣   Overlay Network (OVS + Multus)
+          5️⃣   5G Core Network Functions
+          6️⃣   UERANSIM & MEC (optional via DEPLOY_MODE=full)
+          7️⃣   Observability
+          8️⃣   IAM (Keycloak)
+          9️⃣   Dashboard Control Plane
+          🔟   CAMARA Gateway (optional)
+          1️⃣1️⃣  Positioning Engine (optional)
+          1️⃣2️⃣  Positioning Demo (optional)
 
           To run a single phase:
           ansible-playbook phases/0X-phase-name/playbook.yml
 
 - name: "PHASE 1: t0"
   hosts: localhost
-  gather_facts: no
+  gather_facts: false
   tags:
     - phase1
     - infrastructure
@@ -92,7 +96,7 @@
 
 - name: "PHASE 1: Validate Infrastructure Setup"
   hosts: localhost
-  gather_facts: no
+  gather_facts: false
   tags:
     - phase1
     - infrastructure
@@ -120,7 +124,7 @@
 
 - name: "PHASE 2: t0"
   hosts: localhost
-  gather_facts: no
+  gather_facts: false
   tags:
     - phase2
     - kubernetes
@@ -139,8 +143,8 @@
 
 - name: "PHASE 2: Validate Kubernetes Cluster"
   hosts: masters
-  gather_facts: no
-  become: no
+  gather_facts: false
+  become: false
   tags:
     - phase2
     - kubernetes
@@ -163,7 +167,7 @@
 
 - name: "PHASE 2: Duration Summary"
   hosts: localhost
-  gather_facts: no
+  gather_facts: false
   tags:
     - phase2
     - kubernetes
@@ -180,7 +184,7 @@
 
 - name: "PHASE 3: t0"
   hosts: localhost
-  gather_facts: no
+  gather_facts: false
   tags:
     - phase3
     - kubeedge
@@ -199,7 +203,7 @@
 
 - name: "PHASE 3: Validate KubeEdge Integration"
   hosts: masters
-  gather_facts: no
+  gather_facts: false
   tags:
     - phase3
     - kubeedge
@@ -237,7 +241,7 @@
 
 - name: "PHASE 3: Duration Summary"
   hosts: localhost
-  gather_facts: no
+  gather_facts: false
   tags:
     - phase3
     - kubeedge
@@ -254,7 +258,7 @@
 
 - name: "PHASE 4: t0"
   hosts: localhost
-  gather_facts: no
+  gather_facts: false
   tags:
     - phase4
     - overlay
@@ -275,7 +279,7 @@
 
 - name: "PHASE 4: Validate Overlay Network"
   hosts: masters
-  gather_facts: no
+  gather_facts: false
   tags:
     - phase4
     - overlay
@@ -307,7 +311,7 @@
 
 - name: "PHASE 4: Duration Summary"
   hosts: localhost
-  gather_facts: no
+  gather_facts: false
   tags:
     - phase4
     - overlay
@@ -325,7 +329,7 @@
 
 - name: "PHASE 5: t0"
   hosts: localhost
-  gather_facts: no
+  gather_facts: false
   tags:
     - phase5
     - 5g
@@ -346,7 +350,7 @@
 
 - name: "PHASE 5: Validate 5G Core Network Functions"
   hosts: masters
-  gather_facts: no
+  gather_facts: false
   tags:
     - phase5
     - 5g
@@ -370,7 +374,7 @@
 
 - name: "PHASE 5: Duration Summary"
   hosts: localhost
-  gather_facts: no
+  gather_facts: false
   tags:
     - phase5
     - 5g
@@ -388,7 +392,7 @@
 
 - name: "PHASE 6: t0"
   hosts: localhost
-  gather_facts: no
+  gather_facts: false
   tags:
     - phase6
     - ueransim
@@ -409,12 +413,16 @@
 
 - name: "PHASE 6: Validate UERANSIM & MEC Setup"
   hosts: masters
-  gather_facts: no
+  gather_facts: false
   tags:
     - phase6
     - ueransim
     - mec
   tasks:
+    - name: "Skip UERANSIM validation when disabled"
+      meta: end_play
+      when: not (ueransim_enabled | default(false) | bool)
+
     - name: "Validation | Get UERANSIM pods"
       kubernetes.core.k8s_info:
         api_version: v1
@@ -460,7 +468,7 @@
 
 - name: "PHASE 6: Duration Summary"
   hosts: localhost
-  gather_facts: no
+  gather_facts: false
   tags:
     - phase6
     - ueransim
@@ -486,19 +494,56 @@
     - observability
     - monitoring
 
-- name: "PHASE 8: Dashboard Control Plane"
-  import_playbook: 08-dashboard/playbook.yml
+- name: "PHASE 8: IAM (Keycloak + PostgreSQL)"
+  import_playbook: 08-iam/playbook.yml
   vars:
-    phase_name: "Dashboard Control Plane"
+    phase_name: "IAM"
     phase_number: 8
   tags:
     - phase8
+    - iam
+
+- name: "PHASE 9: Dashboard Control Plane"
+  import_playbook: 09-dashboard/playbook.yml
+  vars:
+    phase_name: "Dashboard Control Plane"
+    phase_number: 9
+  tags:
+    - phase9
     - dashboard
     - ui
 
+- name: "PHASE 10: CAMARA Gateway"
+  import_playbook: 10-camara/playbook.yml
+  vars:
+    phase_name: "CAMARA Gateway"
+    phase_number: 10
+  tags:
+    - phase10
+    - camara
+
+- name: "PHASE 11: Positioning Engine"
+  import_playbook: 11-positioning/playbook.yml
+  vars:
+    phase_name: "Positioning Engine"
+    phase_number: 11
+  tags:
+    - phase11
+    - positioning
+
+- name: "PHASE 12: Positioning Demo"
+  import_playbook: 12-positioning-demo/playbook.yml
+  vars:
+    phase_name: "Positioning Demo"
+    phase_number: 12
+  tags:
+    - phase12
+    - positioning-demo
+    - mec
+
 - name: "🎉 DEPLOYMENT COMPLETED SUCCESSFULLY"
   hosts: localhost
-  gather_facts: no
+  gather_facts: false
   tasks:
     - set_fact:
         deployment_t1: "{{ lookup('pipe','date +%s') | int }}"
@@ -519,6 +564,8 @@
           ✅ Overlay Network (OVS + Multus)
           ✅ 5G Core Network Functions
           ✅ Observability Stack
+          ✅ IAM (Keycloak)
           ✅ Dashboard Control Plane
           ℹ️  UERANSIM & MEC optional (run with DEPLOY_MODE=full)
+          ℹ️  CAMARA Gateway / Positioning Engine / Demo optional
       when: deployment_t0 is defined and deployment_t1 is defined

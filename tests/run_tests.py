@@ -105,9 +105,15 @@ def update_kubeconfig():
             print(f"⚠️  Could not fetch kubeconfig")
             return KUBECONFIG_PATH.exists()
         
+        # `vagrant ssh` can prepend a banner to stdout; drop anything before
+        # the YAML document so the kubeconfig parses.
+        content = result.stdout
+        idx = content.find("apiVersion")
+        if idx > 0:
+            content = content[idx:]
         # Replace localhost with master IP
-        content = result.stdout.replace("127.0.0.1", "192.168.56.10")
-        
+        content = content.replace("127.0.0.1", "192.168.56.10")
+
         with open(KUBECONFIG_PATH, "w") as f:
             f.write(content)
         
@@ -169,8 +175,8 @@ def main():
     
     parser = argparse.ArgumentParser(description="5G K3s KubeEdge Testbed Test Runner")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
-    parser.add_argument("-s", "--suite", 
-                       choices=["e2e", "protocols", "performance", "resilience", "ran"],
+    parser.add_argument("-s", "--suite",
+                       choices=["e2e", "protocols", "performance", "resilience", "ran", "iam"],
                        help="Run specific test suite")
     parser.add_argument("-p", "--phases", nargs="+",
                        choices=["infrastructure", "5g-core", "ueransim", "e2e", "performance", "resilience"],
@@ -192,6 +198,7 @@ def main():
         print("  performance - Performance and stress tests")
         print("  resilience  - Failure recovery tests")
         print("  ran         - Physical RAN integration tests")
+        print("  iam         - Keycloak realm + token validation (phase 08)")
         print("\nRun with: make <suite>  or  python run_tests.py -s <suite>")
         return
     
@@ -201,7 +208,8 @@ def main():
         "protocols": "protocols.test_5g_protocols",
         "performance": "performance.test_performance",
         "resilience": "resilience.test_resilience",
-        "ran": "ran.test_physical_ran"
+        "ran": "ran.test_physical_ran",
+        "iam": "iam.test_iam"
     }
     
     def run_suite(suite_name: str, force: bool = False) -> bool:
@@ -249,7 +257,7 @@ def main():
         suites = list(dict.fromkeys(suites))  # Unique, preserve order
     else:
         # Default: only run enabled suites
-        suites = ["e2e", "protocols", "performance", "resilience"]
+        suites = ["e2e", "protocols", "iam", "performance", "resilience"]
     
     # Run suites
     results = {}  # suite -> (success, skipped)

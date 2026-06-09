@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: camara-gateway
+  namespace: {{ camara_namespace }}
+  labels:
+    app: camara-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: camara-gateway
+  template:
+    metadata:
+      labels:
+        app: camara-gateway
+      annotations:
+        checksum/config: "{{ lookup('template', role_path + '/templates/camara-config.yaml.j2') | hash('sha256') }}"
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: worker
+      terminationGracePeriodSeconds: 15
+      containers:
+        - name: camara-gateway
+          image: {{ camara_gateway_image }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: camara-config
+          env:
+            - name: CAMARA_CLIENT_SECRET
+              value: "{{ camara_client_secret }}"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 6

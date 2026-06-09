@@ -87,12 +87,13 @@ dashboard_dev_external_url: "{{ lookup('ansible.builtin.env', 'DASHBOARD_DEV_EXT
 # reload when the operator cannot make the upstream WS-friendly.
 dashboard_dev_hmr_enabled: "{{ lookup('ansible.builtin.env', 'DASHBOARD_DEV_HMR_ENABLED') | default('true', true) }}"
 
-# Optional path the Vite HMR WebSocket listens on. Empty = Vite default
-# of "/" which collides with the SPA auth gate on tunneled deployments.
-# Set to a unique path (e.g. /__vite_hmr) and add a matching Zero-Trust
-# bypass policy on the upstream so the WebSocket upgrade is not blocked
-# by Access. Ignored when HMR is disabled.
-dashboard_dev_hmr_path: "{{ lookup('ansible.builtin.env', 'DASHBOARD_DEV_HMR_PATH') | default('', true) }}"
+# Path the Vite HMR WebSocket listens on. Default /__vite_hmr keeps the
+# upgrade off the root path so a single narrow Zero-Trust bypass policy
+# can let it through without exposing the SPA auth gate. Direct LAN
+# access works with the default; tunneled deployments add a matching
+# bypass app on /__vite_hmr*. Override with DASHBOARD_DEV_HMR_PATH or
+# set to empty to use Vite default of "/".
+dashboard_dev_hmr_path: "{{ lookup('ansible.builtin.env', 'DASHBOARD_DEV_HMR_PATH') | default('/__vite_hmr', true) }}"
 
 # Watchdog tiny HTTP server port (used to restart the backend from the UI).
 dashboard_watchdog_port: 31881

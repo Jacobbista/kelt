@@ -1,8 +1,22 @@
-# 5G KubeEdge Testbed
+<p align="center">
+  <img src="docs/assets/kelt-mark.svg" alt="KELT" width="72">
+</p>
 
-A self-contained 5G research testbed that runs a complete cloud-edge infrastructure on a single workstation. It deploys a 3-node virtual cluster (K3s master, 5G core worker, KubeEdge-managed edge) connected by isolated VXLAN overlays and operated through a 7-module dashboard.
+# KELT
+
+**Kubernetes-Edge Lightweight Testbed**: a lightweight, reproducible, cloud-native 5G core and cloud-edge testbed that runs on a single workstation. It deploys a 3-node virtual cluster (K3s master, 5G core worker, optional KubeEdge edge) connected by isolated VXLAN overlays and operated through a unified operations dashboard.
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
+## Status
+
+A research testbed under active development. Components are tiered by maturity:
+
+- **Supported** (validated, reproducible): core 5G deployment, VXLAN overlays, dashboard, IAM, node and NF metrics, physical RAN, CAMARA location and positioning.
+- **Experimental** (present, not fully validated): UERANSIM, KubeEdge edge node, UPF-MEC, log and alerting stack.
+- **Planned** (no working code yet): edge provisioning from the dashboard, MEC scheduling, O-RAN RIC, NWDAF.
+
+Full matrix and reproducibility scope: [docs/status.md](docs/status.md).
 
 ## How It Works
 
@@ -53,35 +67,25 @@ graph LR
 
 **Host OS:** Ubuntu 24.04.4 LTS (desktop and server). Other Linux distributions are untested.
 
-**Prerequisites:** Vagrant ≥ 2.3.0, VirtualBox ≥ 6.1.0, 16 GB RAM, [gum](https://github.com/charmbracelet/gum) (recommended)
+**Prerequisites:** Vagrant ≥ 2.3.0, VirtualBox ≥ 6.1.0, 16 GB RAM. The first-run wizard checks these and offers to install [gum](https://github.com/charmbracelet/gum) and the shell alias automatically.
 
 ```bash
 git clone https://github.com/Jacobbista/5g-k3s-kubedge-testbed.git
 cd 5g-k3s-kubedge-testbed
-
-# Configure and launch (interactive menu)
-./testbed-config
+./testbed-config           # first run launches the onboarding wizard
 ```
 
-`testbed-config` opens a TUI menu where you set the deployment profile, enable or disable the edge VM, choose between simulated and physical RAN, and start the cluster. Configuration is persisted to `.testbed.env` and picked up automatically by Vagrant.
+The wizard verifies host requirements (vagrant, VirtualBox, vboxusers
+group, CPU virtualization), installs gum, sets up the `testbed`
+shell alias, and initializes the deployment profile. Once complete,
+the alias works from any directory:
 
+```bash
+testbed up                 # bring the cluster up
+testbed                    # open the interactive menu
+testbed autostart on       # bring the cluster up automatically on boot
+testbed help               # full reference
 ```
-  ╭──────────────────────────────────╮
-  │  5G K3s KubeEdge Testbed         │
-  │  Hardware:  8 threads, 64 GB RAM │
-  │  Profile:   server               │
-  │  Edge VM:   disabled             │
-  │  Deploy:    core_only            │
-  ╰──────────────────────────────────╯
-
-  > Set deployment profile
-    Toggle edge VM
-    Set deploy mode (core_only/full)
-    Start cluster (vagrant up)
-    ...
-```
-
-For non-interactive use: `./testbed-config set-profile laptop && ./testbed-config up`
 
 **Verify after deployment:**
 ```bash
@@ -90,8 +94,10 @@ sudo k3s kubectl get nodes
 sudo k3s kubectl get pods -n 5g
 ```
 
-Full walkthrough including prerequisites: [docs/getting-started.md](docs/getting-started.md)  
-Full CLI reference: [docs/tools/testbed-config.md](docs/tools/testbed-config.md)
+**Full guides:**
+- End-user and agent operations: [QUICKSTART.md](QUICKSTART.md)
+- Detailed walkthrough: [docs/getting-started.md](docs/getting-started.md)
+- Tool reference: [docs/tools/testbed-config.md](docs/tools/testbed-config.md)
 
 ## Stack
 
@@ -140,13 +146,13 @@ Full documentation lives in [docs/](docs/README.md).
 - [5G Interfaces](docs/architecture/5g-interfaces.md) — N1–N6 subnets, IPs, ports, verification
 
 **Deployment**
-- [Deployment Phases](docs/deployment/phases.md) — what each of the 8 phases does
+- [Deployment Phases](docs/deployment/phases.md) — what each of the 12 phases does
 - [Server / NUC Setup](docs/deployment/server-setup.md) — headless server deployment
 - [Physical RAN Integration](docs/deployment/physical-ran.md) — connect a real femtocell
 
 **Operations**
 - [Troubleshooting](docs/operations/troubleshooting.md) — start here when something is wrong
-- [Handbook](docs/operations/handbook.md) — canonical IP and interface reference
+- [Handbook](docs/operations/handbook.md) — operator cheat-sheet (IPs, ports, commands)
 - [Runbooks](docs/runbooks/) — step-by-step diagnostics for NGAP, PFCP, GTP-U, OVS, Multus
 
 **Dashboard**
@@ -160,5 +166,7 @@ Copyright 2024–2026 Jacopo Bennati. Licensed under the [Apache License 2.0](LI
 Third-party component licenses are listed in [NOTICE](NOTICE).
 
 ## Acknowledgements
+
+Inspired by [ComNetsEmu](https://www.granelli-lab.org/researches/relevant-projects/comnetsemu-sdn-nfv-emulator), the SDN/NFV network emulator from the [Granelli Lab](https://www.granelli-lab.org) (Prof. Fabrizio Granelli, University of Trento), where this project started as a course project. KELT takes a different route: it runs real workloads on Kubernetes connected by real OVS/VXLAN overlays, rather than ComNetsEmu's Mininet and Docker emulation.
 
 Built with [K3s](https://k3s.io), [KubeEdge](https://kubeedge.io), [Open5GS](https://open5gs.org), [UERANSIM](https://github.com/aligungr/UERANSIM), and [Multus CNI](https://github.com/k8snetworkplumbingwg/multus-cni).

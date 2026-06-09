@@ -1,0 +1,38 @@
+cff-version: 1.2.0
+title: "KELT: a lightweight, reproducible cloud-native 5G core and edge testbed"
+message: "If you use this testbed in your research, please cite it."
+type: software
+authors:
+  - family-names: Bennati
+    given-names: Jacopo
+    # Affiliation left unset on purpose: the project originated at the University
+    # of Trento (continuing a ComNetsEmu-based course project) and the thesis is
+    # hosted at KTH, with graduation pending. Set it once settled, or rely on an
+    # institution-independent ORCID instead (recommended for stable citation).
+    # affiliation: "University of Trento"
+    orcid: "https://orcid.org/0009-0003-9355-0254"
+repository-code: "https://github.com/Jacobbista/5g-k3s-kubedge-testbed"
+url: "https://github.com/Jacobbista/5g-k3s-kubedge-testbed"
+abstract: >-
+  KELT (Kubernetes-Edge Lightweight Testbed) is a reproducible, cloud-native 5G
+  core and cloud-edge testbed. It deploys an Open5GS 5G core as Kubernetes (K3s)
+  workloads with per-interface VXLAN overlays (OVS + Multus), an optional
+  KubeEdge edge node, an operations dashboard, Keycloak-based IAM, and an
+  optional CAMARA northbound. It is reproducible on a single workstation via
+  Vagrant and Ansible.
+keywords:
+  - 5G
+  - cloud-native
+  - Kubernetes
+  - KubeEdge
+  - edge computing
+  - testbed
+  - Open5GS
+  - CAMARA
+  - network functions virtualization
+license: Apache-2.0
+# Set version and date-released at each tagged release; add the Zenodo DOI
+# under `doi:` once the release is archived.
+# version: "0.1.0"
+# date-released: "2026-01-01"
+# doi: "10.5281/zenodo.XXXXXXX"

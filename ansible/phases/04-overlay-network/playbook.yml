@@ -1,12 +1,12 @@
 - name: "PHASE 4 | Install CNI binaries"
   hosts: all:!masters:!ansible
-  become: yes
+  become: true
   roles:
     - roles/cni_binaries_setup
 
 - name: "PHASE 4 | Setup OVS overlay"
   hosts: masters
-  become: yes
+  become: true
   tags:
     - phase4
     - overlay
@@ -15,7 +15,7 @@
 
 - name: "PHASE 4 | Install Multus + NADs"
   hosts: masters
-  become: yes
+  become: true
   tags:
     - multus
     - nad
@@ -24,7 +24,7 @@
 
 - name: "PHASE 4 | Setup Per-Cell Networks"
   hosts: masters
-  become: no
+  become: false
   tags:
     - phase4
     - cell_networks
@@ -33,7 +33,7 @@
 
 - name: "PHASE 4 | Verify"
   hosts: masters
-  become: yes
+  become: true
   tasks:
     - name: Multus worker DS ready
       kubernetes.core.k8s_info:
