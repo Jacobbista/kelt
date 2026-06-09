@@ -195,4 +195,4 @@ The same passthrough requirements apply:
 ## Related
 
 - [Dashboard architecture](../dashboard/) — frontend cluster pod, backend on ansible VM, Keycloak on worker NodePort
-- [Keycloak realm template](https://github.com/Jacobbista/5g-k3s-kubedge-testbed/blob/main/ansible/phases/08-iam/roles/keycloak_setup/templates/keycloak-realm.json.j2) — `redirectUris` and `webOrigins` must include every external origin (cluster, dev, demo)
+- [Keycloak realm template](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/08-iam/roles/keycloak_setup/templates/keycloak-realm.json.j2) — `redirectUris` and `webOrigins` must include every external origin (cluster, dev, demo)

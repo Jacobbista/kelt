@@ -1,8 +1,8 @@
 site_name: KELT
 site_description: "A lightweight, reproducible cloud-native 5G core and edge testbed"
-site_url: "https://jacobbista.github.io/5g-k3s-kubedge-testbed/"
-repo_url: "https://github.com/Jacobbista/5g-k3s-kubedge-testbed"
-repo_name: "Jacobbista/5g-k3s-kubedge-testbed"
+site_url: "https://jacobbista.github.io/kelt/"
+repo_url: "https://github.com/Jacobbista/kelt"
+repo_name: "Jacobbista/kelt"
 docs_dir: docs
 
 theme:

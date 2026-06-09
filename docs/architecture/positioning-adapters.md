@@ -104,6 +104,6 @@ public repository.
 
 ## See also
 
-- [Phase 11 README](https://github.com/Jacobbista/5g-k3s-kubedge-testbed/blob/main/ansible/phases/11-positioning/README.md) implementation notes
-- [Phase 10 CAMARA](https://github.com/Jacobbista/5g-k3s-kubedge-testbed/blob/main/ansible/phases/10-camara/README.md) the consumer of engine output
-- [Phase 12 Demo](https://github.com/Jacobbista/5g-k3s-kubedge-testbed/blob/main/ansible/phases/12-positioning-demo/README.md) the visualization layer
+- [Phase 11 README](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/11-positioning/README.md) implementation notes
+- [Phase 10 CAMARA](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/10-camara/README.md) the consumer of engine output
+- [Phase 12 Demo](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/12-positioning-demo/README.md) the visualization layer

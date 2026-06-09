@@ -14,7 +14,7 @@ Guidelines for contributing to the 5G KubeEdge Testbed project.
 ## Project Structure
 
 ```
-5g-k3s-kubedge-testbed/
+kelt/
 ├── ansible/
 │   ├── phases/              # Deployment phases (01-06)
 │   │   ├── 01-infrastructure/
@@ -85,8 +85,8 @@ def test_feature(self) -> bool:
 
 ```bash
 # Clone
-git clone https://github.com/your-fork/5g-k3s-kubedge-testbed.git
-cd 5g-k3s-kubedge-testbed
+git clone https://github.com/your-fork/kelt.git
+cd kelt
 
 # Start VMs
 vagrant up

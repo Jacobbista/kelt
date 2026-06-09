@@ -70,8 +70,8 @@ graph LR
 **Prerequisites:** Vagrant ≥ 2.3.0, VirtualBox ≥ 6.1.0, 16 GB RAM. The first-run wizard checks these and offers to install [gum](https://github.com/charmbracelet/gum) and the shell alias automatically.
 
 ```bash
-git clone https://github.com/Jacobbista/5g-k3s-kubedge-testbed.git
-cd 5g-k3s-kubedge-testbed
+git clone https://github.com/Jacobbista/kelt.git
+cd kelt
 ./testbed-config           # first run launches the onboarding wizard
 ```
 
@@ -107,7 +107,7 @@ VMs run Ubuntu 22.04 (Jammy).
 |-------|------------|---------|
 | Container orchestration | K3s | v1.30.6+k3s1 |
 | Edge computing | KubeEdge | 1.21.0 |
-| 5G core | Open5GS | 2.7.5 ([jacobbista/comnetsemu-5gc](https://hub.docker.com/r/jacobbista/comnetsemu-5gc)) |
+| 5G core | Open5GS | 2.7.7 (patched; per-NF images built in [5g-nf-platform](https://github.com/Jacobbista/5g-nf-platform)) |
 | RAN simulation | UERANSIM | 3.2.7 ([jacobbista/comnetsemu-ueransim](https://hub.docker.com/r/jacobbista/comnetsemu-ueransim)) |
 | Overlay networking | OVS + VXLAN | OVS CNI 0.34.3 |
 | Multi-homed pods | Multus CNI | 4.1.0 |
@@ -158,6 +158,15 @@ Full documentation lives in [docs/](docs/README.md).
 **Dashboard**
 - [Overview](docs/dashboard/overview.md) — architecture, access URLs, security model
 - [API Reference](docs/dashboard/api-reference.md) — REST and WebSocket endpoints
+
+## Companion Repositories
+
+KELT pulls container images built and versioned in separate repositories:
+
+- [**5g-nf-platform**](https://github.com/Jacobbista/5g-nf-platform) — per-NF Open5GS images (AMF, SMF, UPF, and the rest) with research patches, built and published via CI. Pinned by tag in `ansible/group_vars/all.yml`.
+- [**5g-northbound**](https://github.com/Jacobbista/5g-northbound) — CAMARA gateway and positioning engine / demo images for the optional northbound addons.
+
+The `5g-probe` UE measurement tool ships in this repository under [`5g-probe/`](5g-probe/).
 
 ## License
 

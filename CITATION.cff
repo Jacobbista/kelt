@@ -11,8 +11,8 @@ authors:
     # institution-independent ORCID instead (recommended for stable citation).
     # affiliation: "University of Trento"
     orcid: "https://orcid.org/0009-0003-9355-0254"
-repository-code: "https://github.com/Jacobbista/5g-k3s-kubedge-testbed"
-url: "https://github.com/Jacobbista/5g-k3s-kubedge-testbed"
+repository-code: "https://github.com/Jacobbista/kelt"
+url: "https://github.com/Jacobbista/kelt"
 abstract: >-
   KELT (Kubernetes-Edge Lightweight Testbed) is a reproducible, cloud-native 5G
   core and cloud-edge testbed. It deploys an Open5GS 5G core as Kubernetes (K3s)

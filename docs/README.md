@@ -47,18 +47,18 @@ Each deployment phase also has an implementation-focused README in its Ansible s
 
 | Phase | Notes |
 |-------|-------|
-| [Phase 1: Infrastructure](https://github.com/Jacobbista/5g-k3s-kubedge-testbed/blob/main/ansible/phases/01-infrastructure/README.md) | VM provisioning, networking bootstrap |
-| [Phase 2: Kubernetes](https://github.com/Jacobbista/5g-k3s-kubedge-testbed/blob/main/ansible/phases/02-kubernetes/README.md) | K3s cluster bring-up |
-| [Phase 3: KubeEdge](https://github.com/Jacobbista/5g-k3s-kubedge-testbed/blob/main/ansible/phases/03-kubeedge/README.md) | CloudCore and EdgeCore configuration |
-| [Phase 4: Overlay Network](https://github.com/Jacobbista/5g-k3s-kubedge-testbed/blob/main/ansible/phases/04-overlay-network/README.md) | OVS bridges, VXLAN tunnel setup |
-| [Phase 5: 5G Core](https://github.com/Jacobbista/5g-k3s-kubedge-testbed/blob/main/ansible/phases/05-5g-core/README.md) | Open5GS NF deployment and configuration |
-| [Phase 6: UERANSIM + MEC](https://github.com/Jacobbista/5g-k3s-kubedge-testbed/blob/main/ansible/phases/06-ueransim-mec/README.md) | gNB, UE simulators, MEC workloads |
-| [Phase 7: Observability](https://github.com/Jacobbista/5g-k3s-kubedge-testbed/blob/main/ansible/phases/07-observability/README.md) | Prometheus, node-exporter, Grafana |
-| [Phase 8: IAM](https://github.com/Jacobbista/5g-k3s-kubedge-testbed/blob/main/ansible/phases/08-iam/README.md) | Keycloak realm with shared clients for dashboard and CAMARA |
-| [Phase 9: Dashboard](https://github.com/Jacobbista/5g-k3s-kubedge-testbed/blob/main/ansible/phases/09-dashboard/README.md) | Dashboard deployment and access |
-| [Phase 10: CAMARA](https://github.com/Jacobbista/5g-k3s-kubedge-testbed/blob/main/ansible/phases/10-camara/README.md) | CAMARA Location API gateway (optional addon) |
-| [Phase 11: Positioning](https://github.com/Jacobbista/5g-k3s-kubedge-testbed/blob/main/ansible/phases/11-positioning/README.md) | Positioning engine with pluggable adapters (optional addon) |
-| [Phase 12: Positioning Demo](https://github.com/Jacobbista/5g-k3s-kubedge-testbed/blob/main/ansible/phases/12-positioning-demo/README.md) | Positioning demo SPA (optional addon) |
+| [Phase 1: Infrastructure](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/01-infrastructure/README.md) | VM provisioning, networking bootstrap |
+| [Phase 2: Kubernetes](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/02-kubernetes/README.md) | K3s cluster bring-up |
+| [Phase 3: KubeEdge](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/03-kubeedge/README.md) | CloudCore and EdgeCore configuration |
+| [Phase 4: Overlay Network](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/04-overlay-network/README.md) | OVS bridges, VXLAN tunnel setup |
+| [Phase 5: 5G Core](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/05-5g-core/README.md) | Open5GS NF deployment and configuration |
+| [Phase 6: UERANSIM + MEC](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/06-ueransim-mec/README.md) | gNB, UE simulators, MEC workloads |
+| [Phase 7: Observability](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/07-observability/README.md) | Prometheus, node-exporter, Grafana |
+| [Phase 8: IAM](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/08-iam/README.md) | Keycloak realm with shared clients for dashboard and CAMARA |
+| [Phase 9: Dashboard](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/09-dashboard/README.md) | Dashboard deployment and access |
+| [Phase 10: CAMARA](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/10-camara/README.md) | CAMARA Location API gateway (optional addon) |
+| [Phase 11: Positioning](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/11-positioning/README.md) | Positioning engine with pluggable adapters (optional addon) |
+| [Phase 12: Positioning Demo](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/12-positioning-demo/README.md) | Positioning demo SPA (optional addon) |
 
 ---
 
@@ -125,7 +125,7 @@ Host-side utilities that complement the testbed.
 | [Testing Guide](development/testing.md) | Run and write automated tests (e2e, protocols, RAN) |
 | [Contributing](development/contributing.md) | Coding standards, workflow, and PR guidelines |
 
-The test suite is documented separately: [tests/README.md](https://github.com/Jacobbista/5g-k3s-kubedge-testbed/blob/main/tests/README.md).
+The test suite is documented separately: [tests/README.md](https://github.com/Jacobbista/kelt/blob/main/tests/README.md).
 
 ---
 

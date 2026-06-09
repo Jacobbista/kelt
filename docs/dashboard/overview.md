@@ -83,7 +83,7 @@ graph TB
 | Dashboard UI (dev frontend) | http://192.168.56.13:31573 | Vite dev server on the ansible VM; opt-in (`dashboard_dev_enabled`) |
 | Dashboard API | http://192.168.56.13:31880/docs | FastAPI on the ansible VM (Swagger at /docs) |
 
-The cluster frontend is deployed automatically in **Phase 9** and starts after provisioning. See the [Phase 9 README](https://github.com/Jacobbista/5g-k3s-kubedge-testbed/blob/main/ansible/phases/09-dashboard/README.md) for the cluster-versus-dev frontend model.
+The cluster frontend is deployed automatically in **Phase 9** and starts after provisioning. See the [Phase 9 README](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/09-dashboard/README.md) for the cluster-versus-dev frontend model.
 
 ## Security Model
 

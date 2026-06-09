@@ -268,6 +268,6 @@ console is preserved.
 ## See also
 
 - [External Access](external-access.md) — tunnel layout, single-origin reverse proxy
-- [Phase 08: IAM](https://github.com/Jacobbista/5g-k3s-kubedge-testbed/blob/main/ansible/phases/08-iam/README.md) — implementation notes
-- [Phase 09: Dashboard](https://github.com/Jacobbista/5g-k3s-kubedge-testbed/blob/main/ansible/phases/09-dashboard/README.md) — backend JWT middleware (planned)
-- [Phase 10: CAMARA](https://github.com/Jacobbista/5g-k3s-kubedge-testbed/blob/main/ansible/phases/10-camara/README.md) — gateway JWT validation
+- [Phase 08: IAM](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/08-iam/README.md) — implementation notes
+- [Phase 09: Dashboard](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/09-dashboard/README.md) — backend JWT middleware (planned)
+- [Phase 10: CAMARA](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/10-camara/README.md) — gateway JWT validation

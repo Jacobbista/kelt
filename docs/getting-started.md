@@ -32,8 +32,8 @@ For macOS/Windows install instructions, see [Requirements](requirements.md).
 ## Quick Start
 
 ```bash
-git clone https://github.com/Jacobbista/5g-k3s-kubedge-testbed.git
-cd 5g-k3s-kubedge-testbed
+git clone https://github.com/Jacobbista/kelt.git
+cd kelt
 
 # Configure the testbed (profile, edge, RAN, deploy mode)
 ./testbed-config

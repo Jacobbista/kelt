@@ -91,8 +91,8 @@ sudo apt update && sudo apt install -y vagrant
 ## Quick Start
 
 ```bash
-git clone https://github.com/Jacobbista/5g-k3s-kubedge-testbed.git
-cd 5g-k3s-kubedge-testbed
+git clone https://github.com/Jacobbista/kelt.git
+cd kelt
 
 # 1. Set server profile (creates .testbed.env)
 ./testbed-config set-profile server

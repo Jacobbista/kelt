@@ -10,7 +10,7 @@ root of that repository as `CLAUDE.md` or `SPEC.md` before starting development.
 A container image factory for 5G Network Functions. It pulls source from one or more
 upstream projects (Open5GS, free5GC, custom), applies research patches, builds one Docker
 image per NF, and publishes versioned images to a container registry. It does not deploy
-anything. Deployment is handled by consumers (e.g., `5g-k3s-kubedge-testbed`).
+anything. Deployment is handled by consumers (e.g., `kelt`).
 
 ---
 
@@ -124,7 +124,7 @@ RUN git clone --depth 1 --branch ${UPSTREAM_TAG} \
     https://github.com/open5gs/open5gs /src/open5gs
 
 # WebUI (Node.js) is intentionally excluded. Subscriber management and
-# monitoring are handled by the 5g-k3s-kubedge-testbed dashboard.
+# monitoring are handled by the kelt dashboard.
 
 COPY patches/ /patches/
 RUN cd /src/open5gs && \
@@ -285,7 +285,7 @@ work). Choose before making the repository public.
 
 ---
 
-## Integration contract with 5g-k3s-kubedge-testbed
+## Integration contract with kelt
 
 This repository publishes `versions.json` to the default branch. The testbed reads it.
 

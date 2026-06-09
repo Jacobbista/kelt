@@ -9,7 +9,7 @@ conventions, see [CLAUDE.md](CLAUDE.md).
 
 ```bash
 git clone <repo-url>
-cd 5g-k3s-kubedge-testbed
+cd kelt
 ./testbed-config
 ```
 

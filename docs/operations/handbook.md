@@ -2,7 +2,7 @@
 
 A one-screen operational reference for working inside the testbed. Canonical
 detail lives in the linked owners below; this page does not restate IPs, VNIs,
-or phase documentation (see [CLAUDE.md](https://github.com/Jacobbista/5g-k3s-kubedge-testbed/blob/main/CLAUDE.md) for the ownership
+or phase documentation (see [CLAUDE.md](https://github.com/Jacobbista/kelt/blob/main/CLAUDE.md) for the ownership
 charter).
 
 > **kubectl**: K3s ships no standalone `kubectl`. Run from master

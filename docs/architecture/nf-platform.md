@@ -24,8 +24,8 @@ implementations, or custom development. The NF platform repository:
 | Responsibility | Repository |
 |---|---|
 | NF source, patches, Dockerfiles, build CI | `5g-nf-platform` |
-| Cluster provisioning, Kubernetes manifests, networking | `5g-k3s-kubedge-testbed` (this repo) |
-| Dashboard, monitoring, subscriber management | `5g-k3s-kubedge-testbed` (this repo) |
+| Cluster provisioning, Kubernetes manifests, networking | `kelt` (this repo) |
+| Dashboard, monitoring, subscriber management | `kelt` (this repo) |
 
 The testbed consumes NF images by tag only. It has no dependency on NF source code or build tooling.
 
