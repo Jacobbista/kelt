@@ -45,9 +45,12 @@ graph LR
     subgraph worker["Worker Node"]
         direction TB
         subgraph core["Open5GS Core"]
-            direction LR
-            AMF --- SMF --- UPF
-            NRF & PCF
+            direction TB
+            AMF
+            SMF
+            UPF
+            NRF
+            PCF
         end
         CC["KubeEdge CloudCore"]
         DB[("MongoDB")]
@@ -64,7 +67,7 @@ graph LR
     gNB <-->|"N3 · 10.203.0.0/24"| UPF
     SMF <-->|"N4 · 10.204.0.0/24"| UPF
     UPF -->|N6| DN[("Data Network")]
-    master -.- worker
+    master -.->|K3s| worker
 ```
 
 ## Getting Started
