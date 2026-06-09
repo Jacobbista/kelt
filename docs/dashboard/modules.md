@@ -201,7 +201,7 @@ The following endpoints are stubbed for future modules:
 
 ## Related Documentation
 
-- [Dashboard Overview](overview.md) — architecture, access, security, deployment
-- [API Reference](api-reference.md) — full endpoint listing
-- [RAN Modes](../deployment/ran-modes-dashboard.md) — switching between physical and simulated RAN
-- [Physical RAN Integration](../deployment/physical-ran.md) — full physical RAN setup guide
+- [Dashboard Overview](overview.md): architecture, access, security, deployment
+- [API Reference](api-reference.md): full endpoint listing
+- [RAN Modes](../deployment/ran-modes-dashboard.md): switching between physical and simulated RAN
+- [Physical RAN Integration](../deployment/physical-ran.md): full physical RAN setup guide

@@ -4,7 +4,7 @@ This document describes what the system is, why it is built the way it is, and w
 
 ## What This System Does
 
-The testbed runs a complete 5G network stack — base station, user equipment, and 5G core — entirely on a single laptop. It is designed for:
+The testbed runs a complete 5G network stack, base station, user equipment, and 5G core, entirely on a single laptop. It is designed for:
 
 - **5G protocol research**: real AMF/SMF/UPF/gNB interactions, not mocks
 - **Edge computing experiments**: workloads split between a cloud node and an edge node
@@ -107,7 +107,7 @@ The cluster uses two networking systems in parallel:
 | OVS + Multus (secondary CNI) | 5G pods only | Isolated per-interface 5G networks |
 
 **Why a secondary CNI?**
-Standard Kubernetes gives every pod one network interface (eth0 via Flannel). 5G network functions need multiple dedicated interfaces — one per N-reference-point (N1, N2, N3, N4, N6). Multus acts as a meta-CNI: it calls the primary CNI first (Flannel), then attaches additional interfaces as requested via `k8s.v1.cni.cncf.io/networks` annotations. Each secondary interface connects the pod to a dedicated OVS bridge, which is tunnelled to the peer node via VXLAN.
+Standard Kubernetes gives every pod one network interface (eth0 via Flannel). 5G network functions need multiple dedicated interfaces, one per N-reference-point (N1, N2, N3, N4, N6). Multus acts as a meta-CNI: it calls the primary CNI first (Flannel), then attaches additional interfaces as requested via `k8s.v1.cni.cncf.io/networks` annotations. Each secondary interface connects the pod to a dedicated OVS bridge, which is tunnelled to the peer node via VXLAN.
 
 See [Network Topology](network-topology.md) for the full OVS+VXLAN+Multus architecture.
 
@@ -132,7 +132,7 @@ All 5G Core Network Functions run as Kubernetes pods on the **worker** node:
 | NSSF | Network Slice Selection Function | SBI |
 | MongoDB | Subscriber database (UDR backend) | — |
 
-NFs discover each other via NRF (Service-Based Interface over HTTP/2). Static IP assignments ensure NFs are reachable at predictable addresses on their respective N-interfaces — necessary because KubeEdge does not provide CoreDNS to edge pods.
+NFs discover each other via NRF (Service-Based Interface over HTTP/2). Static IP assignments ensure NFs are reachable at predictable addresses on their respective N-interfaces, necessary because KubeEdge does not provide CoreDNS to edge pods.
 
 ---
 
@@ -237,8 +237,8 @@ After Phase 5 (without UERANSIM), the 5G core is running and waiting for a RAN t
 
 ## Related Documentation
 
-- [Virtualization Layers](virtualization-layers.md) — how the 5 abstraction layers stack on top of each other
-- [Network Topology](network-topology.md) — OVS, VXLAN, Multus, and NADs in depth
-- [5G Interfaces](5g-interfaces.md) — N1, N2, N3, N4, N6 subnets, protocols, and IPs
-- [Deployment Phases](../deployment/phases.md) — what each phase does and how to run it individually
-- [Dashboard Overview](../dashboard/overview.md) — dashboard architecture and modules
+- [Virtualization Layers](virtualization-layers.md): how the 5 abstraction layers stack on top of each other
+- [Network Topology](network-topology.md): OVS, VXLAN, Multus, and NADs in depth
+- [5G Interfaces](5g-interfaces.md): N1, N2, N3, N4, N6 subnets, protocols, and IPs
+- [Deployment Phases](../deployment/phases.md): what each phase does and how to run it individually
+- [Dashboard Overview](../dashboard/overview.md): dashboard architecture and modules

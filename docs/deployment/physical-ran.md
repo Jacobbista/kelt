@@ -12,7 +12,7 @@ Connect a physical femtocell or small-cell gNB (e.g. nCELL-F2240) instead of, or
 
 **Flow**: Host NIC → (VirtualBox bridge) → Worker NIC (`enp0s9`) → (OVS) → `br-ran` → patch ports → `br-n2` / `br-n3` → AMF / UPF pods.
 
-**Verification**: When you run `vagrant reload worker` with `PHYSICAL_RAN_BRIDGE=<nic>`, Vagrant persists the applied value to `.physical_ran_bridge_applied`. The dashboard reads this and shows a ✓ next to the Host PC NIC when it matches — no trust required.
+**Verification**: When you run `vagrant reload worker` with `PHYSICAL_RAN_BRIDGE=<nic>`, Vagrant persists the applied value to `.physical_ran_bridge_applied`. The dashboard reads this and shows a ✓ next to the Host PC NIC when it matches, no trust required.
 
 ## Architecture
 
@@ -184,7 +184,7 @@ For **commercial femtocells**, configure these in the device's web UI (typically
 
 The gNB must be on the same L2 segment as the host NIC specified in `PHYSICAL_RAN_BRIDGE`. Vagrant bridges that NIC into the worker VM.
 
-**NUC / Server** — the gNB is connected via a router or switch to one of the NUC's built-in Ethernet ports:
+**NUC / Server**: the gNB is connected via a router or switch to one of the NUC's built-in Ethernet ports:
 
 ```
 [NUC]
@@ -195,9 +195,9 @@ The gNB must be on the same L2 segment as the host NIC specified in `PHYSICAL_RA
             bridged to enp2s0
 ```
 
-`./testbed-config ran enp2s0` — use the NIC name that is on the gNB's network.
+`./testbed-config ran enp2s0`: use the NIC name that is on the gNB's network.
 
-**Laptop** — USB-to-Ethernet adapter bridged to the same switch:
+**Laptop**: USB-to-Ethernet adapter bridged to the same switch:
 
 ```
 [Laptop]
@@ -208,7 +208,7 @@ The gNB must be on the same L2 segment as the host NIC specified in `PHYSICAL_RA
             bridged to USB adapter
 ```
 
-`./testbed-config ran enx00e04c6817b7` — use the adapter's interface name.
+`./testbed-config ran enx00e04c6817b7`: use the adapter's interface name.
 
 ### Bare Metal (production)
 

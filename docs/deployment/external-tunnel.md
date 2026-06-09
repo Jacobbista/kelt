@@ -61,7 +61,7 @@ Each bypass application uses a single policy with **Action: Bypass** and **Inclu
 | Path | `/auth/realms/*` |
 | Policy action | `Bypass` |
 
-**App 2 — Bypass Keycloak theme assets**
+**App 2: Bypass Keycloak theme assets**
 
 | Field | Value |
 |-------|-------|
@@ -69,7 +69,7 @@ Each bypass application uses a single policy with **Action: Bypass** and **Inclu
 | Path | `/auth/resources/*` |
 | Policy action | `Bypass` |
 
-**App 3 — Bypass dashboard WebSockets**
+**App 3: Bypass dashboard WebSockets**
 
 | Field | Value |
 |-------|-------|
@@ -77,7 +77,7 @@ Each bypass application uses a single policy with **Action: Bypass** and **Inclu
 | Path | `/api/v1/ws/*` |
 | Policy action | `Bypass` |
 
-Optionally, **App 4 — Bypass dashboard REST**:
+Optionally, **App 4: Bypass dashboard REST**:
 
 | Field | Value |
 |-------|-------|
@@ -87,7 +87,7 @@ Optionally, **App 4 — Bypass dashboard REST**:
 
 Skipping App 4 keeps the REST API behind Access too. Backend JWT validation still runs in either case.
 
-**App 5 — Protect everything else**
+**App 5: Protect everything else**
 
 | Field | Value |
 |-------|-------|
@@ -111,7 +111,7 @@ Exposing the Vite dev frontend (`dev.example.com`) through a second tunnel hostn
 
 Then create on the dev hostname:
 
-**App D1 — Bypass dashboard backend through Vite**
+**App D1: Bypass dashboard backend through Vite**
 
 | Field | Value |
 |-------|-------|
@@ -121,7 +121,7 @@ Then create on the dev hostname:
 
 Covers REST + `/api/v1/ws/*` WebSocket endpoints. Backend Bearer JWT validation still runs.
 
-**App D2 — Bypass health probe**
+**App D2: Bypass health probe**
 
 | Field | Value |
 |-------|-------|
@@ -131,7 +131,7 @@ Covers REST + `/api/v1/ws/*` WebSocket endpoints. Backend Bearer JWT validation 
 
 `SystemHealthGate` polls `/health` before the SPA hydrates; an Access challenge here keeps the splash screen up forever.
 
-**App D3 — Bypass watchdog**
+**App D3: Bypass watchdog**
 
 | Field | Value |
 |-------|-------|
@@ -141,7 +141,7 @@ Covers REST + `/api/v1/ws/*` WebSocket endpoints. Backend Bearer JWT validation 
 
 Watchdog uses an `X-Watchdog-Token` header issued by the backend; Access would strip the upgrade and add nothing.
 
-**App D4 — Bypass Vite HMR WebSocket** (only when HMR is wanted)
+**App D4: Bypass Vite HMR WebSocket** (only when HMR is wanted)
 
 | Field | Value |
 |-------|-------|
@@ -151,7 +151,7 @@ Watchdog uses an `X-Watchdog-Token` header issued by the backend; Access would s
 
 Vite listens for HMR upgrades on `/__vite_hmr` by default (set in `dashboard_dev_hmr_path`), so this single bypass is the only Access change required. Without the bypass the WebSocket upgrade is intercepted, the page enters a reload loop, and HMR is unusable. To opt out of HMR entirely instead, set `DASHBOARD_DEV_HMR_ENABLED=false` and skip App D4.
 
-**App D5 — Protect the dev SPA root**
+**App D5: Protect the dev SPA root**
 
 | Field | Value |
 |-------|-------|
@@ -194,5 +194,5 @@ The same passthrough requirements apply:
 
 ## Related
 
-- [Dashboard architecture](../dashboard/) — frontend cluster pod, backend on ansible VM, Keycloak on worker NodePort
-- [Keycloak realm template](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/08-iam/roles/keycloak_setup/templates/keycloak-realm.json.j2) — `redirectUris` and `webOrigins` must include every external origin (cluster, dev, demo)
+- [Dashboard architecture](../dashboard/): frontend cluster pod, backend on ansible VM, Keycloak on worker NodePort
+- [Keycloak realm template](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/08-iam/roles/keycloak_setup/templates/keycloak-realm.json.j2): `redirectUris` and `webOrigins` must include every external origin (cluster, dev, demo)

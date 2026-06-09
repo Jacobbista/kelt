@@ -1,6 +1,6 @@
 # Dashboard Overview
 
-The testbed includes an out-of-band control and observability dashboard — a web application that lets you inspect, manage, and diagnose the 5G environment without modifying the `5g` namespace workloads.
+The testbed includes an out-of-band control and observability dashboard, a web application that lets you inspect, manage, and diagnose the 5G environment without modifying the `5g` namespace workloads.
 
 ## Why Out-of-Band
 
@@ -140,7 +140,7 @@ sudo journalctl -u dashboard-backend -f   # live logs
 
 - **Systemd `Restart=always`**: backend auto-restarts on crash (3-second delay)
 - **Manual runs**: use `./run-backend-watch.sh` for a loop that restarts the process if it exits
-- **Frontend**: displays "Backend unreachable — reconnecting…" banner when the backend is down; polls for recovery
+- **Frontend**: displays "Backend unreachable, reconnecting…" banner when the backend is down; polls for recovery
 
 ## Backend Configuration
 
@@ -167,7 +167,7 @@ See [Dashboard Modules](modules.md) for full details on each module.
 
 ## Related Documentation
 
-- [Dashboard Modules](modules.md) — detailed feature description for each of the 10 modules
-- [API Reference](api-reference.md) — full REST and WebSocket endpoint listing
-- [RAN Modes](../deployment/ran-modes-dashboard.md) — how to switch between physical and simulated RAN
-- [Deployment Phases](../deployment/phases.md#phase-9-dashboard-control-plane) — Phase 9 detail
+- [Dashboard Modules](modules.md): detailed feature description for each of the 10 modules
+- [API Reference](api-reference.md): full REST and WebSocket endpoint listing
+- [RAN Modes](../deployment/ran-modes-dashboard.md): how to switch between physical and simulated RAN
+- [Deployment Phases](../deployment/phases.md#phase-9-dashboard-control-plane): Phase 9 detail

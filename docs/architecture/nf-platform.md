@@ -1,4 +1,4 @@
-# 5G NF Platform — Architecture Specification
+# 5G NF Platform: Architecture Specification
 
 This document specifies the design of a companion repository (`5g-nf-platform`) that manages
 the lifecycle of 5G Network Function container images used by this testbed. It also defines
@@ -203,44 +203,44 @@ the ansible binary available in the execution environment (already present on th
 
 The following changes to this repository are complete.
 
-### `ansible/group_vars/all.yml` — implemented
+### `ansible/group_vars/all.yml`: implemented
 
 `nf_images` dict added with per-NF image references to `ghcr.io/jacobbista/5g-nf-platform`.
 The global `nf_image` fallback is retained for backward compatibility.
 
-### `ansible/phases/05-5g-core/roles/nf_deployments/defaults/main.yml` — implemented
+### `ansible/phases/05-5g-core/roles/nf_deployments/defaults/main.yml`: implemented
 
 Each NF entry has an `image: "{{ nf_images.<name> | default(nf_image) }}"` field.
 MongoDB migrated to `mongo:6` official image (no longer depends on monolithic build).
 `experimental_nfs: []` list added for opt-in experimental NF deployment.
 
-### `ansible/phases/05-5g-core/templates/nf-deployment.yaml.j2` — implemented
+### `ansible/phases/05-5g-core/templates/nf-deployment.yaml.j2`: implemented
 
 `image: {{ nf.image | default(nf_image) }}`
 
-### `ansible/phases/05-5g-core/roles/nf_deployments/tasks/main.yml` — implemented
+### `ansible/phases/05-5g-core/roles/nf_deployments/tasks/main.yml`: implemented
 
 Experimental NF deploy loop added after core NF loop.
 
-### `dashboard/backend/app/services/ue_service.py` — implemented
+### `dashboard/backend/app/services/ue_service.py`: implemented
 
 `get_smf_sessions()` added: queries SMF `/session-info` endpoint, overlays results onto
 log-derived UE state in `get_active_ues()`. Log parsing retained as fallback.
 
-### `dashboard/backend/app/services/nf_service.py` — implemented (new)
+### `dashboard/backend/app/services/nf_service.py`: implemented (new)
 
 `NFService`: deployed image comparison against `versions.json`, ansible-triggered NF update.
 
-### `dashboard/backend/app/routers/nf.py` — implemented (new)
+### `dashboard/backend/app/routers/nf.py`: implemented (new)
 
-`GET /api/v1/nf/versions` — per-NF deployed vs available comparison.
-`POST /api/v1/nf/update/stream` — NDJSON-streamed ansible redeployment for a single NF.
+`GET /api/v1/nf/versions`: per-NF deployed vs available comparison.
+`POST /api/v1/nf/update/stream`: NDJSON-streamed ansible redeployment for a single NF.
 
-### `dashboard/frontend/src/pages/CorePage.jsx` — implemented
+### `dashboard/frontend/src/pages/CorePage.jsx`: implemented
 
 Version badge per NF card (green = current, amber = update available with clickable update trigger).
 Manual "check updates" button. Update confirmation modal with streamed ansible output.
 
-### `dashboard/frontend/src/components/NfCard.jsx` — implemented
+### `dashboard/frontend/src/components/NfCard.jsx`: implemented
 
 `versionInfo` and `onUpdate` props added. Version badge rendered in card header.

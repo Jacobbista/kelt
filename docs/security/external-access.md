@@ -205,6 +205,6 @@ and use `localhost` only at the browser layer.
 
 ## See also
 
-- [IAM](iam.md) — Keycloak realm structure, clients, roles, token retrieval
-- [Phase 08: IAM](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/08-iam/README.md) — implementation notes
-- [Phase 09: Dashboard](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/09-dashboard/README.md) — frontend reverse-proxy layout
+- [IAM](iam.md): Keycloak realm structure, clients, roles, token retrieval
+- [Phase 08: IAM](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/08-iam/README.md): implementation notes
+- [Phase 09: Dashboard](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/09-dashboard/README.md): frontend reverse-proxy layout

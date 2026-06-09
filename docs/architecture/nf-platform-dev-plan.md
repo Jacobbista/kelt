@@ -1,4 +1,4 @@
-# 5G NF Platform — Development Plan
+# 5G NF Platform: Development Plan
 
 Standalone specification for the `5g-nf-platform` repository. Copy this document to the
 root of that repository as `CLAUDE.md` or `SPEC.md` before starting development.
@@ -26,9 +26,9 @@ into this repository.
 
 ---
 
-## Build order — do these in sequence
+## Build order: do these in sequence
 
-### Phase 1 — Scaffold and first working image
+### Phase 1: Scaffold and first working image
 
 1. Create the directory structure (see below).
 2. Write `Dockerfile` for one NF only: SMF. Reason: SMF is the first NF that needs a patch
@@ -38,7 +38,7 @@ into this repository.
 4. Write GitHub Actions workflow `build.yml` that builds and pushes SMF only.
 5. Verify: `docker pull ghcr.io/<owner>/5g-nf-platform/smf:<tag>` works.
 
-### Phase 2 — SMF session-info patch
+### Phase 2: SMF session-info patch
 
 1. Clone Open5GS at the pinned tag locally.
 2. Add the HTTP handler to `src/smf/app.c` (see patch spec below).
@@ -46,19 +46,19 @@ into this repository.
 4. Update SMF Dockerfile to apply the patch before building.
 5. Verify: `curl http://127.0.0.1:9090/session-info` inside SMF container returns JSON.
 
-### Phase 3 — Remaining Open5GS NFs
+### Phase 3: Remaining Open5GS NFs
 
 Add one Dockerfile per NF: AMF, UPF, UDM, AUSF, UDR, NRF, PCF, BSF, NSSF. No patches on
 these initially. Extend `build.yml` to build all of them. Update `versions.json`.
 
-### Phase 4 — CI automation for upstream updates
+### Phase 4: CI automation for upstream updates
 
 1. Add `check-upstream.yml` scheduled workflow (daily).
 2. Workflow: query GitHub releases API for open5gs/open5gs, compare with pinned tag in
    `upstream-versions.json`, open a PR if newer tag exists.
 3. PR updates the pinned tag per NF, increments `patch-rev` to 0 if no patches change.
 
-### Phase 5 — First experimental NF
+### Phase 5: First experimental NF
 
 Choose one: NEF from free5GC or a custom LMF stub. This phase validates the experimental NF
 path end-to-end including NRF registration compatibility with Open5GS NRF.
@@ -210,7 +210,7 @@ PRs that bump an upstream tag update only this file.
 ## SMF session-info patch specification
 
 **File to modify**: `src/smf/app.c` (or wherever the Open5GS management HTTP server
-registers routes — confirm with `grep -r "ogs_app_management" src/smf/`).
+registers routes, confirm with `grep -r "ogs_app_management" src/smf/`).
 
 **Endpoint**: `GET /session-info`
 
@@ -307,7 +307,7 @@ not know about upstream sources, patches, or build tooling.
 
 ## Open questions to resolve before Phase 5
 
-1. Which NRF — Open5GS or a standalone one — will serve as the registry for mixed-source
+1. Which NRF, Open5GS or a standalone one, will serve as the registry for mixed-source
    deployments? Open5GS NRF has specific behavior that free5GC NFs may not match exactly.
 2. Is the experimental NEF needed as a full SBI NF (registered with NRF, consumed by AMF)
    or as a sidecar service (standalone HTTP API)? The answer changes the integration

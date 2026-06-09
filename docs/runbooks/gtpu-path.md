@@ -1,4 +1,4 @@
-# GTP-U (N3) Path — gNB/UE ↔ UPF
+# GTP-U (N3) Path: gNB/UE ↔ UPF
 
 **GTP-U (GPRS Tunnelling Protocol User Plane)** is the data plane protocol between gNB/UE and UPF on the N3 interface. This runbook provides comprehensive diagnostics for GTP-U connectivity issues.
 

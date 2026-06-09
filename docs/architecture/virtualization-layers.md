@@ -46,7 +46,7 @@ A single host is the fundamental constraint. All four VMs compete for the same p
 
 ### Production path
 
-Replace VirtualBox with bare metal or a cloud hypervisor (KVM, ESXi, AWS/GCP). The Ansible automation is hypervisor-agnostic — only the Vagrantfile needs to be replaced with a different provisioner.
+Replace VirtualBox with bare metal or a cloud hypervisor (KVM, ESXi, AWS/GCP). The Ansible automation is hypervisor-agnostic, so only the Vagrantfile needs to be replaced with a different provisioner.
 
 ---
 
@@ -64,7 +64,7 @@ Network isolation, resource limits, and OS-level separation between nodes. Each 
   - `eth0` (NAT): internet access for package downloads
   - `eth1` (host-only, 192.168.56.0/24): inter-VM communication and cluster traffic
 
-The 5G overlay traffic (N2, N3, N4 VXLAN) rides on top of `eth1`. This means all 5G-plane traffic shares the same management NIC — acceptable in a testbed, not ideal for production.
+The 5G overlay traffic (N2, N3, N4 VXLAN) rides on top of `eth1`. This means all 5G-plane traffic shares the same management NIC, acceptable in a testbed, not ideal for production.
 
 ### Key configuration
 
@@ -130,7 +130,7 @@ graph LR
 
 ### Edge node limitations (KubeEdge specifics)
 
-These are not bugs — they are known constraints of the KubeEdge architecture. Workarounds are documented in [known-issues/](../known-issues/):
+These are not bugs: they are known constraints of the KubeEdge architecture. Workarounds are documented in [known-issues/](../known-issues/):
 
 | Limitation | Cause | Workaround |
 |------------|-------|------------|
@@ -155,7 +155,7 @@ These are not bugs — they are known constraints of the KubeEdge architecture. 
 
 ## Layer 4: 5G Overlay Network
 
-This is the most complex layer. It solves a fundamental problem: Kubernetes gives every pod one network interface, but 5G NFs need multiple isolated interfaces — one per N-reference-point.
+This is the most complex layer. It solves a fundamental problem: Kubernetes gives every pod one network interface, but 5G NFs need multiple isolated interfaces, one per N-reference-point.
 
 ### What it provides
 
@@ -266,7 +266,7 @@ K3s and standalone containerd use different filesystem paths for CNI configurati
 | worker (K3s) | `/var/lib/rancher/k3s/agent/etc/cni/net.d` | `/opt/cni/bin` |
 | edge (containerd) | `/etc/cni/net.d` | `/opt/cni/bin` |
 
-A single DaemonSet cannot mount different host paths on different nodes. Two DaemonSets — one targeting `kubernetes.io/hostname: worker`, one targeting `kubernetes.io/hostname: edge` — each mount the correct paths for their node.
+A single DaemonSet cannot mount different host paths on different nodes. Two DaemonSets, one targeting `kubernetes.io/hostname: worker`, one targeting `kubernetes.io/hostname: edge`, each mount the correct paths for their node.
 
 Additionally, the Multus configuration differs:
 - **Worker**: auto-mode (`--multus-conf-file=auto`), Multus reads the primary CNI config and wraps it
@@ -327,7 +327,7 @@ sequenceDiagram
     NF->>Target: Direct SBI call (HTTP/2)
 ```
 
-NFs register themselves with NRF on startup and discover peers via NRF. This is the standard 3GPP SBI (Service-Based Interface) model. Because edge pods have no CoreDNS, AMF IPs are pinned as static Kubernetes pod IPs — gNB and UE pods query the K8s API at startup to resolve them.
+NFs register themselves with NRF on startup and discover peers via NRF. This is the standard 3GPP SBI (Service-Based Interface) model. Because edge pods have no CoreDNS, AMF IPs are pinned as static Kubernetes pod IPs, and gNB and UE pods query the K8s API at startup to resolve them.
 
 ### 5G session flow
 
@@ -414,13 +414,13 @@ graph LR
     T5 -.->|"upgrade path"| P5
 ```
 
-The design choices that are already production-grade (OVS per-interface isolation, Whereabouts IPAM, SBI/NRF architecture, VXLAN tunnelling principle) provide a solid base. The testbed-specific shortcuts (single-host, shared management NIC, single NF instances) are all in the infrastructure layers — they can be replaced independently without rearchitecting the 5G layer.
+The design choices that are already production-grade (OVS per-interface isolation, Whereabouts IPAM, SBI/NRF architecture, VXLAN tunnelling principle) provide a solid base. The testbed-specific shortcuts (single-host, shared management NIC, single NF instances) are all in the infrastructure layers, so they can be replaced independently without rearchitecting the 5G layer.
 
 ---
 
 ## Related Documentation
 
-- [Architecture Overview](overview.md) — component placement and deployment flow
-- [Network Topology](network-topology.md) — OVS, VXLAN, and Multus in depth
-- [5G Interfaces](5g-interfaces.md) — N-reference-point subnets and protocols
-- [Known Issues](../known-issues/) — layer-specific limitations with workarounds
+- [Architecture Overview](overview.md): component placement and deployment flow
+- [Network Topology](network-topology.md): OVS, VXLAN, and Multus in depth
+- [5G Interfaces](5g-interfaces.md): N-reference-point subnets and protocols
+- [Known Issues](../known-issues/): layer-specific limitations with workarounds

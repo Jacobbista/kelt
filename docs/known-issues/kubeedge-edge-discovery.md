@@ -6,7 +6,7 @@ KubeEdge edge nodes do not proxy DNS queries to CoreDNS and do not sync Secrets 
 
 Edge pods that need to locate other pods (e.g. gNB discovering the AMF IP) use a dedicated init container that queries the Kubernetes API directly using a long-lived bearer token injected at deploy time by Ansible.
 
-The init container requires `NET_ADMIN` to add a default route, which is absent in edge pod networking by default. The token is generated with a 1-year TTL, stored in a ConfigMap, read by Ansible during provisioning, and passed as an environment variable — never mounted as a volume, since volume syncing does not work on edge nodes.
+The init container requires `NET_ADMIN` to add a default route, which is absent in edge pod networking by default. The token is generated with a 1-year TTL, stored in a ConfigMap, read by Ansible during provisioning, and passed as an environment variable, never mounted as a volume, since volume syncing does not work on edge nodes.
 
 RBAC is scoped to `get` and `list` on `pods` and `endpoints` only.
 

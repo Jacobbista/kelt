@@ -8,6 +8,7 @@ The testbed includes a comprehensive test suite for validation and continuous in
 |-------|-------------|----------|
 | **e2e** | End-to-end integration tests | ~5 min |
 | **protocols** | 5G protocol validation (PFCP, NGAP, GTP-U) | ~3 min |
+| **iam** | Keycloak realm: clients, roles, token claims (phase 08) | ~2 min |
 | **performance** | Throughput, latency, stress tests | ~10 min |
 | **resilience** | Failure recovery tests | ~8 min |
 | **ran** | Physical RAN integration tests | ~2 min |
@@ -17,12 +18,16 @@ The testbed includes a comprehensive test suite for validation and continuous in
 ```bash
 cd tests
 
-# Run all tests (interactive CLI)
-make
+# Interactive picker
+../testbed-config tests
 
-# Run specific suite
+# Run all enabled suites
+make test
+
+# Run a specific suite
 make e2e
 make protocols
+make iam
 make ran
 
 # List available tests
@@ -79,6 +84,22 @@ make protocols
 - GTP-U (N3): User plane tunnels
 - Port listening verification
 - Message exchange validation
+
+### IAM Tests
+
+Validates the Keycloak realm provisioned in phase 08:
+
+```bash
+make iam
+```
+
+**Tests**:
+- Keycloak and PostgreSQL pods Running in the `iam` namespace
+- OIDC discovery document reachable and well-formed
+- Master-realm admin login with the configured password
+- Expected OIDC clients present in the realm
+- Expected realm roles present
+- CAMARA gateway service account token carries `camara-location-read`
 
 ### Performance Tests
 
@@ -144,8 +165,10 @@ python3 run_tests.py -p infrastructure,5g-core
 ### Makefile Targets
 
 ```bash
+make test         # Run all enabled suites
 make e2e          # End-to-end tests
 make protocols    # Protocol tests
+make iam          # Keycloak realm / token tests (phase 08)
 make performance  # Performance tests
 make resilience   # Resilience tests
 make ran          # Physical RAN tests

@@ -12,19 +12,21 @@
 
 A research testbed under active development. Components are tiered by maturity:
 
-- **Supported** (validated, reproducible): core 5G deployment, VXLAN overlays, dashboard, IAM, node and NF metrics, physical RAN, CAMARA location and positioning.
+- **Supported** (validated, reproducible): core 5G deployment, VXLAN overlays, dashboard, IAM, node and NF metrics, physical RAN, CAMARA location and positioning*.
 - **Experimental** (present, not fully validated): UERANSIM, KubeEdge edge node, UPF-MEC, log and alerting stack.
 - **Planned** (no working code yet): edge provisioning from the dashboard, MEC scheduling, O-RAN RIC, NWDAF.
+
+\*CAMARA location and positioning are shown at their target tier; end-to-end validation is in progress.
 
 Full matrix and reproducibility scope: [docs/status.md](docs/status.md).
 
 ## How It Works
 
-Three virtual machines form the cluster. The worker runs the Open5GS core network functions (AMF, SMF, UPF, NRF, and others) alongside KubeEdge CloudCore. The edge node hosts EdgeCore with UERANSIM gNB and UEs, or a physical femtocell. OVS+VXLAN tunnels carry the 5G control and user-plane traffic between them with per-interface isolation.
+The cluster is up to three nodes (K3s master, worker, and an optional KubeEdge edge), brought up and configured by a separate Ansible provisioning VM. The worker runs the Open5GS core network functions (AMF, SMF, UPF, NRF, and others) alongside KubeEdge CloudCore. The edge node hosts EdgeCore with UERANSIM gNB and UEs, or a physical femtocell. OVS+VXLAN tunnels carry the 5G control and user-plane traffic between them with per-interface isolation.
 
 ### 5G System Architecture (3GPP Release 17)
 
-![5G System Architecture — Source: ENISA](docs/assets/5G-Core-SBA-Source-ENISA.png)
+![5G System Architecture (Source: ENISA)](docs/assets/5G-Core-SBA-Source-ENISA.png)
 
 The testbed implements the reference point interfaces: N1 (UE–AMF), N2 (gNB–AMF), N3 (gNB–UPF), N4 (SMF–UPF), and N6 (UPF–DN). Each interface runs on a dedicated VXLAN-isolated overlay.
 
@@ -34,8 +36,10 @@ The testbed implements the reference point interfaces: N1 (UE–AMF), N2 (gNB–
 graph LR
     subgraph ran["Edge Node  ·  or Physical RAN"]
         direction TB
-        UE["UE\n(simulated or physical)"]
-        gNB["gNB\n(UERANSIM or femtocell)"]
+        UE["UE
+        (simulated or physical)"]
+        gNB["gNB
+        (UERANSIM or femtocell)"]
     end
 
     subgraph worker["Worker Node"]
@@ -130,41 +134,41 @@ VMs run Ubuntu 22.04 (Jammy).
 
 ```bash
 cd tests
-make e2e        # End-to-end: UE registration, PDU session, data plane
-make protocols  # Protocol validation: NGAP, PFCP, GTP-U
-make ran        # Physical RAN: dongle enumeration and connectivity
+make test    # run all enabled suites
 ```
+
+For individual suites and how to write new ones, see the [Testing Guide](docs/development/testing.md).
 
 ## Documentation
 
 Full documentation lives in [docs/](docs/README.md).
 
 **Architecture**
-- [System Overview](docs/architecture/overview.md) — node roles, component placement, deployment flow
-- [Virtualization Layers](docs/architecture/virtualization-layers.md) — 5-layer stack from host to 5G NFs
-- [Network Topology](docs/architecture/network-topology.md) — OVS, VXLAN, Multus from first principles
-- [5G Interfaces](docs/architecture/5g-interfaces.md) — N1–N6 subnets, IPs, ports, verification
+- [System Overview](docs/architecture/overview.md): node roles, component placement, deployment flow
+- [Virtualization Layers](docs/architecture/virtualization-layers.md): 5-layer stack from host to 5G NFs
+- [Network Topology](docs/architecture/network-topology.md): OVS, VXLAN, Multus from first principles
+- [5G Interfaces](docs/architecture/5g-interfaces.md): N1–N6 subnets, IPs, ports, verification
 
 **Deployment**
-- [Deployment Phases](docs/deployment/phases.md) — what each of the 12 phases does
-- [Server / NUC Setup](docs/deployment/server-setup.md) — headless server deployment
-- [Physical RAN Integration](docs/deployment/physical-ran.md) — connect a real femtocell
+- [Deployment Phases](docs/deployment/phases.md): what each of the 12 phases does
+- [Server / NUC Setup](docs/deployment/server-setup.md): headless server deployment
+- [Physical RAN Integration](docs/deployment/physical-ran.md): connect a real femtocell
 
 **Operations**
-- [Troubleshooting](docs/operations/troubleshooting.md) — start here when something is wrong
-- [Handbook](docs/operations/handbook.md) — operator cheat-sheet (IPs, ports, commands)
-- [Runbooks](docs/runbooks/) — step-by-step diagnostics for NGAP, PFCP, GTP-U, OVS, Multus
+- [Troubleshooting](docs/operations/troubleshooting.md): start here when something is wrong
+- [Handbook](docs/operations/handbook.md): operator cheat-sheet (IPs, ports, commands)
+- [Runbooks](docs/runbooks/): step-by-step diagnostics for NGAP, PFCP, GTP-U, OVS, Multus
 
 **Dashboard**
-- [Overview](docs/dashboard/overview.md) — architecture, access URLs, security model
-- [API Reference](docs/dashboard/api-reference.md) — REST and WebSocket endpoints
+- [Overview](docs/dashboard/overview.md): architecture, access URLs, security model
+- [API Reference](docs/dashboard/api-reference.md): REST and WebSocket endpoints
 
 ## Companion Repositories
 
 KELT pulls container images built and versioned in separate repositories:
 
-- [**5g-nf-platform**](https://github.com/Jacobbista/5g-nf-platform) — per-NF Open5GS images (AMF, SMF, UPF, and the rest) with research patches, built and published via CI. Pinned by tag in `ansible/group_vars/all.yml`.
-- [**5g-northbound**](https://github.com/Jacobbista/5g-northbound) — CAMARA gateway and positioning engine / demo images for the optional northbound addons.
+- [**5g-nf-platform**](https://github.com/Jacobbista/5g-nf-platform): per-NF Open5GS images (AMF, SMF, UPF, and the rest) with research patches, built and published via CI. Pinned by tag in `ansible/group_vars/all.yml`.
+- [**5g-northbound**](https://github.com/Jacobbista/5g-northbound): CAMARA gateway and positioning engine / demo images for the optional northbound addons.
 
 The `5g-probe` UE measurement tool ships in this repository under [`5g-probe/`](5g-probe/).
 

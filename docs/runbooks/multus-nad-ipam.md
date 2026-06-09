@@ -81,13 +81,7 @@ sudo k3s kubectl -n 5g exec deploy/amf -- ip -o -4 addr show dev n2
 sudo k3s kubectl -n 5g exec deploy/smf -- ip addr show
 sudo k3s kubectl -n 5g exec deploy/smf -- ip -o -4 addr show dev n4
 
-# Check UPF-edge interfaces
-sudo k3s kubectl -n 5g exec deploy/upf-edge -- ip addr show
-sudo k3s kubectl -n 5g exec deploy/upf-edge -- ip -o -4 addr show dev n3
-sudo k3s kubectl -n 5g exec deploy/upf-edge -- ip -o -4 addr show dev n4
-sudo k3s kubectl -n 5g exec deploy/upf-edge -- ip -o -4 addr show dev n6
-
-# Check UPF-cloud interfaces
+# Check UPF-cloud interfaces (active data-plane UPF; upf-edge is disabled by default)
 sudo k3s kubectl -n 5g exec deploy/upf-cloud -- ip addr show
 sudo k3s kubectl -n 5g exec deploy/upf-cloud -- ip -o -4 addr show dev n3
 sudo k3s kubectl -n 5g exec deploy/upf-cloud -- ip -o -4 addr show dev n4

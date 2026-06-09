@@ -1,4 +1,4 @@
-# NGAP (N2) Diagnostics — gNB ↔ AMF
+# NGAP (N2) Diagnostics: gNB ↔ AMF
 
 **NGAP (Next Generation Application Protocol)** is the control plane protocol between gNB and AMF on the N2 interface. This runbook provides comprehensive diagnostics for NGAP connectivity issues.
 

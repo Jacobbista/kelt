@@ -41,7 +41,7 @@ graph LR
 
 ---
 
-## N1 — UE ↔ AMF (NAS)
+## N1: UE ↔ AMF (NAS)
 
 | Property | Value |
 |----------|-------|
@@ -65,7 +65,7 @@ sudo k3s kubectl -n 5g get net-attach-def n1-net
 
 ---
 
-## N2 — gNB ↔ AMF (NGAP)
+## N2: gNB ↔ AMF (NGAP)
 
 | Property | Value |
 |----------|-------|
@@ -92,7 +92,7 @@ sudo k3s kubectl -n 5g exec deploy/amf -- ip -o -4 addr show dev n2
 
 ---
 
-## N3 — gNB ↔ UPF (GTP-U)
+## N3: gNB ↔ UPF (GTP-U)
 
 | Property | Value |
 |----------|-------|
@@ -122,7 +122,7 @@ sudo k3s kubectl -n 5g exec deploy/upf-cloud -- ip -o -4 addr show dev n3
 
 ---
 
-## N4 — SMF ↔ UPF (PFCP)
+## N4: SMF ↔ UPF (PFCP)
 
 | Property | Value |
 |----------|-------|
@@ -151,7 +151,7 @@ sudo k3s kubectl -n 5g exec deploy/smf -- ip -o -4 addr show dev n4
 
 ---
 
-## N6 — UPF ↔ Data Network
+## N6: UPF ↔ Data Network
 
 | Property | Value |
 |----------|-------|
@@ -163,15 +163,19 @@ sudo k3s kubectl -n 5g exec deploy/smf -- ip -o -4 addr show dev n4
 | OVS bridges | br-n6c (VNI 107), br-n6m (VNI 108), br-n6e (VNI 106) |
 | NADs | `5g/n6-cld-net`, `mec/n6m-net`, `mec/n6-mec-net` |
 
+**Naming convention**: `N6c` / `N6m` / `N6e` are testbed-local labels for distinct N6 data-network instances, not standardized 3GPP interfaces. In 3GPP, N6 is the reference point between the UPF and a data network, and a deployment can have several. The suffixes distinguish the three data networks this testbed attaches: consumer internet breakout (`c`), the MEC application network at the central UPF (`m`), and the edge-local breakout at the edge UPF (`e`).
+
 **N6c (internet breakout via UPF-Cloud)**: The worker VM has `ip_forward` enabled and `iptables MASQUERADE` rules for the `10.207.0.0/24` subnet. Traffic exiting UPF-Cloud on the N6c interface is NAT'd to the worker's `eth0` (NAT NIC) and forwarded to the internet.
 
-**N6m (MEC data network via UPF-Cloud)**: A second N6 interface on UPF-Cloud connecting to the MEC data network (`10.208.0.0/24`). Allows UEs to reach MEC application services via UPF-Cloud when UPF-Edge is not active.
+**N6m (MEC application network via UPF-Cloud)**: A second N6 interface on UPF-Cloud connecting to a dedicated data network (`10.208.0.0/24`) that hosts the testbed's MEC application workloads. It is where edge-style application services are deployed and reached today, served by the central (cloud) UPF.
 
-**N6e (MEC local breakout via UPF-Edge)**: Reserved for MEC applications on the edge node. Currently not active due to UPF-Edge being disabled. See [known-issues/upf-edge-cni-route-conflict.md](../known-issues/upf-edge-cni-route-conflict.md).
+**N6e (edge-local MEC breakout via UPF-Edge)**: The same role anchored at the edge UPF instead of the central one, reserved for MEC applications co-located on the edge node. Currently inactive because UPF-Edge is disabled. See [known-issues/upf-edge-cni-route-conflict.md](../known-issues/upf-edge-cni-route-conflict.md).
+
+**On "MEC" and locality**: MEC is defined by function (local application hosting with local breakout), not by which UPF serves it, so the N6m data network is the testbed's MEC network even though it is anchored at the cloud UPF. On a single workstation there is no physical distance, so "cloud" and "edge" are logical roles rather than latency tiers. A real latency difference appears only when application workloads run on the edge VM via KubeEdge, where link latency can be injected, or when the nodes are physically separated.
 
 ---
 
-## SBI — Service-Based Interface
+## SBI: Service-Based Interface
 
 | Property | Value |
 |----------|-------|
@@ -182,7 +186,7 @@ sudo k3s kubectl -n 5g exec deploy/smf -- ip -o -4 addr show dev n4
 
 NFs using SBI: NRF, AMF, SMF, UDM, UDR, AUSF, PCF, BSF, NSSF.
 
-**SBI does not use OVS overlays.** It runs over the standard Flannel network (`eth0`) via Kubernetes ClusterIP Services. This means it is only accessible from the worker node. Edge pods (gNB, UEs) cannot reach SBI directly — they communicate only via N1/N2/N3.
+**SBI does not use OVS overlays.** It runs over the standard Flannel network (`eth0`) via Kubernetes ClusterIP Services. This means it is only accessible from the worker node. Edge pods (gNB, UEs) cannot reach SBI directly; they communicate only via N1/N2/N3.
 
 ---
 
@@ -215,9 +219,9 @@ Driven by `ansible/phases/06-ueransim-mec/vars/topology.yml`.
 
 ## Related Documentation
 
-- [Network Topology](network-topology.md) — OVS, VXLAN, Multus, and NAD configuration
-- [Physical RAN Integration](../deployment/physical-ran.md) — physical gNB connectivity and routing
-- [Runbook: NGAP Diagnostics](../runbooks/ngap-diagnostics.md) — N2 troubleshooting
-- [Runbook: PFCP Diagnostics](../runbooks/pfcp-diagnostics.md) — N4 troubleshooting
-- [Runbook: GTP-U Path](../runbooks/gtpu-path.md) — N3 troubleshooting
-- [Operations Handbook](../operations/handbook.md) — canonical IP reference with validation commands
+- [Network Topology](network-topology.md): OVS, VXLAN, Multus, and NAD configuration
+- [Physical RAN Integration](../deployment/physical-ran.md): physical gNB connectivity and routing
+- [Runbook: NGAP Diagnostics](../runbooks/ngap-diagnostics.md): N2 troubleshooting
+- [Runbook: PFCP Diagnostics](../runbooks/pfcp-diagnostics.md): N4 troubleshooting
+- [Runbook: GTP-U Path](../runbooks/gtpu-path.md): N3 troubleshooting
+- [Operations Handbook](../operations/handbook.md): canonical IP reference with validation commands

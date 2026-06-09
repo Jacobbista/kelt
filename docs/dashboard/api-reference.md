@@ -165,6 +165,6 @@ Streams real-time OVS bridge counter deltas every second.
 
 ## Related Documentation
 
-- [Dashboard Overview](overview.md) — architecture and security model
-- [Dashboard Modules](modules.md) — what each module does
-- [RAN Modes](../deployment/ran-modes-dashboard.md) — RAN mode switching workflow
+- [Dashboard Overview](overview.md): architecture and security model
+- [Dashboard Modules](modules.md): what each module does
+- [RAN Modes](../deployment/ran-modes-dashboard.md): RAN mode switching workflow

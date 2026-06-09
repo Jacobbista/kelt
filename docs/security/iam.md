@@ -107,7 +107,7 @@ ansible-playbook ansible/phases/09-dashboard/playbook.yml \
 
 (Omit `dashboard_keycloak_path_prefix` for subdomain layouts. Backend and
 frontend use distinct URLs: the backend hits Keycloak via an internal
-URL — typically the worker NodePort — while the browser uses the external
+URL, typically the worker NodePort, while the browser uses the external
 authority URL.)
 
 ## How the token reaches the backend
@@ -267,7 +267,7 @@ console is preserved.
 
 ## See also
 
-- [External Access](external-access.md) — tunnel layout, single-origin reverse proxy
-- [Phase 08: IAM](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/08-iam/README.md) — implementation notes
-- [Phase 09: Dashboard](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/09-dashboard/README.md) — backend JWT middleware (planned)
-- [Phase 10: CAMARA](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/10-camara/README.md) — gateway JWT validation
+- [External Access](external-access.md): tunnel layout, single-origin reverse proxy
+- [Phase 08: IAM](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/08-iam/README.md): implementation notes
+- [Phase 09: Dashboard](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/09-dashboard/README.md): backend JWT middleware (planned)
+- [Phase 10: CAMARA](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/10-camara/README.md): gateway JWT validation

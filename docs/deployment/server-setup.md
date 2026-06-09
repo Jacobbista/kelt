@@ -2,7 +2,7 @@
 
 This guide covers deploying the testbed on a headless server or Intel NUC instead of a laptop. It uses the same Vagrant + Ansible pipeline as the [standard deployment](../getting-started.md), but with optimized resource profiles and fewer VMs.
 
-> **Laptop users**: This guide is for server/NUC deployments. For laptop deployment, follow [Getting Started](../getting-started.md) — no profile configuration is needed, the default `laptop` profile creates all 4 VMs.
+> **Laptop users**: This guide is for server/NUC deployments. For laptop deployment, follow [Getting Started](../getting-started.md), no profile configuration is needed, the default `laptop` profile creates all 4 VMs.
 
 ---
 
@@ -213,7 +213,7 @@ Configure `/etc/caddy/Caddyfile`:
 
 Generate a password hash with `caddy hash-password`, then restart: `sudo systemctl restart caddy`.
 
-Each `handle_path` block strips its prefix and forwards to the corresponding VM service. The `basicauth` block protects all paths with HTTP Basic Authentication — no service is exposed without credentials.
+Each `handle_path` block strips its prefix and forwards to the corresponding VM service. The `basicauth` block protects all paths with HTTP Basic Authentication: no service is exposed without credentials.
 
 ### SSH Tunnel (Quick Alternative)
 
@@ -264,7 +264,7 @@ graph LR
 
 The N6m network (`br-n6m`, VNI 108, subnet `10.208.0.0/24`) is created during Phase 4 provisioning. MEC pods attach to it via the `n6m-net` NetworkAttachmentDefinition in the `mec` namespace.
 
-For the full interface specification (IPs, VXLAN key, validation commands), see the [N6 section in 5G Interfaces](../architecture/5g-interfaces.md#n6--upf--data-network).
+For the full interface specification (IPs, VXLAN key, validation commands), see the [N6 section in 5G Interfaces](../architecture/5g-interfaces.md).
 
 ---
 
@@ -279,8 +279,8 @@ For the full interface specification (IPs, VXLAN key, validation commands), see 
 
 ## Related Documentation
 
-- [Getting Started](../getting-started.md) — standard laptop deployment
-- [testbed-config](../tools/testbed-config.md) — full CLI and TUI reference
-- [Deployment Phases](phases.md) — what each phase does, provisioning flags
-- [Physical RAN Integration](physical-ran.md) — connecting a real femtocell
-- [Handbook](../operations/handbook.md) — canonical IP reference and interface matrix
+- [Getting Started](../getting-started.md): standard laptop deployment
+- [testbed-config](../tools/testbed-config.md): full CLI and TUI reference
+- [Deployment Phases](phases.md): what each phase does, provisioning flags
+- [Physical RAN Integration](physical-ran.md): connecting a real femtocell
+- [Handbook](../operations/handbook.md): canonical IP reference and interface matrix

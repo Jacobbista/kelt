@@ -1,4 +1,4 @@
-# PFCP (N4) Diagnostics — SMF ↔ UPF
+# PFCP (N4) Diagnostics: SMF ↔ UPF
 
 **PFCP (Packet Forwarding Control Protocol)** is the control plane protocol between SMF and UPF on the N4 interface. This runbook provides comprehensive diagnostics for PFCP connectivity issues.
 

@@ -111,7 +111,7 @@ Removes `br-ran` patch ports and the AMF `n2phy` annotation.
 
 ## Coexistence Mode
 
-Both UERANSIM and Physical RAN can run simultaneously. The 5G Core handles both RAN connections normally — each gNB (simulated or physical) registers with AMF independently.
+Both UERANSIM and Physical RAN can run simultaneously. The 5G Core handles both RAN connections normally, each gNB (simulated or physical) registers with AMF independently.
 
 To enable coexistence, simply enable both modes:
 
@@ -141,13 +141,13 @@ The Topology Map module shows actual pod placement via `pod.spec.nodeName`.
 
 - **Replica state persistence**: UERANSIM replica counts are persisted in ConfigMap `ueransim-dashboard-state`. Disabling UERANSIM (scale to 0) and re-enabling it restores the previous count.
 - **Runtime extensions**: gNBs/UEs created from dashboard forms are persisted in ConfigMap and re-applied on status refresh, on top of the Ansible baseline.
-- **Bridge mode source of truth**: the dashboard reads `RAN_BRIDGE_MODE` from the running OVS DaemonSet environment — this is the live state, not the Ansible configuration.
+- **Bridge mode source of truth**: the dashboard reads `RAN_BRIDGE_MODE` from the running OVS DaemonSet environment: this is the live state, not the Ansible configuration.
 
 ---
 
 ## Related Documentation
 
-- [Dashboard Overview](../dashboard/overview.md) — dashboard architecture and access
-- [Dashboard API Reference](../dashboard/api-reference.md) — full API endpoint listing
-- [Physical RAN Integration](physical-ran.md) — hardware setup for femtocell connection
-- [Dashboard Module: RAN](../dashboard/modules.md#ran) — UI walkthrough
+- [Dashboard Overview](../dashboard/overview.md): dashboard architecture and access
+- [Dashboard API Reference](../dashboard/api-reference.md): full API endpoint listing
+- [Physical RAN Integration](physical-ran.md): hardware setup for femtocell connection
+- [Dashboard Module: RAN](../dashboard/modules.md#ran): UI walkthrough

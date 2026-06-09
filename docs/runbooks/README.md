@@ -1,6 +1,6 @@
 # Runbooks Index
 
-This directory contains focused diagnostic and troubleshooting procedures for the 5G K8s Testbed.
+This directory contains focused diagnostic and troubleshooting procedures for the KELT testbed.
 
 ## Quick Navigation
 
@@ -42,7 +42,7 @@ sudo k3s kubectl -n 5g exec deploy/smf -- bash -lc 'ss -unap | grep 8805 && echo
 sudo k3s kubectl -n 5g exec deploy/amf -- bash -lc 'ss -S -na | grep 38412 && echo "AMF SCTP listening" || echo "AMF SCTP not listening"'
 
 # GTP-U (N3) - gNB/UE ↔ UPF
-sudo k3s kubectl -n 5g exec deploy/upf-edge -- bash -lc 'ss -unap | grep 2152 && echo "UPF-edge GTP-U listening" || echo "UPF-edge GTP-U not listening"'
+sudo k3s kubectl -n 5g exec deploy/upf-cloud -- bash -lc 'ss -unap | grep 2152 && echo "UPF GTP-U listening" || echo "UPF GTP-U not listening"'
 ```
 
 ### Check Infrastructure
@@ -64,9 +64,9 @@ sudo k3s kubectl -n kube-system get ds | grep -E "ds-net-setup|kube-multus-ds" &
 
 ## Related Documentation
 
-- **Main Handbook**: [`../operations/handbook.md`](../operations/handbook.md) - Complete system documentation
-- **Root README**: [`../README.md`](../README.md) - Quick start and overview
-- **Context**: [`../CONTEXT.md`](../CONTEXT.md) - High-level architecture overview
+- **Handbook**: [`../operations/handbook.md`](../operations/handbook.md) - operator cheat-sheet (IPs, ports, commands)
+- **Documentation index**: [`../README.md`](../README.md) - links to every doc, grouped by area
+- **Troubleshooting**: [`../operations/troubleshooting.md`](../operations/troubleshooting.md) - start here when something is wrong
 
 ## Contributing
 
@@ -91,7 +91,7 @@ sudo k3s kubectl -n 5g logs deploy/amf -c amf -f | grep -i ngap
 sudo k3s kubectl -n 5g logs deploy/smf -c smf -f | grep -i pfcp
 
 # UPF logs with GTP-U context
-sudo k3s kubectl -n 5g logs deploy/upf-edge -c upf -f | grep -i gtpu
+sudo k3s kubectl -n 5g logs deploy/upf-cloud -c upf-cloud -f | grep -i gtpu
 ```
 
 ### Network Interface Verification

@@ -14,7 +14,7 @@ A real 5G AMF must have:
 - an **N2** interface (NGAP control plane to gNBs)
 - an **SBI** interface (Service-Based Interface to other NFs)
 
-A UPF must have N3 (GTP-U from gNBs), N4 (PFCP from SMF), and N6 (towards the data network) — all on different subnets, all expected to be isolated from each other.
+A UPF must have N3 (GTP-U from gNBs), N4 (PFCP from SMF), and N6 (towards the data network), all on different subnets, all expected to be isolated from each other.
 
 Putting everything on one Flannel interface is not acceptable: it breaks the 3GPP reference point architecture, mixes traffic from different planes on the same IP, and prevents per-interface traffic policies.
 
@@ -60,7 +60,7 @@ graph TB
 
 ### Multus (meta-CNI)
 
-Multus is not a CNI itself — it is a shim that delegates to other CNIs. When a pod is created, Multus reads the `k8s.v1.cni.cncf.io/networks` annotation, calls the primary CNI first (Flannel → `eth0`), then calls each secondary CNI listed in the annotation (OVS → `n1`, `n2`, etc.).
+Multus is not a CNI itself: it is a shim that delegates to other CNIs. When a pod is created, Multus reads the `k8s.v1.cni.cncf.io/networks` annotation, calls the primary CNI first (Flannel → `eth0`), then calls each secondary CNI listed in the annotation (OVS → `n1`, `n2`, etc.).
 
 ```yaml
 # Example pod annotation
@@ -73,15 +73,15 @@ metadata:
       ]
 ```
 
-Secondary interfaces are defined by **NetworkAttachmentDefinitions (NADs)** — Kubernetes CRDs that specify the CNI plugin and IPAM configuration for each network.
+Secondary interfaces are defined by **NetworkAttachmentDefinitions (NADs)**, Kubernetes CRDs that specify the CNI plugin and IPAM configuration for each network.
 
 ### OVS CNI plugin
 
-The OVS CNI plugin connects a pod's network namespace to a named OVS bridge by creating a veth pair: one end in the pod netns (the `n2` interface), the other end plugged into the OVS bridge as a port. The pod can then send frames that traverse the OVS bridge and reach any other port on that bridge — including the VXLAN tunnel port to the peer node.
+The OVS CNI plugin connects a pod's network namespace to a named OVS bridge by creating a veth pair: one end in the pod netns (the `n2` interface), the other end plugged into the OVS bridge as a port. The pod can then send frames that traverse the OVS bridge and reach any other port on that bridge, including the VXLAN tunnel port to the peer node.
 
 ### Whereabouts IPAM
 
-`host-local` IPAM (the Kubernetes default) allocates IPs from a per-node pool. Two pods on different nodes can get the same IP — fine for Flannel, catastrophic for the 5G overlays where AMF on worker and gNB on edge must reach each other by IP.
+`host-local` IPAM (the Kubernetes default) allocates IPs from a per-node pool. Two pods on different nodes can get the same IP, fine for Flannel, catastrophic for the 5G overlays where AMF on worker and gNB on edge must reach each other by IP.
 
 Whereabouts stores IP allocations in Kubernetes CRDs (`IPAllocation` objects), so it has cluster-wide visibility and ensures uniqueness across nodes. Static IP reservations (for NFs like AMF that need a predictable IP) are excluded from the dynamic pool in the NAD configuration.
 
@@ -269,7 +269,7 @@ The same split applies to the **OVS DaemonSets** (one per node, same reason).
 
 ### Edge Multus: static conflist
 
-On the edge node, Multus cannot use auto-mode because KubeEdge injects empty `KUBERNETES_SERVICE_HOST` and `KUBERNETES_SERVICE_PORT` environment variables. When Multus auto-generates its conflist, it reads these env vars to build the K8s API URL — empty values cause Multus to crash.
+On the edge node, Multus cannot use auto-mode because KubeEdge injects empty `KUBERNETES_SERVICE_HOST` and `KUBERNETES_SERVICE_PORT` environment variables. When Multus auto-generates its conflist, it reads these env vars to build the K8s API URL, and empty values cause Multus to crash.
 
 Solution: install a pre-written static conflist that hard-codes the API server URL and points to an external kubeconfig at `/var/lib/multus/multus.kubeconfig`.
 
@@ -467,9 +467,9 @@ See [runbooks/multus-nad-ipam.md](../runbooks/multus-nad-ipam.md) and [runbooks/
 
 ## Related Documentation
 
-- [Virtualization Layers](virtualization-layers.md) — why this networking layer exists
-- [5G Interfaces](5g-interfaces.md) — per-interface subnets, protocols, and static IPs
-- [Physical RAN Integration](../deployment/physical-ran.md) — bridging a real femtocell
+- [Virtualization Layers](virtualization-layers.md): why this networking layer exists
+- [5G Interfaces](5g-interfaces.md): per-interface subnets, protocols, and static IPs
+- [Physical RAN Integration](../deployment/physical-ran.md): bridging a real femtocell
 - [Runbook: OVS VXLAN Health](../runbooks/ovs-vxlan-health.md)
 - [Runbook: Multus NAD IPAM](../runbooks/multus-nad-ipam.md)
 - [Known Issues: KubeEdge Multus Env Injection](../known-issues/kubeedge-multus-env-injection.md)

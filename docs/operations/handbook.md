@@ -78,6 +78,8 @@ sudo k3s kubectl -n kube-system logs -l app=ds-net-setup-worker -f
 
 ### Pod migration (UPF/MEC between cloud and edge)
 
+> `upf-edge` is disabled by default (`replicas: 0`); it is shown here only as the migration example.
+
 ```bash
 sudo k3s kubectl -n 5g get pods -o wide
 

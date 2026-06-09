@@ -22,7 +22,7 @@ KELT (Kubernetes-Edge Lightweight Testbed) is a lightweight, reproducible, cloud
 
 ## Architecture
 
-These documents explain how the system is designed. Read them in order — each builds on the previous.
+These documents explain how the system is designed. Read them in order; each builds on the previous.
 
 | Document | Description |
 |----------|-------------|
@@ -126,7 +126,7 @@ Host-side utilities that complement the testbed.
 
 | Document | Description |
 |----------|-------------|
-| [Testing Guide](development/testing.md) | Run and write automated tests (e2e, protocols, RAN) |
+| [Testing Guide](development/testing.md) | Run and write the automated test suites |
 | [Contributing](development/contributing.md) | Coding standards, workflow, and PR guidelines |
 
 The test suite is documented separately: [tests/README.md](https://github.com/Jacobbista/kelt/blob/main/tests/README.md).

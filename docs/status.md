@@ -21,6 +21,11 @@ hold (deploys through the standard flow, is documented, exercised end to end).
 If one condition fails it is Experimental. With no working code it is Planned.
 Abandoned code is removed, not tiered.
 
+A tier followed by `*` is an explicit exception: the component is shown at its
+target tier while end-to-end validation is still in progress. The remaining work
+is tracked in [gaps.md](gaps.md), and the marker is removed once the component is
+validated end to end.
+
 The **Validated by** column records the evidence: a thesis reference, a test
 path, `manual`, or `—`.
 
@@ -37,7 +42,7 @@ path, `manual`, or `—`.
 | Dashboard modules: Overview, Kubernetes, 5G Core, Topology, RAN, Subscribers, UE Monitor, Metrics, IAM | Supported | manual | on | image hot-updatable on a running testbed; UE session data from a native Open5GS endpoint |
 | Node and NF metrics (Prometheus to Metrics module and Overview) | Supported | manual | on | |
 | Physical RAN attach (femtocell) | Supported | manual | on | validated as a working private 5G network, end to end |
-| CAMARA Location + positioning demo (phases 10-12) | Supported | manual (demo); e2e in progress | off | thesis core, opt-in via `*_enabled` flags; e2e pending; phase structure being reworked in 5g-northbound |
+| CAMARA Location + positioning demo (phases 10-12) | Supported * | manual (demo); e2e in progress | off | thesis core, opt-in via `*_enabled` flags; e2e pending; phase structure being reworked in 5g-northbound |
 | Idempotent re-provision and frontend image update (CLI/TUI) | Supported | manual | on | non-breaking upgrade of existing deployments is a v1 goal |
 | Diagnostics / log management | Experimental | — | on | present, not extensively validated |
 | Grafana advanced and alert rules (phase 07) | Experimental | — | opt-in | metrics pipeline works; alerting and log dashboards unvalidated |

@@ -8,7 +8,7 @@ When you connect a USB UE dongle (e.g. a 5G-capable modem) to your host machine,
 
 `5g-probe` solves this by:
 
-1. **Isolating** the dongle into a Linux network namespace — the dongle's DHCP and routes are confined to the namespace
+1. **Isolating** the dongle into a Linux network namespace: the dongle's DHCP and routes are confined to the namespace
 2. **Tunnelling** access to the dongle web management UI via a `socat` TCP tunnel (management IP and port are inferred from addressing when possible, or set in the isolate request)
 3. **Benchmarking** the connection with ping and iperf3, either as a blocking one-shot test or a live streaming benchmark
 
@@ -72,8 +72,8 @@ The Flask app lives in the **`probe/`** Python package (`python -m probe`); ther
 
 On startup, `5g-probe` scans network interfaces and identifies:
 
-- **Realtek (router/uplink) NICs**: typically used for tethering — should not be isolated
-- **UE dongles**: identified by MAC OUI lookup — safe to isolate
+- **Realtek (router/uplink) NICs**: typically used for tethering, should not be isolated
+- **UE dongles**: identified by MAC OUI lookup, safe to isolate
 
 The UI shows a colour-coded list so the correct device can be selected.
 
@@ -81,7 +81,7 @@ The UI shows a colour-coded list so the correct device can be selected.
 
 `GET /api/status` enriches each host interface and each active namespace with IPv4 address, subnet, default gateway, link MTU, a coarse `topology_hint` (`dongle_lan`, `wwan_pdu`, `tether`, `unknown`), and ordered `management_candidates` for the Web UI. Namespace rows use `DEFAULT_ROUTE_PROBE` for `ip route get` inside the netns when computing route MTU hints; it defaults to **`FIVEG_PROBE_UPF_TARGET`** (`10.45.0.1` unless overridden). Override the probe address alone with **`FIVEG_PROBE_ROUTE_PROBE`** if needed.
 
-**Preset benchmark IPs** are optional datalist shortcuts only (`benchmark_targets` on **`GET /api/config`**). **UPF-Cloud** maps to **`FIVEG_PROBE_UPF_TARGET`** (default `10.45.0.1`). **MEC iperf** (post-UPF decapsulated path) appears when **`FIVEG_PROBE_MEC_IPERF_TARGET`** is set. You can always type another IP for ping/iperf and for each queued plan run—runs toward different endpoints are independent.
+**Preset benchmark IPs** are optional datalist shortcuts only (`benchmark_targets` on **`GET /api/config`**). **UPF-Cloud** maps to **`FIVEG_PROBE_UPF_TARGET`** (default `10.45.0.1`). **MEC iperf** (post-UPF decapsulated path) appears when **`FIVEG_PROBE_MEC_IPERF_TARGET`** is set. You can always type another IP for ping/iperf and for each queued plan run: runs toward different endpoints are independent.
 
 ### Namespace Isolation
 
@@ -96,13 +96,13 @@ The interface is completely isolated: its DHCP responses and routes cannot affec
 
 ### WebUI Tunnel
 
-Once isolated, **`http://127.0.0.1:<port>`** is served by an in-process proxy (Flask thread). It **rewrites the HTTP `Host` header** to the modem IP (and port if not 80); browsers send `Host: 127.0.0.1:<tunnel>`, which many dongles reject with an empty TCP close — that looked like **ERR_EMPTY_RESPONSE** even when a direct GET from inside the netns succeeded. Defaults follow discovery; optional JSON fields `management_host` and `management_port` on `POST /api/isolate` override them.
+Once isolated, **`http://127.0.0.1:<port>`** is served by an in-process proxy (Flask thread). It **rewrites the HTTP `Host` header** to the modem IP (and port if not 80); browsers send `Host: 127.0.0.1:<tunnel>`, which many dongles reject with an empty TCP close: that looked like **ERR_EMPTY_RESPONSE** even when a direct GET from inside the netns succeeded. Defaults follow discovery; optional JSON fields `management_host` and `management_port` on `POST /api/isolate` override them.
 
 If the browser still errors, causes include **HTTPS-only** UI (needs TLS termination, not handled here), wrong **management_port**, or the proxy failing to bind the port. **`use_reloader=False`** avoids Flask dropping tunnel threads. Isolate logs and **`GET /api/status`** use **`management_http_ok`** from a **browser-like GET through the localhost tunnel** (not only a direct netns probe).
 
 ### Shell in namespace
 
-`POST /api/open_netns_terminal` with `{"namespace":"ue1"}` tries to spawn a graphical terminal as **SUDO_USER** (`runuser`) with `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`, and D-Bus vars merged from the root process environment **and** from `/run/user/<SUDO_UID>/environ` when missing (sudo strips GUI vars unless preserved). **`./run-probe.sh`** passes `sudo --preserve-env=DISPLAY,WAYLAND_DISPLAY,...` so a normal desktop session usually works. Several emulators are tried (GNOME Terminal, **kgx**/ptyxis, Konsole, Tilix, Kitty, …). On failure the JSON includes **`error`**, optional **`hint`**, and **`command`** (`sudo ip netns exec … bash`) — use **Copy shell** if nothing opens.
+`POST /api/open_netns_terminal` with `{"namespace":"ue1"}` tries to spawn a graphical terminal as **SUDO_USER** (`runuser`) with `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`, and D-Bus vars merged from the root process environment **and** from `/run/user/<SUDO_UID>/environ` when missing (sudo strips GUI vars unless preserved). **`./run-probe.sh`** passes `sudo --preserve-env=DISPLAY,WAYLAND_DISPLAY,...` so a normal desktop session usually works. Several emulators are tried (GNOME Terminal, **kgx**/ptyxis, Konsole, Tilix, Kitty, …). On failure the JSON includes **`error`**, optional **`hint`**, and **`command`** (`sudo ip netns exec … bash`); use **Copy shell** if nothing opens.
 
 ### Plan templates vs run outputs
 
@@ -190,11 +190,11 @@ sequenceDiagram
 
 ## Target IP for Benchmarks
 
-When running benchmarks from inside the namespace, use an IP that is reachable from the dongle—there is no single “correct” endpoint:
+When running benchmarks from inside the namespace, use an IP that is reachable from the dongle, there is no single “correct” endpoint:
 
 - **UPF / tunnel anchor** (`10.45.0.1` by default): PDU path toward UPF-Cloud; useful as one datapoint. **`FIVEG_PROBE_UPF_TARGET`** if yours differs.
-- **Post-UPF / MEC iperf**: optional preset when **`FIVEG_PROBE_MEC_IPERF_TARGET`** is set—another datapoint on decapsulated user-plane traffic.
-- **Any other IP**: lab servers, internet hosts, alternate slices—type freely in the UI or JSON bodies; rerun toward another IP anytime.
+- **Post-UPF / MEC iperf**: optional preset when **`FIVEG_PROBE_MEC_IPERF_TARGET`** is set, another datapoint on decapsulated user-plane traffic.
+- **Any other IP**: lab servers, internet hosts, alternate slices; type freely in the UI or JSON bodies; rerun toward another IP anytime.
 
 If you hit UPF-Cloud first then MEC later (or vice versa), those are separate measurements, not competing modes.
 
@@ -204,6 +204,6 @@ If you are testing against the testbed's UPF-Cloud, ensure the UPF N6c route cov
 
 ## Related Documentation
 
-- [Getting Started](../getting-started.md) — how to use 5g-probe in the context of the full testbed
-- [Physical RAN Integration](../deployment/physical-ran.md) — connecting a physical gNB to the testbed
-- [Requirements](../requirements.md) — full host-side software requirements
+- [Getting Started](../getting-started.md): how to use 5g-probe in the context of the full testbed
+- [Physical RAN Integration](../deployment/physical-ran.md): connecting a physical gNB to the testbed
+- [Requirements](../requirements.md): full host-side software requirements

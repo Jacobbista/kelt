@@ -9,12 +9,12 @@ Common issues and their solutions.
 **Cause**: VM clock drift (common with VirtualBox suspend/resume). Chrony's gradual frequency steering is often insufficient in virtualized environments where VMs get paused, resumed, or snapshotted.
 
 **Automatic correction** (deployed by Phase 1):
-- **Chrony**: configured with `makestep 1 -1` — allows stepping the clock at any time if drift exceeds 1 second
+- **Chrony**: configured with `makestep 1 -1`: allows stepping the clock at any time if drift exceeds 1 second
 - **VirtualBox Guest Additions**: time sync every 10 seconds (Vagrant trigger on `up`/`resume`/`reload`)
 - **Systemd timer** (`chrony-force-sync.timer`): runs `chronyc makestep` every 5 minutes on all VMs. If drift exceeds the chrony threshold, the clock is stepped immediately; otherwise it's a no-op
 
 **Manual correction**:
-- **Dashboard**: open the Time Sync popover (click the clock in the sidebar). If drift is detected, a "Force Sync" button appears — this runs `chronyc makestep` on all VMs via SSH
+- **Dashboard**: open the Time Sync popover (click the clock in the sidebar). If drift is detected, a "Force Sync" button appears. This runs `chronyc makestep` on all VMs via SSH
 - **CLI**: `vagrant ssh worker -c 'sudo chronyc -a makestep'`
 
 **Diagnostics**:

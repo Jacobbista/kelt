@@ -6,9 +6,9 @@ This guide will get you from zero to a running 5G testbed in under 30 minutes.
 
 - **VirtualBox** >= 6.1.0
 - **Vagrant** >= 2.3.0
-- **gum** (recommended) — interactive TUI for [`testbed-config`](tools/testbed-config.md)
+- **gum** (recommended): interactive TUI for [`testbed-config`](tools/testbed-config.md)
 - **Host resources**: 16 GB RAM, 4+ CPU cores recommended
-- **OS**: Linux, macOS, or Windows with virtualization enabled
+- **OS**: Ubuntu 24.04 LTS, tested on Server and Desktop (macOS and Windows are a v1 target, currently untested)
 
 ```bash
 # VirtualBox
@@ -27,7 +27,7 @@ echo "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *
 sudo apt update && sudo apt install gum
 ```
 
-For macOS/Windows install instructions, see [Requirements](requirements.md).
+macOS and Windows are a v1 target and currently untested; see [Requirements](requirements.md) for their planned setup.
 
 ## Quick Start
 
@@ -38,14 +38,14 @@ cd kelt
 # Configure the testbed (profile, edge, RAN, deploy mode)
 ./testbed-config
 
-# Deploy
-vagrant up
+# Deploy (or 'testbed up' once the alias is installed)
+./testbed-config up
 ```
 
 [`testbed-config`](tools/testbed-config.md) opens an interactive menu (powered by gum) where you choose:
 
-- **Deployment profile**: `laptop` (4 VMs, edge included) or `server` (3 VMs, no edge — for NUC/server)
-- **Edge VM**: on/off — controls whether the edge node is created and KubeEdge EdgeCore is deployed
+- **Deployment profile**: `laptop` (4 VMs, edge included) or `server` (3 VMs, no edge, for NUC/server)
+- **Edge VM**: on/off, controls whether the edge node is created and KubeEdge EdgeCore is deployed
 - **Deploy mode**: `core_only` (5G core + observability + dashboard) or `full` (also deploys UERANSIM on the edge)
 - **Physical RAN**: bridge a host NIC for a real gNB
 
@@ -86,7 +86,7 @@ Components deployed:
 - OVS overlay networks (VXLAN tunnels when edge is present)
 - Open5GS 5G Core (AMF, SMF, UPF, NRF, etc.)
 - Observability stack (Prometheus, Loki, Grafana)
-- Dashboard control plane (out-of-band on ansible VM)
+- Dashboard (cluster baseline on the worker NodePort; optional dev frontend on the ansible VM)
 
 ## Verify Deployment
 
@@ -107,7 +107,7 @@ edge     Ready    agent,edge             6m    v1.30.6+k3s1
 
 Without edge, only `master` and `worker` appear.
 
-> **kubectl on K3s VMs**: K3s does not create a standalone `kubectl` binary — the cluster is managed via `sudo k3s kubectl`. All in-VM kubectl commands throughout these docs use this form.
+> **kubectl on K3s VMs**: K3s does not create a standalone `kubectl` binary, so the cluster is managed via `sudo k3s kubectl`. All in-VM kubectl commands throughout these docs use this form.
 
 ### Check 5G Core
 

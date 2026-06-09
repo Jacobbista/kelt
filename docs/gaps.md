@@ -4,7 +4,7 @@ Known documentation gaps and open implementation issues. Update this file when a
 
 **Relationship with [roadmap.md](roadmap.md):** The roadmap sorts work by horizon (near term versus longer directions) and records out-of-scope decisions. This file assigns a discrete **status** and implementation or documentation notes for each tracked gap. The same topic often appears in both; the roadmap states **priority**, this file owns **current state**.
 
-**Status values:** `Missing` — does not exist · `Stub` — exists but incomplete · `Known Issue` — confirmed bug or limitation · `Planned` — acknowledged, work not yet started
+**Status values:** `Missing`: does not exist · `Stub`: exists but incomplete · `Known Issue`: confirmed bug or limitation · `Planned`: acknowledged, work not yet started
 
 ## Documentation
 

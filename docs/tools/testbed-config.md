@@ -133,7 +133,7 @@ Setting `server` automatically disables edge. Setting `laptop` automatically ena
 
 ### Edge Toggle
 
-`edge on` adds the edge VM to the deployment. This changes the active profile from `server` to `server_edge` internally (different resource allocation). In interactive mode, enabling edge also asks whether to deploy UERANSIM (`full` mode). `edge off` removes the edge VM and automatically sets deploy mode to `core_only` — UERANSIM requires the edge node.
+`edge on` adds the edge VM to the deployment. This changes the active profile from `server` to `server_edge` internally (different resource allocation). In interactive mode, enabling edge also asks whether to deploy UERANSIM (`full` mode). `edge off` removes the edge VM and automatically sets deploy mode to `core_only`. UERANSIM requires the edge node.
 
 ### Physical RAN Bridge
 
@@ -205,9 +205,9 @@ DASHBOARD_READONLY_SECRET=<generated-or-user-supplied>
 
 Configuration values are resolved in this order (highest priority first):
 
-1. **Shell environment variables** — `TESTBED_PROFILE=laptop vagrant up`
-2. **`.testbed.env`** — written by `testbed-config`
-3. **Defaults** — `laptop` profile, edge enabled, `core_only` deploy mode
+1. **Shell environment variables**: `TESTBED_PROFILE=laptop vagrant up`
+2. **`.testbed.env`**: written by `testbed-config`
+3. **Defaults**: `laptop` profile, edge enabled, `core_only` deploy mode
 
 ---
 
@@ -238,6 +238,6 @@ sequenceDiagram
 
 ## Related Documentation
 
-- [Server / NUC Deployment](../deployment/server-setup.md) — full server deployment guide using testbed-config
-- [Getting Started](../getting-started.md) — standard laptop deployment
-- [Deployment Phases](../deployment/phases.md) — what each phase does and how flags affect them
+- [Server / NUC Deployment](../deployment/server-setup.md): full server deployment guide using testbed-config
+- [Getting Started](../getting-started.md): standard laptop deployment
+- [Deployment Phases](../deployment/phases.md): what each phase does and how flags affect them

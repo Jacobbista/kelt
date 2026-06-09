@@ -1,4 +1,4 @@
-# Quickstart — 5G K3s KubeEdge Testbed
+# KELT Quickstart
 
 End-user and agent operations guide. For development and contribution
 conventions, see [CLAUDE.md](CLAUDE.md).
@@ -13,8 +13,9 @@ cd kelt
 ./testbed-config
 ```
 
-Tested on Ubuntu 22.04 / 24.04. Auto-fixes use `apt`; on other
-distributions install the missing packages with your package manager.
+Tested on Ubuntu 24.04 LTS (Server and Desktop). Auto-fixes use `apt`; on other
+distributions install the missing packages with your package manager. macOS and
+Windows are a v1 target and currently untested.
 
 On first run, the onboarding wizard checks the host and offers
 auto-fixes:
@@ -28,7 +29,7 @@ auto-fixes:
 - Shell alias `testbed` installed in `~/.bashrc`
 
 **Optional:**
-- User in `vboxusers` group — only relevant for VirtualBox USB
+- User in `vboxusers` group, only relevant for VirtualBox USB
   passthrough. Plain VM bring-up works without it; the wizard
   reports it as a hint, not a failure.
 
