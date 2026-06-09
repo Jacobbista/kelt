@@ -2,8 +2,6 @@
 
 `5g-probe` is a host-side web application for managing and benchmarking physical 5G UE dongles (USB modems). It runs on your Linux laptop alongside Vagrant, not inside the Kubernetes cluster.
 
-> **Predecessor note**: `ue_lab.py` in the project root is the original CLI predecessor of this tool. `5g-probe` replaces it with a full web interface, real-time benchmark streaming, and interface fingerprinting. `ue_lab.py` is kept for reference but is no longer the recommended approach.
-
 ## What It Does
 
 When you connect a USB UE dongle (e.g. a 5G-capable modem) to your host machine, the device appears as a network interface (typically `enx...`). Without isolation, DHCP and routing from the dongle can interfere with your host network.
