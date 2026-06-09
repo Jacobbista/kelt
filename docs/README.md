@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/kelt-wordmark.svg" alt="KELT" width="280">
+</p>
+
 # Documentation
 
 KELT (Kubernetes-Edge Lightweight Testbed) is a lightweight, reproducible, cloud-native 5G core and cloud-edge testbed. This documentation covers its full lifecycle: from first deployment to day-2 operations, network debugging, physical RAN integration, and contributing new features. It is written for researchers, developers, and operators working with the testbed directly.
