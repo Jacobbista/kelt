@@ -2,13 +2,13 @@
 
 This file is intended for AI agents and contributors working with this codebase. It documents conventions, architectural decisions, and constraints that are not always apparent from the code alone.
 
-For end-user and agent operations (install, deploy, autostart, troubleshooting, full subcommand reference) see [QUICKSTART.md](QUICKSTART.md) — this file (CLAUDE.md) covers contributor conventions only.
+For end-user and agent operations (install, deploy, autostart, troubleshooting, full subcommand reference) see [QUICKSTART.md](QUICKSTART.md). This file (CLAUDE.md) covers contributor conventions only.
 
 ---
 
 ## Project Overview
 
-A reproducible 5G cloud-edge testbed deployed via Vagrant + Ansible on a 3-VM cluster (master, worker, edge). The worker runs the Open5GS 5G core. The edge node runs KubeEdge EdgeCore with UERANSIM or a physical gNB. All 5G interfaces are carried over per-interface VXLAN overlays managed by OVS and Multus CNI.
+A reproducible 5G cloud-edge testbed deployed via Vagrant + Ansible on a cluster of up to three nodes (master, worker, optional edge), brought up by a separate Ansible provisioning VM. The worker runs the Open5GS 5G core. The optional edge node runs KubeEdge EdgeCore with UERANSIM or a physical gNB. All 5G interfaces are carried over per-interface VXLAN overlays managed by OVS and Multus CNI.
 
 The main entry point for users is `./testbed-config` (interactive TUI). `vagrant up` is the underlying mechanism.
 
@@ -41,7 +41,7 @@ Phases fall into three classes, orthogonal to the maturity tiers in [docs/status
 
 Phase class (whether it runs by default) is independent of maturity tier (how validated it is). A Core phase may still ship Experimental features: Observability always runs, but its alerting and log dashboards are Experimental.
 
-All shared variables belong in `ansible/group_vars/all.yml`. Do not hardcode IPs, versions, or image names in roles — reference variables defined in `all.yml`.
+All shared variables belong in `ansible/group_vars/all.yml`. Do not hardcode IPs, versions, or image names in roles; reference variables defined in `all.yml`.
 
 ### Edge vs Worker
 
@@ -103,16 +103,16 @@ Every task must be safe to run multiple times without side effects. Use modules 
 | Reinstall language deps (`npm install`, `pip install -r`, etc.) | `command` with a `stat`-then-`when` guard comparing the manifest mtime (`package.json`, `requirements.txt`) to the install marker (`node_modules/.package-lock.json`, venv `pyvenv.cfg`). Running these unconditionally rewrites lockfile timestamps and can invalidate downstream watchers, see [Dashboard frontend](#dashboard-frontend). |
 
 When `command` or `shell` is unavoidable, guard it with one of:
-- `creates:` — skip if a file already exists
-- `changed_when: false` — mark as never changed (read-only probes)
-- `changed_when: <condition>` — explicit change detection
-- `when:` — skip entirely if precondition is not met
+- `creates:` skips if a file already exists
+- `changed_when: false` marks it as never changed (read-only probes)
+- `changed_when: <condition>` for explicit change detection
+- `when:` skips entirely if the precondition is not met
 
 Never use `shell` to write files, install packages, or manage services when a dedicated module exists.
 
 ### Templates
 
-Jinja2 templates are named `<component>-<resource-type>.yaml.j2` and live in `roles/<role>/templates/`. Use Jinja2 block comments (`{# ... #}`) to explain non-obvious template logic. Reference variables from `all.yml` or role defaults — do not hardcode values in templates.
+Jinja2 templates are named `<component>-<resource-type>.yaml.j2` and live in `roles/<role>/templates/`. Use Jinja2 block comments (`{# ... #}`) to explain non-obvious template logic. Reference variables from `all.yml` or role defaults; do not hardcode values in templates.
 
 After editing a role's defaults or removing a variable, dry-render every `*.j2` in that role's `templates/` with `StrictUndefined` against the role's `defaults/main.yml`. This surfaces stale references before they fail at deploy time.
 
@@ -160,7 +160,7 @@ Persisted operator choices live in `.testbed.env` (config) and `.testbed.secrets
 
 ## KubeEdge Constraints
 
-Before modifying anything that involves edge node workloads, read `docs/known-issues/` in full. Several non-obvious workarounds are implemented in the edge pod specs and CNI configuration — removing or changing them will break the edge deployment. Open issues and planned investigations are tracked in `docs/gaps.md`.
+Before modifying anything that involves edge node workloads, read `docs/known-issues/` in full. Several non-obvious workarounds are implemented in the edge pod specs and CNI configuration; removing or changing them will break the edge deployment. Open issues and planned investigations are tracked in `docs/gaps.md`.
 
 ---
 
@@ -171,7 +171,7 @@ Each 5G interface runs on a dedicated VXLAN overlay with its own VNI. Do not sha
 2. Create a Multus NetworkAttachmentDefinition in the appropriate phase
 3. Add a row to `docs/architecture/5g-interfaces.md`
 
-The primary CNI on edge uses `isDefaultGateway: false` deliberately — changing this will reintroduce the UPF-Edge route conflict.
+The primary CNI on edge uses `isDefaultGateway: false` deliberately; changing this will reintroduce the UPF-Edge route conflict.
 
 ---
 
@@ -216,6 +216,8 @@ Every topic has ONE canonical document that owns it. Other documents link to the
 | Verified gaps and open bugs | `docs/gaps.md` |
 | Platform limitations and workarounds | `docs/known-issues/` |
 | Per-phase implementation notes | `ansible/phases/0X/README.md` |
+| Test suites and how to run them | `docs/development/testing.md` |
+| Coding standards and contribution workflow | `docs/development/contributing.md` |
 | Operator quick-reference (consolidated IPs, ports, commands) | `docs/operations/handbook.md` (cheat-sheet only; links the owners above for detail) |
 
 When documenting a fact, write it at its owner and link from elsewhere. Concrete values are referenced, never copy-pasted. `docs/README.md` must list every doc.
@@ -268,21 +270,20 @@ sudo k3s kubectl get pods -n 5g
 vagrant ssh ansible
 ansible-playbook ~/ansible-ro/phases/05-5g-core/playbook.yml -i ~/ansible-ro/inventory.ini
 
-# Run tests
+# Run tests (all suites; individual suites and details in docs/development/testing.md)
 cd tests
-make e2e
-make protocols
+make test
 ```
 
 ---
 
 ## Constraints Summary
 
-- Never use plain `kubectl` inside VMs — always `sudo k3s kubectl`.
+- Never use plain `kubectl` inside VMs; always `sudo k3s kubectl`.
 - Never hardcode IPs, versions, or image names in roles or templates.
 - Always gate edge-specific code with `when: edge_enabled | default(false) | bool`.
 - Always add a `# See docs/known-issues/...` comment when applying a KubeEdge workaround.
 - Never add a new 5G interface without updating `docs/architecture/5g-interfaces.md` and `all.yml`.
 - Never change `isDefaultGateway` on the edge primary CNI config.
-- `automountServiceAccountToken: false` is required on all edge pod specs — do not remove it.
+- `automountServiceAccountToken: false` is required on all edge pod specs; do not remove it.
 - Classify every feature in `docs/status.md` by maturity tier. Never mark a component Supported without end-to-end validation.
