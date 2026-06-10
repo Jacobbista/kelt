@@ -5,12 +5,8 @@ type: software
 authors:
   - family-names: Bennati
     given-names: Jacopo
-    # Affiliation left unset on purpose: the project originated at the University
-    # of Trento (continuing a ComNetsEmu-based course project) and the thesis is
-    # hosted at KTH, with graduation pending. Set it once settled, or rely on an
-    # institution-independent ORCID instead (recommended for stable citation).
-    # affiliation: "University of Trento"
     orcid: "https://orcid.org/0009-0003-9355-0254"
+    # affiliation: "University of Trento"
 repository-code: "https://github.com/Jacobbista/kelt"
 url: "https://github.com/Jacobbista/kelt"
 abstract: >-
@@ -31,8 +27,6 @@ keywords:
   - CAMARA
   - network functions virtualization
 license: Apache-2.0
-# Set version and date-released at each tagged release; add the Zenodo DOI
-# under `doi:` once the release is archived.
 # version: "0.1.0"
 # date-released: "2026-01-01"
 # doi: "10.5281/zenodo.XXXXXXX"

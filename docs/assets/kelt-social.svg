@@ -1,7 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" role="img" aria-label="KELT">
   <title>KELT</title>
-  <!-- GitHub social preview template (1280x640). Export to PNG and upload at
-       Settings -> General -> Social preview. Swap with the real logo later. -->
   <rect width="1280" height="640" fill="#0e2a2e"/>
   <g transform="translate(528,72) scale(3.5)" fill="none" stroke-linecap="round" stroke-linejoin="round">
     <path d="M16 58 Q32 63 48 58" stroke="#0f766e" stroke-width="3"/>

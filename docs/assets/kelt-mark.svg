@@ -1,8 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="KELT">
   <title>KELT</title>
-  <!-- KELT kelp mark (placeholder): three kelp fronds rising from a holdfast,
-       amber air-bladders. Three fronds nod to master/worker/edge; floating =
-       lightweight. Swap this file with the polished version, keep the name. -->
   <g fill="none" stroke-linecap="round" stroke-linejoin="round">
     <path d="M16 58 Q32 63 48 58" stroke="#0f766e" stroke-width="3"/>
     <path d="M21 58 C15 50 27 43 21 35 C15 28 25 21 21 14" stroke="#14b8a6" stroke-width="4"/>
