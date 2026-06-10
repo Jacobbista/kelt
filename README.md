@@ -1,12 +1,18 @@
 <p align="center">
-  <img src="docs/assets/kelt-mark.svg" alt="KELT" width="72">
+  <img src="docs/assets/kelt-mark.svg" alt="KELT" width="84">
 </p>
 
-# KELT
+<h1 align="center">KELT</h1>
 
-**Kubernetes-Edge Lightweight Testbed**: a lightweight, reproducible, cloud-native 5G core and cloud-edge testbed that runs on a single workstation. It deploys a 3-node virtual cluster (K3s master, 5G core worker, optional KubeEdge edge) connected by isolated VXLAN overlays and operated through a unified operations dashboard.
+<p align="center">
+  <strong>Kubernetes-Edge Lightweight Testbed</strong><br>
+  A reproducible, cloud-native 5G core and cloud-edge testbed that runs on a single workstation.
+</p>
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License: Apache 2.0"></a>
+  <a href="https://jacobbista.github.io/kelt/"><img src="https://img.shields.io/badge/docs-online-14b8a6" alt="Docs"></a>
+</p>
 
 ## Status
 
