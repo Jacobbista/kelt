@@ -160,6 +160,41 @@ fix(ueransim): correct IMSI generation
 docs(architecture): update network topology diagram
 ```
 
+## Git hooks (developer-only)
+
+Optional local hooks guard the commit/push workflow. They are opt-in and not
+part of the operator install:
+
+```
+testbed dev-hooks on       # install (sets core.hooksPath=.githooks)
+testbed dev-hooks status   # show hook + release state
+testbed dev-hooks off      # uninstall
+```
+
+- **pre-commit** runs `gitleaks` on staged changes and blocks the commit if it
+  finds a secret (mirrors the CI scan). Install `gitleaks` locally for this to
+  apply; without it the scan is skipped and CI still scans on push.
+- **pre-push** is advisory only (never blocks): it reminds you when the frontend
+  has changes that need a version tag to publish, and flags WIP commits.
+
+## Publishing images (what needs a tag)
+
+Each image has its own release lifecycle, decoupled from the others:
+
+- **Dashboard frontend** publishes only on a `dashboard-frontend-v<semver>` git
+  tag. Editing `dashboard/frontend/` does not change the published `:latest`
+  until you tag. Use the confirmed helper:
+  ```
+  testbed dev-hooks release          # tags the current package.json version, or
+                                     # offers a patch/minor/major bump, then pushes
+  ```
+- **Docs** (`kelt-docs`) publish **automatically**: the `docs-site` workflow
+  rebuilds the image on any push touching `docs/**`, so no manual tag is needed.
+  The in-cluster docs pod runs `:latest`; re-running phase 09 forces a rollout so
+  it pulls the freshly built image.
+- **NF / northbound images** live in their own repositories (`5g-nf-platform`,
+  `5g-northbound`) and are tagged there, not from this repo.
+
 ## Adding a New Phase
 
 1. Create phase directory:

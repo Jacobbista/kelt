@@ -10,22 +10,45 @@ multiple clients, role-based authorization.
 ```
 Realm: 5g-testbed (configurable via keycloak_realm)
 ├── Clients
-│   ├── camara-gateway       confidential  client_credentials
-│   ├── positioning-demo     public        PKCE
-│   ├── dashboard            public        PKCE
-│   └── dashboard-readonly   confidential  client_credentials
+│   ├── camara-gateway        confidential  client_credentials   (northbound)
+│   ├── positioning-demo      public        PKCE                 (northbound)
+│   ├── placement-editor-proxy confidential auth-code (oauth2-proxy) (northbound)
+│   ├── dashboard             public        PKCE
+│   └── dashboard-readonly    confidential  client_credentials
 ├── Realm roles
-│   ├── camara-location-read
-│   ├── dashboard-admin
-│   └── dashboard-viewer
+│   ├── dashboard-admin          (infra plane)
+│   ├── dashboard-viewer         (infra plane)
+│   ├── camara-location-read     (service plane: positioning VIEW)   (northbound)
+│   └── positioning-edit         (service plane: positioning EDIT)   (northbound)
 ├── Groups
-│   ├── g-camara-users       → camara-location-read
-│   ├── g-dashboard-admins   → dashboard-admin
-│   └── g-dashboard-viewers  → dashboard-viewer
+│   ├── g-dashboard-admins    → dashboard-admin
+│   ├── g-dashboard-viewers   → dashboard-viewer
+│   ├── g-camara-users        → camara-location-read      (northbound)
+│   └── g-positioning-editors → positioning-edit          (northbound)
 └── Service accounts
     ├── camara-gateway       → camara-location-read
     └── dashboard-readonly   → dashboard-viewer
 ```
+
+### Two access planes
+
+Access is split into two independent planes so a service-consumer token cannot
+reach the cluster:
+
+- **Infra plane**: managing the dashboard/cluster. `dashboard-admin` (writes,
+  exec, sniffer, NF rollout, restart) and `dashboard-viewer` (reads). Unchanged.
+- **Service plane**: consuming a deployed service, via per-service action roles.
+  For positioning today: `camara-location-read` = VIEW (call the CAMARA Location
+  API, the demo / customer view) and `positioning-edit` = EDIT (author geometry
+  in placement-editor, the partner view). Granted via groups
+  (`g-camara-users`, `g-positioning-editors`).
+
+A token minted for the service plane (e.g. "view the demo") carries only its
+service role, not `dashboard-*`, so it cannot hit the dashboard backend. Tenancy
+(per-customer data isolation) is a planned graduation: model the org as a group
+or a `tenant` claim and have the service filter on it. As more dynamic services
+arrive, this generalizes to per-service resource-server clients + an authz
+contract provisioned at deploy (see docs/gaps.md).
 
 ## Clients
 
@@ -35,6 +58,17 @@ Realm: 5g-testbed (configurable via keycloak_realm)
 | `positioning-demo` | public | PKCE | Browser app for the 3D positioning visualization. Standard authorization-code-with-PKCE flow. |
 | `dashboard` | public | PKCE | Browser frontend of the operations dashboard. Tokens carry `dashboard-admin` or `dashboard-viewer` depending on the user's group. |
 | `dashboard-readonly` | confidential | `client_credentials` | Headless read-only consumer (monitoring agent, public demo, CI smoke check). Tokens carry `dashboard-viewer` only. |
+| `placement-editor-proxy` | confidential | authorization-code (oauth2-proxy) | Gates the no-auth `placement-editor` SPA. A `groups` protocol mapper emits group membership so oauth2-proxy admits `g-positioning-editors` (service-plane EDIT) or `g-dashboard-admins`. |
+
+The camara/positioning/placement realm objects (the `camara-location-read`
+role, `g-camara-users` group, the `camara-gateway`, `positioning-demo`, and
+`placement-editor-proxy` clients, the camara service account, and the
+`dashboard-admin` to `camara-location-read` composite) are emitted only when a
+northbound phase is enabled (`testbed northbound on`), so an IAM-only deploy
+creates no orphan clients. Keycloak imports the realm only on first boot, so
+enabling northbound on an already-provisioned cluster does not auto-create
+these clients; re-import the realm or add them via the admin console (see the
+realm reconcile limitation below).
 
 ## Roles → endpoint matrix (dashboard backend)
 

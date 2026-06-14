@@ -3,8 +3,12 @@
 The positioning subsystem is split into two concerns: a thin engine that
 fuses measurements into a unified position, and a set of adapters that
 each speak to one positioning technology (Wi-Fi RSSI, vendor RTLS, UWB,
-or any future source). The engine is the backbone, deployed by phase 11.
-Adapters are provisioned at runtime, not by Ansible.
+or any future source). Phase 11 deploys the engine plus a standalone
+`mock-positioning` adapter (so the engine exercises the real adapter HTTP
+contract out of the box) and, opt-in, the `placement-editor` geometry UI.
+Real-source adapters (`wifi-positioning`, the generic `rest-adapter`, and
+bring-your-own images) are provisioned at runtime from the dashboard, not by
+Ansible.
 
 ## Layers
 
@@ -47,17 +51,18 @@ without a testbed release.
 
 ## What phase 11 provisions
 
-Phase 11 deploys only the engine backbone:
-
 | Resource | Purpose |
 |----------|---------|
 | `Namespace positioning` | Isolation boundary for engine and all adapters |
-| `ConfigMap positioning-config` | Holds `ADAPTER_URLS` (CSV, empty by default) |
-| `Deployment positioning-engine` | Single replica, image from `5g-northbound`, REST on `8080`, WebSocket on `8081`, embedded mock fallback |
-| `Service positioning-engine` | ClusterIP plus NodePort `31930`/`31931` for cluster-internal and external probing |
+| `ConfigMap positioning-config` | Engine env: `ADAPTER_URLS` (name=url), `DEVICE_MAP`, `DEVICE_IDS`, `FUSION_STRATEGY`, `FUSION_COMPARE`, `WEBSOCKET_INTERVAL_MS` |
+| `Deployment positioning-engine` | Single replica, image from `5g-northbound`, REST + WebSocket on `8080`, embedded mock fallback when `ADAPTER_URLS` is empty |
+| `Service positioning-engine` | ClusterIP plus NodePort `31930` |
+| `Deployment/Service mock-positioning` | Standalone reference mock adapter (ClusterIP); `ADAPTER_URLS` is seeded to it so the engine fuses from a real adapter, not just the embedded fallback |
+| `PVC positioning-blueprint` + `Deployment/Service placement-editor` | Opt-in (`placement_editor_enabled`): geometry authoring UI on an RWO blueprint PVC, ClusterIP |
+| `oauth2-proxy-placement` (Deployment/Service/Secret) | Opt-in: Keycloak gate in front of placement-editor on NodePort `31950`; admits only `g-dashboard-admins` (realm client `placement-editor-proxy`) |
 
-No adapter pod, no adapter ConfigMap, no adapter Service. The engine boots
-healthy with `ADAPTER_URLS=""` and serves mock data immediately.
+The engine reads `ADAPTER_URLS` at startup only, so adding or removing an
+adapter restarts it (the mock fallback covers the gap).
 
 ## Adding an adapter
 
@@ -82,13 +87,30 @@ sudo k3s kubectl -n positioning rollout restart deploy/positioning-engine
 The adapter Deployment must expose `GET /health` (no auth) and
 `GET /measurement/{id}` per the public contract.
 
-### Dashboard provisioning (planned)
+### Dashboard provisioning
 
-A future dashboard section under MEC services will list active adapters,
-offer a catalog of known images (the reference `wifi-positioning` plus
-any user-added image with optional pull secret), create the K8s
-resources, patch `positioning-config`, and trigger the engine rollout.
-The mechanism is the same; only the front-end interaction changes.
+The dashboard Northbound page (`/northbound`, backend
+`/api/v1/northbound/*`) implements this workflow. It lists the active
+services and adapters, and offers two ways to add a positioning source
+without touching Ansible:
+
+1. **Bring your own adapter image.** Deploy-from-image: give a name,
+   `image:tag`, port, env vars (secret-marked vars go into a Secret), and an
+   optional `imagePullSecret` for private images. The backend creates the
+   Deployment + ClusterIP Service in the `positioning` namespace (pinned to
+   the worker node), then registers the in-cluster URL in `ADAPTER_URLS` and
+   restarts the engine. The catalog pre-fills the reference `wifi-positioning`.
+
+2. **No new code: the generic `rest-adapter`.** Deploy the stock
+   `rest-adapter` image, then declare a schema that maps any REST API to the
+   `Measurement` shape (the adapter persists the schema; the dashboard can
+   write it via the adapter's `PUT /schema`). Credentials are mounted from a
+   Secret.
+
+Adapter registry add/remove and the fusion editor patch `positioning-config`
+and restart the engine. Deploy-from-image is admin-only and additionally
+gated by the backend `allow_workload_create` setting; every write is audited.
+See `docs/dashboard/modules.md` and `docs/dashboard/api-reference.md`.
 
 ## Backbone versus catalog: why the split
 

@@ -40,9 +40,13 @@ path, `manual`, or `—`.
 | Multus NADs + Whereabouts IPAM | Supported | manual | on | |
 | IAM / Keycloak realm (phase 08) | Supported | manual | on | admin and viewer roles, orthogonal CAMARA role |
 | Dashboard modules: Overview, Kubernetes, 5G Core, Topology, RAN, Subscribers, UE Monitor, Metrics, IAM | Supported | manual | on | image hot-updatable on a running testbed; UE session data from a native Open5GS endpoint |
+| Dashboard module: Northbound (positioning/CAMARA service console) | Experimental | — | on | inventory + adapter registry + deploy-from-image + fusion + contract guidance; deploy-from-image gated by `allow_workload_create`; needs e2e against the live stack |
 | Node and NF metrics (Prometheus to Metrics module and Overview) | Supported | manual | on | |
 | Physical RAN attach (femtocell) | Supported | manual | on | validated as a working private 5G network, end to end |
-| CAMARA Location + positioning demo (phases 10-12) | Supported * | manual (demo); e2e in progress | off | thesis core, opt-in via `*_enabled` flags; e2e pending; phase structure being reworked in 5g-northbound |
+| CAMARA Location + positioning demo (phases 10-12) | Supported * | manual (demo); e2e in progress | off | thesis core; opt-in via `testbed northbound on`; rewired to the refactored `5g-northbound` env contract; e2e pending |
+| Standalone `mock-positioning` adapter (phase 11) | Supported * | manual | off | deployed in the lean baseline, seeded into the engine `ADAPTER_URLS`; exercises the real `/measurement` HTTP contract end to end |
+| `placement-editor` geometry UI + blueprint PVC (phase 11) | Experimental | — | off | deploys behind oauth2-proxy (NodePort 31950, Keycloak `g-dashboard-admins`); RWO blueprint PVC, worker-pinned; not yet exercised e2e, and propagating edits into the engine floor plan is still an operator step (see docs/gaps.md) |
+| Custom adapter catalog (`wifi-positioning`, `rest-adapter`, bring-your-own image) | Experimental | — | off | deployed on demand from the Northbound dashboard console, not by Ansible |
 | Idempotent re-provision and frontend image update (CLI/TUI) | Supported | manual | on | non-breaking upgrade of existing deployments is a v1 goal |
 | Diagnostics / log management | Experimental | — | on | present, not extensively validated |
 | Grafana advanced and alert rules (phase 07) | Experimental | — | opt-in | metrics pipeline works; alerting and log dashboards unvalidated |

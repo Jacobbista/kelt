@@ -1,6 +1,6 @@
 # Dashboard Modules
 
-The dashboard has 10 modules, reachable from the sidebar. This page describes
+The dashboard has 11 modules, reachable from the sidebar. This page describes
 what each one does, the data it shows, and the actions it provides. Role gating
 follows the two-tier model: read views are open to `dashboard-viewer`, write and
 exec actions require `dashboard-admin`. See [security/iam.md](../security/iam.md)
@@ -135,6 +135,31 @@ Resource metrics from Prometheus, with a Nodes tab and an NFs tab.
 - Range selector: 15m, 30m, 1h, 6h, 24h
 
 Read-only. A "Grafana (advanced)" link in the sidebar opens the full Grafana stack.
+
+---
+
+## Northbound
+
+**Area**: Positioning / CAMARA
+
+Service-management console for the northbound positioning stack. Read views are
+open to `dashboard-viewer`; all write controls require `dashboard-admin`.
+
+- Services: inventory of the camara/positioning/mec deployments (image, ready
+  replicas, pod phases)
+- Adapter registry: list the engine's `ADAPTER_URLS`; admins add (name + URL) or
+  remove an adapter (each change restarts positioning-engine)
+- Deploy adapter from image: pin an `image:tag`, port, env vars (secret-marked
+  vars go into a Secret), optional `imagePullSecret`; the backend creates the
+  Deployment + ClusterIP Service and registers it. A catalog pre-fills the
+  reference `wifi-positioning` and the generic `rest-adapter`. Gated by the
+  backend `allow_workload_create` setting on top of admin.
+- Fusion config: edit `FUSION_STRATEGY` / `FUSION_COMPARE` / `DEVICE_MAP`
+- Managed image rollout: retarget gateway / engine / demo to a new image
+- Adapter contract: the `Measurement` schema, a Python adapter skeleton, an
+  `env.contract.yaml` template, and links to the upstream `5g-northbound` docs
+
+See [architecture/positioning-adapters.md](../architecture/positioning-adapters.md).
 
 ---
 

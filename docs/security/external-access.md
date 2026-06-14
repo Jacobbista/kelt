@@ -19,6 +19,16 @@ NodePort for LAN-only operation:
 | CAMARA Gateway | `http://<worker>:31920` | 10 | M2M API consumers | Stateless gateway, OAuth2 client_credentials. No browser session. |
 | Positioning Demo | `http://<worker>:31940` | 12 | End users | Browser app with PKCE login against Keycloak. |
 
+The `placement-editor` geometry UI (phase 11, opt-in) is a fifth surface on
+worker NodePort `31950`. It has no native auth, so phase 11 fronts it with an
+`oauth2-proxy` that runs the OIDC login against Keycloak (realm client
+`placement-editor-proxy`) and admits only `g-dashboard-admins`. So its two
+layers are the optional tunnel gate plus oauth2-proxy/Keycloak. Collapsing all
+surfaces under one hostname (single-origin) is partially in place (the dashboard
+frontend already proxies `/api` and `/auth`); doing the same for the demo and
+placement-editor SPAs needs a Vite `base` path in the upstream images and is
+deferred. See [docs/gaps.md](../gaps.md).
+
 Keycloak itself (`http://<worker>:31910`) is reachable only when one of the
 above services needs to redirect a user agent to the login screen. Two layout
 options are supported by phase 08:

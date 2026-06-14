@@ -118,6 +118,22 @@ See [RAN Modes](../deployment/ran-modes-dashboard.md) for the full workflow.
 
 ---
 
+## Northbound (positioning / CAMARA)
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/v1/northbound/services` | — | Inventory of the camara/positioning/mec deployments (image, ready replicas, pods) |
+| GET | `/api/v1/northbound/adapters` | — | Adapters registered in the engine `ADAPTER_URLS` |
+| GET | `/api/v1/northbound/contract` | — | Adapter contract guidance: `Measurement` schema, Python skeleton, `env.contract.yaml` template, doc links |
+| POST | `/api/v1/northbound/adapters` | ✅ Admin | Register an adapter. Body: `{name, url}`. Restarts the engine |
+| DELETE | `/api/v1/northbound/adapters/{name}` | ✅ Admin | Unregister an adapter. Restarts the engine |
+| POST | `/api/v1/northbound/deploy` | ✅ Admin | Deploy a custom adapter image. Requires `DASHBOARD_ALLOW_WORKLOAD_CREATE=true`. Body: `{name, image, port, env[], image_pull_secret?, register_adapter}` |
+| DELETE | `/api/v1/northbound/workloads/{name}` | ✅ Admin | Delete a deploy-from-image adapter (Deployment, Service, Secret) and unregister it |
+| PUT | `/api/v1/northbound/fusion` | ✅ Admin | Update engine fusion config. Body: `{strategy?, compare?, device_map?}` |
+| POST | `/api/v1/northbound/managed/{deployment}/image` | ✅ Admin | Retarget a managed deployment (gateway/engine/demo) to a new image. Body: `{image}` |
+
+---
+
 ## WebSocket Endpoints
 
 WebSocket connections are made to the same host on port 31880.
