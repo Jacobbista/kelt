@@ -42,7 +42,7 @@ Instructions for deploying and configuring the testbed in different environments
 
 | Document | Description |
 |----------|-------------|
-| [Deployment Phases](deployment/phases.md) | What each of the 12 phases does and how to run them individually |
+| [Deployment Phases](deployment/phases.md) | What each phase does and how to run them individually |
 | [Server / NUC Deployment](deployment/server-setup.md) | Deploy on a headless server with optimized profiles and remote access |
 | [Physical RAN Integration](deployment/physical-ran.md) | Connect a real femtocell instead of, or alongside, UERANSIM |
 | [RAN Mode Switching](deployment/ran-modes-dashboard.md) | Switch between physical and simulated RAN using the dashboard |
@@ -60,9 +60,7 @@ Each deployment phase also has an implementation-focused README in its Ansible s
 | [Phase 7: Observability](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/07-observability/README.md) | Prometheus, node-exporter, Grafana |
 | [Phase 8: IAM](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/08-iam/README.md) | Keycloak realm with shared clients for dashboard and CAMARA |
 | [Phase 9: Dashboard](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/09-dashboard/README.md) | Dashboard deployment and access |
-| [Phase 10: CAMARA](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/10-camara/README.md) | CAMARA Location API gateway (optional addon) |
-| [Phase 11: Positioning](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/11-positioning/README.md) | Positioning engine with pluggable adapters (optional addon) |
-| [Phase 12: Positioning Demo](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/12-positioning-demo/README.md) | Positioning demo SPA (optional addon) |
+| [Phase 10: Northbound](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/10-northbound/README.md) | Northbound platform: CAMARA Location API + positioning engine + demo (optional addon) |
 
 ---
 

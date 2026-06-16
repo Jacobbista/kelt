@@ -1,8 +1,8 @@
 # Identity and Access Management
 
 Phase 08 deploys a Keycloak realm shared by every service in the testbed
-that authenticates HTTP traffic: the dashboard (phase 09), the CAMARA
-gateway (phase 10), and the positioning demo (phase 12). Single realm,
+that authenticates HTTP traffic: the dashboard (phase 09) and the northbound
+services (phase 10): the CAMARA gateway and the positioning demo. Single realm,
 multiple clients, role-based authorization.
 
 ## Realm topology
@@ -66,9 +66,12 @@ role, `g-camara-users` group, the `camara-gateway`, `positioning-demo`, and
 `dashboard-admin` to `camara-location-read` composite) are emitted only when a
 northbound phase is enabled (`testbed northbound on`), so an IAM-only deploy
 creates no orphan clients. Keycloak imports the realm only on first boot, so
-enabling northbound on an already-provisioned cluster does not auto-create
-these clients; re-import the realm or add them via the admin console (see the
-realm reconcile limitation below).
+enabling northbound on an already-provisioned cluster does not auto-create the
+`camara-gateway` and `positioning-demo` clients; re-import the realm or add them
+via the admin console (see the realm reconcile limitation below). The
+`placement-editor-proxy` client is the exception: phase 08 creates it
+idempotently with a create-if-missing task, because the front-door gate cannot
+authenticate without it.
 
 ## Roles → endpoint matrix (dashboard backend)
 
@@ -127,7 +130,10 @@ Three checkpoints must clear before enforcing auth in production, in order:
    console, joined to either `g-dashboard-admins` or `g-dashboard-viewers`.
 3. **External origin variables aligned**: the realm's redirect URIs and
    the frontend's `VITE_KEYCLOAK_AUTHORITY` must agree on the dashboard
-   origin (LAN, tunnel, or path-prefix layout).
+   origin. Under the single-base model they all derive from
+   `external_base_domain` (dashboard at `kelt.<base>`, Keycloak under `/auth`);
+   in LAN mode they fall back to the worker NodePorts. See
+   [external-access.md](external-access.md).
 
 Break-glass fallback (temporary):
 
@@ -304,4 +310,4 @@ console is preserved.
 - [External Access](external-access.md): tunnel layout, single-origin reverse proxy
 - [Phase 08: IAM](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/08-iam/README.md): implementation notes
 - [Phase 09: Dashboard](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/09-dashboard/README.md): backend JWT middleware (planned)
-- [Phase 10: CAMARA](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/10-camara/README.md): gateway JWT validation
+- [Phase 10: Northbound](https://github.com/Jacobbista/kelt/blob/main/ansible/phases/10-northbound/README.md): gateway JWT validation, the front-door gate

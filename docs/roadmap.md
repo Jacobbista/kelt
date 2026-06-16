@@ -37,8 +37,10 @@ Possible future directions. Not started and not committed. Listed because they
 are plausible, not because they are planned.
 
 - **CI pipeline.** GitHub Actions workflow to validate the deployment stack on push.
+- **Traefik ingress for the front-door.** Phase 11 routes external subdomains with a small nginx that proxies by Host. k3s ships Traefik (disabled here via `--disable traefik`); adopting it would express the same routing as native `Ingress` objects, one per surface, with automatic reload, at the cost of re-enabling the ingress controller. Worth it only if the testbed grows many routes.
 - **Physical RAN hot-swap validation.** Validate and document switching between physical and simulated RAN on a running testbed.
 - **Dashboard NF update detection.** Compare deployed NF image tags against a canonical version list from `nf-platform` and surface per-NF update availability, with operator-triggered redeploy. Depends on `nf-platform` integration.
+- **Global northbound version management.** The console already flags a catalog adapter behind the current KELT release and upgrades it in place (image-only patch, config preserved). A fuller version, deferred: query GHCR for the latest published tag of every northbound component, show current-vs-latest across managed and catalog services, and offer arbitrary-tag targeted upgrades, with the managed services still reconciled through `all.yml` so the phase stays the source of truth.
 - **O-RAN near-RT RIC.** Deploy a near-RT RIC (FlexRIC or OSC RIC) on the edge node as a KubeEdge workload and expose E2 toward a capable gNB. UERANSIM does not provide E2, so this implies OAI, srsRAN, or a physical O-RAN gNB.
 - **NWDAF integration.** Network Data Analytics Function for closed-loop analytics. Open5GS NWDAF support is partial; if it becomes a primary target, evaluate free5GC.
 - **Multi-UE scenario coverage.** Test scenarios and runbooks for concurrent registration, PDU session management, and QoS differentiation.

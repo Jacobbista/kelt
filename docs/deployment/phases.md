@@ -17,11 +17,10 @@ Phases fall into three classes. **Core** phases always run. **Optional** phases 
 | 7  | Observability      | Core                          | Prometheus, Loki, Grafana |
 | 8  | IAM                | Core                          | Keycloak realm and PostgreSQL |
 | 9  | Dashboard          | Core                          | Out-of-band FastAPI + React control plane |
-| 10 | CAMARA Gateway     | Optional addon                | CAMARA Location API gateway |
-| 11 | Positioning Engine | Optional addon                | Positioning engine with pluggable adapters |
-| 12 | Positioning Demo   | Optional addon                | Positioning demo SPA |
+| 10 | Northbound         | Optional addon                | CAMARA Location API gateway, positioning engine, and demo |
+| 11 | Front-door         | Core (base-domain-conditional) | Single-origin nginx edge; routes `<subdomain>.<base>` by Host. No-op unless `external_base_domain` is set |
 
-Optional addons are off by default (opt-in). Phase 6 (UERANSIM) is gated by `ueransim_enabled`, set automatically by `DEPLOY_MODE=full` or by `testbed run-phase 06-ueransim-mec`. Phases 10-12 are gated by `camara_enabled` / `positioning_enabled` / `positioning_demo_enabled` in `all.yml`. See [gaps.md](../gaps.md) for the remaining CAMARA/positioning rework.
+Optional addons are off by default (opt-in). Phase 6 (UERANSIM) is gated by `ueransim_enabled`, set automatically by `DEPLOY_MODE=full` or by `testbed run-phase 06-ueransim-mec`. Phase 10 (Northbound) bundles the CAMARA gateway, positioning engine, and demo into one phase with roles selectable by tag (`camara`, `positioning`, `placement`, `demo`); the parts are gated by `camara_enabled` / `positioning_enabled` / `positioning_demo_enabled` / `placement_editor_enabled` in `all.yml`, and the umbrella `testbed northbound on` enables them together. See [gaps.md](../gaps.md) for the remaining CAMARA/positioning rework.
 
 ## Running Phases
 
@@ -391,31 +390,28 @@ Access URLs (cluster baseline, dev frontend, API): see [Dashboard Overview](../d
 
 ---
 
-## Phase 10: CAMARA Gateway (optional)
+## Phase 10: Northbound (CAMARA + Positioning) (optional)
 
-**Location**: `ansible/phases/10-camara/`
+**Location**: `ansible/phases/10-northbound/`
 
-Optional addon, gated by `camara_enabled`. Deploys the CAMARA Location API gateway in front of the 5G core. Images are built in the `5g-northbound` companion repository and pulled by tag.
+Optional addon. A single phase that bundles the CAMARA Location API gateway, the positioning engine, and the positioning demo. Images are built in the `5g-northbound` companion repository and pulled by tag. The umbrella `testbed northbound on` enables the parts together; each is independently gated by its flag in `all.yml`.
+
+Roles under this phase:
+
+| Role | Tag | Gated by | Purpose |
+| ---- | --- | -------- | ------- |
+| `camara_gateway` | `camara` | `camara_enabled` | CAMARA Location API gateway in front of the 5G core |
+| `positioning_engine` | `positioning` | `positioning_enabled` | Positioning engine with a pluggable adapter model |
+| `placement_editor` | `placement` | `placement_editor_enabled` | Placement-editor geometry UI and its oauth2-proxy gate (`frontdoor_gate`) |
+| `positioning_demo` | `demo` | `positioning_demo_enabled` | Positioning demo SPA that exercises the CAMARA Location API end to end |
+
+Run a single piece with a tag:
+
+```bash
+ansible-playbook phases/10-northbound/playbook.yml --tags camara
+```
 
 See [architecture/positioning-adapters.md](../architecture/positioning-adapters.md).
-
----
-
-## Phase 11: Positioning Engine (optional)
-
-**Location**: `ansible/phases/11-positioning/`
-
-Optional addon, gated by `positioning_enabled`. Deploys the positioning engine that the CAMARA Location API relays to, with a pluggable adapter model.
-
-See [architecture/positioning-adapters.md](../architecture/positioning-adapters.md).
-
----
-
-## Phase 12: Positioning Demo (optional)
-
-**Location**: `ansible/phases/12-positioning-demo/`
-
-Optional addon, gated by `positioning_demo_enabled`. Deploys the positioning demo SPA that exercises the CAMARA Location API end to end.
 
 ---
 

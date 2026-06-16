@@ -28,28 +28,36 @@ Paths that should remain protected by the external auth layer:
 
 ## Cloudflare Zero-Trust example
 
-Cloudflare Tunnel exposes the dashboard hostname (`core.example.com`) over an outbound tunnel from the operator host. Cloudflare Access then sits in front and enforces an identity policy on every request.
+Cloudflare Tunnel forwards a single wildcard (`*.<base>`) over an outbound tunnel
+to the in-cluster front-door (phase 11), which routes each subdomain by Host to
+its service (dashboard at `kelt.<base>`, CAMARA at `api.<base>`, demo, placement,
+dev). Cloudflare Access then sits in front and enforces an identity policy. See
+[external-access.md](../security/external-access.md) for the surface map and the
+single-base model.
 
 ### Tunnel config
 
-`cloudflared` config on the operator host (`~/.cloudflared/config.yml`):
+`cloudflared` config on the operator host (`~/.cloudflared/config.yml`), one
+wildcard rule (the front-door handles per-Host routing):
 
 ```yaml
 tunnel: <tunnel-uuid>
 credentials-file: /home/operator/.cloudflared/<tunnel-uuid>.json
 ingress:
-  - hostname: core.example.com
-    service: http://192.168.56.11:31573
+  - hostname: "*.example.com"
+    service: http://192.168.56.11:31500   # front-door NodePort (frontdoor_nodeport)
   - service: http_status:404
 ```
 
-`192.168.56.11:31573` is the cluster dashboard NodePort on the worker VM.
+`192.168.56.11:31500` is the front-door NodePort on the worker VM. (In LAN-only
+mode, with no `external_base_domain`, there is no front-door and the dashboard is
+reached directly on its own NodePort `31573`.)
 
 WebSocket forwarding is on by default in `cloudflared`; no `disableChunkedEncoding` or extra flag needed.
 
 ### Access policies
 
-In the Cloudflare Zero-Trust dashboard (Access controls → Applications), create one Self-hosted Access application per bypass path, plus the catch-all that protects the SPA. Cloudflare matches the most specific path first, so the three bypass apps below take precedence over the catch-all.
+Define these as one Self-hosted Access application over the wildcard `*.example.com` plus path-scoped bypass apps. Cloudflare matches the most specific path first, so the bypass apps below take precedence over the catch-all. The paths are host-relative, so they apply across every subdomain the front-door serves (the dashboard's `/auth` and `/api` live under `kelt.example.com`).
 
 Each bypass application uses a single policy with **Action: Bypass** and **Include: Everyone** (not "Service Token only", which would block browser users).
 
@@ -100,16 +108,12 @@ Cloudflare evaluates apps in order from most specific to least specific path, so
 
 ### Dev frontend hostname (optional)
 
-Exposing the Vite dev frontend (`dev.example.com`) through a second tunnel hostname requires its own bypass set. The dev frontend uses absolute Keycloak authority pointing at the prod hostname (`core.example.com`), so Keycloak paths do NOT need bypass on the dev hostname; only the backend proxy paths served by Vite do.
-
-`cloudflared` ingress entry:
-
-```yaml
-  - hostname: dev.example.com
-    service: http://192.168.56.13:31573    # Vite dev server on the ansible VM
-```
-
-Then create on the dev hostname:
+The Vite dev frontend (`dev.example.com`) is served through the same wildcard:
+the front-door routes `dev.<base>` to the Vite server on the ansible VM
+(`192.168.56.13:31573`), so no second tunnel hostname is needed. The dev frontend
+uses absolute Keycloak authority pointing at `kelt.<base>`, so Keycloak paths do
+NOT need bypass on the dev hostname; only the backend proxy paths served by Vite
+do. Create on the dev hostname:
 
 **App D1: Bypass dashboard backend through Vite**
 

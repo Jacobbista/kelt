@@ -152,6 +152,14 @@ Types:
 - `refactor`: Code refactoring
 - `test`: Test changes
 - `chore`: Maintenance
+- `perf`: Performance improvement
+- `ci`: CI configuration
+- `build`: Build system or dependencies
+- `style`: Formatting only (no behavior change)
+- `revert`: Revert a previous commit
+
+The optional `commit-msg` hook (below) enforces this format locally. A scope and a
+breaking-change `!` are optional: `feat(dashboard)!: drop legacy endpoint`.
 
 Examples:
 ```
@@ -174,6 +182,9 @@ testbed dev-hooks off      # uninstall
 - **pre-commit** runs `gitleaks` on staged changes and blocks the commit if it
   finds a secret (mirrors the CI scan). Install `gitleaks` locally for this to
   apply; without it the scan is skipped and CI still scans on push.
+- **commit-msg** blocks a commit whose subject line is not a Conventional Commit
+  (the format above). Pure bash, no Node/commitlint dependency. Merge, revert, and
+  rebase autosquash (`fixup!`/`squash!`) subjects pass through unchecked.
 - **pre-push** is advisory only (never blocks): it reminds you when the frontend
   has changes that need a version tag to publish, and flags WIP commits.
 

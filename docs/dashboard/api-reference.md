@@ -123,11 +123,13 @@ See [RAN Modes](../deployment/ran-modes-dashboard.md) for the full workflow.
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | `/api/v1/northbound/services` | — | Inventory of the camara/positioning/mec deployments (image, ready replicas, pods) |
-| GET | `/api/v1/northbound/adapters` | — | Adapters registered in the engine `ADAPTER_URLS` |
+| GET | `/api/v1/northbound/adapters` | — | Live adapter registry from the engine (`GET /adapters` via the API-server service proxy): per adapter `kind`, `registered_via`, `last_seen_s_ago`, and derived `state` (live/unreachable/stale) |
 | GET | `/api/v1/northbound/contract` | — | Adapter contract guidance: `Measurement` schema, Python skeleton, `env.contract.yaml` template, doc links |
-| POST | `/api/v1/northbound/adapters` | ✅ Admin | Register an adapter. Body: `{name, url}`. Restarts the engine |
-| DELETE | `/api/v1/northbound/adapters/{name}` | ✅ Admin | Unregister an adapter. Restarts the engine |
-| POST | `/api/v1/northbound/deploy` | ✅ Admin | Deploy a custom adapter image. Requires `DASHBOARD_ALLOW_WORKLOAD_CREATE=true`. Body: `{name, image, port, env[], image_pull_secret?, register_adapter}` |
+| GET | `/api/v1/northbound/contract/{service}` | — | Live per-service contract fetched from the service's own `/contract` (kind, `external_origin` var, required/recommended/optional env). Degrades to `{available: false}` when the service exposes none |
+| GET | `/api/v1/northbound/config/{service}` | — | Guided-setup read: the contract plus current state (non-sensitive values; sensitive reported set/unset only, never the value) |
+| PUT | `/api/v1/northbound/config/{service}` | ✅ Admin | Guided-setup apply. Body: `{values: {VAR: value}}`. Routes each var by the contract `sensitive` flag (Secret vs ConfigMap, both via envFrom), then rolls the deployment |
+| DELETE | `/api/v1/northbound/adapters/{name}` | ✅ Admin | Force-remove a stale registry entry (engine `DELETE /adapters/{name}`). Adapters self-register, so there is no manual register endpoint |
+| POST | `/api/v1/northbound/deploy` | ✅ Admin | Deploy a custom adapter image. Requires `DASHBOARD_ALLOW_WORKLOAD_CREATE=true`. Body: `{name, image, port, env[], image_pull_secret?, kind?}`. The backend injects the self-registration env so the adapter announces itself to the engine |
 | DELETE | `/api/v1/northbound/workloads/{name}` | ✅ Admin | Delete a deploy-from-image adapter (Deployment, Service, Secret) and unregister it |
 | PUT | `/api/v1/northbound/fusion` | ✅ Admin | Update engine fusion config. Body: `{strategy?, compare?, device_map?}` |
 | POST | `/api/v1/northbound/managed/{deployment}/image` | ✅ Admin | Retarget a managed deployment (gateway/engine/demo) to a new image. Body: `{image}` |

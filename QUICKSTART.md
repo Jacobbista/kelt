@@ -168,6 +168,7 @@ directly; no flags are required, all values are positional.
 | `testbed set-profile` | `laptop \| server` |
 | `testbed edge` | `on \| off \| true \| false` |
 | `testbed ran` | `<nic> \| disable` |
+| `testbed northbound` | `on \| off` (positioning/CAMARA feature: phases 10-12 + placement-editor, in one command) |
 
 ### External access
 

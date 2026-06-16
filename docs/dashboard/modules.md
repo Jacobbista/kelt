@@ -146,14 +146,25 @@ Service-management console for the northbound positioning stack. Read views are
 open to `dashboard-viewer`; all write controls require `dashboard-admin`.
 
 - Services: inventory of the camara/positioning/mec deployments (image, ready
-  replicas, pod phases)
-- Adapter registry: list the engine's `ADAPTER_URLS`; admins add (name + URL) or
-  remove an adapter (each change restarts positioning-engine)
-- Deploy adapter from image: pin an `image:tag`, port, env vars (secret-marked
-  vars go into a Secret), optional `imagePullSecret`; the backend creates the
-  Deployment + ClusterIP Service and registers it. A catalog pre-fills the
-  reference `wifi-positioning` and the generic `rest-adapter`. Gated by the
-  backend `allow_workload_create` setting on top of admin.
+  replicas, pod phases). Each service offers a guided **Configure** action (admin)
+- Guided setup (per service): reads the service's own `/contract` and walks the
+  operator through its fields in order, required then recommended then optional,
+  each with description and example. Apply routes every value by the contract
+  `sensitive` flag (Secret for sensitive, ConfigMap otherwise, both via envFrom)
+  and rolls the deployment. A service that exposes no contract degrades to a
+  read-only notice. Sensitive current values are never shown, only set/unset
+- Adapter registry: the live registry read from the engine (`GET /adapters`),
+  showing each adapter's kind, `registered_via`, last-seen, and derived state
+  (live / unreachable / stale). Adapters self-register; admins can force-remove a
+  stale entry. No manual name+URL registration
+- Deploy adapter from image: pin an `image:tag`, port, optional `kind`, env vars
+  (secret-marked vars go into a Secret), optional `imagePullSecret`; the backend
+  creates the Deployment + ClusterIP Service and injects the self-registration
+  env so the adapter announces itself to the engine. The catalog separates a
+  singleton source (`wifi-positioning`, deployed at most once) from the generic
+  `rest-adapter`, a per-vendor template instantiated once per vendor (name it
+  after the vendor, point it at the vendor API via env). Gated by the backend
+  `allow_workload_create` setting on top of admin.
 - Fusion config: edit `FUSION_STRATEGY` / `FUSION_COMPARE` / `DEVICE_MAP`
 - Managed image rollout: retarget gateway / engine / demo to a new image
 - Adapter contract: the `Measurement` schema, a Python adapter skeleton, an
