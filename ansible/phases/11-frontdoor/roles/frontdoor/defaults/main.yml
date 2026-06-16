@@ -1,0 +1,39 @@
+---
+# Front-door (single-origin edge) defaults. The phase only deploys when
+# external_base_domain (all.yml) is set; with no base the testbed uses per-service
+# LAN NodePorts and needs no front-door. Subdomains, the base, the scheme, the
+# NodePort, and the northbound feature flags all come from all.yml so the route
+# map is defined in exactly one place. See docs/security/external-access.md.
+
+frontdoor_namespace: frontdoor
+frontdoor_image: "docker.io/library/nginx:1.27-alpine"
+
+# Welcome-page brand. KELT is the primary (tool) brand, baked into the page; an
+# org/team/centre running this instance co-brands under it via the dashboard
+# (which writes the frontdoor-brand ConfigMap / brand.json) — not these vars.
+# Override only for a full white-label. See docs/security/external-access.md.
+frontdoor_brand_title: "{{ lookup('ansible.builtin.env', 'FRONTDOOR_BRAND_TITLE') | default('KELT', true) }}"
+frontdoor_brand_tagline: "{{ lookup('ansible.builtin.env', 'FRONTDOOR_BRAND_TAGLINE') | default('Reproducible cloud-edge 5G testbed', true) }}"
+frontdoor_brand_accent: "{{ lookup('ansible.builtin.env', 'FRONTDOOR_BRAND_ACCENT') | default('#14b8a6', true) }}"
+
+# Cluster DNS used by nginx for runtime upstream resolution. k3s default is
+# 10.43.0.10 (kube-dns in kube-system); override with CLUSTER_DNS_IP if changed.
+cluster_dns_ip: "{{ lookup('ansible.builtin.env', 'CLUSTER_DNS_IP') | default('10.43.0.10', true) }}"
+
+# Upstream Service coordinates (namespace + port) for each routed subdomain.
+# Kept here so the Host->Service map is declarative and reviewable in one place.
+frontdoor_dashboard_namespace: dashboard
+frontdoor_dashboard_port: 80
+frontdoor_camara_namespace: camara
+frontdoor_camara_port: 8080
+frontdoor_demo_namespace: mec
+frontdoor_demo_port: 80
+frontdoor_placement_namespace: positioning
+frontdoor_placement_port: 4180
+
+# Dev surface: the opt-in Vite dev server runs on the ansible VM (off-cluster),
+# so it is an IP upstream rather than a cluster Service. Mirror phase 09's flag.
+# The ansible VM IP is fixed by the Vagrantfile (192.168.56.13); override with
+# DASHBOARD_DEV_UPSTREAM if the control host differs.
+frontdoor_dev_enabled: "{{ lookup('ansible.builtin.env', 'DASHBOARD_DEV_ENABLED') | default('false', true) | bool }}"
+frontdoor_dev_upstream: "{{ lookup('ansible.builtin.env', 'DASHBOARD_DEV_UPSTREAM') | default('192.168.56.13:31573', true) }}"

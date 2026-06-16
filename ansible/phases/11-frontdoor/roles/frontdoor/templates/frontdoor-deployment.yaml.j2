@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontdoor
+  namespace: {{ frontdoor_namespace }}
+  labels:
+    app: frontdoor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontdoor
+  template:
+    metadata:
+      labels:
+        app: frontdoor
+      annotations:
+        # Roll the pod when the routing config OR the welcome page changes (nginx
+        # reads them at start; subPath mounts do not live-update).
+        checksum/config: "{{ lookup('template', role_path + '/templates/frontdoor-configmap.yaml.j2') | hash('sha1') }}"
+    spec:
+      # Pin to the worker, alongside the services it fronts.
+      nodeSelector:
+        kubernetes.io/hostname: worker
+      containers:
+        - name: nginx
+          image: {{ frontdoor_image }}
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+            - name: config
+              mountPath: /usr/share/nginx/html/index.html
+              subPath: index.html
+            - name: brand
+              mountPath: /usr/share/nginx/html/brand.json
+              subPath: brand.json
+          readinessProbe:
+            tcpSocket:
+              port: 80
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+      volumes:
+        - name: config
+          configMap:
+            name: frontdoor-nginx
+        - name: brand
+          configMap:
+            name: frontdoor-brand

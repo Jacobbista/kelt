@@ -13,8 +13,16 @@ DEFAULT_PROFILE="laptop"
 DEFAULT_EDGE="true"
 DEFAULT_DEPLOY_MODE="core_only"
 DEFAULT_PHYSICAL_RAN="false"
+# Northbound positioning/CAMARA feature (phases 10-12 + placement-editor). Opt-in.
+# `testbed northbound on` flips this; all.yml derives camara/positioning/demo/
+# placement_editor _enabled from it (see ansible/group_vars/all.yml).
+DEFAULT_NORTHBOUND_ENABLED="false"
 DEFAULT_DASHBOARD_DEV_ENABLED="false"
 DEFAULT_DASHBOARD_AUTH_ENABLED="true"
+# Single base domain for external access. When set, every surface is reached as
+# <subdomain>.<base> through the phase 11 front-door behind one Cloudflare wildcard
+# (*.<base>); ansible derives all *_external_origin from it. Empty = LAN NodePorts.
+DEFAULT_EXTERNAL_BASE_DOMAIN=""
 DEFAULT_KEYCLOAK_PATH_PREFIX=""
 DEFAULT_DASHBOARD_KEYCLOAK_EXTERNAL_URL=""
 DEFAULT_DASHBOARD_KEYCLOAK_PATH_PREFIX=""
@@ -37,8 +45,10 @@ load_config() {
   DEPLOY_MODE="${DEFAULT_DEPLOY_MODE}"
   PHYSICAL_RAN_ENABLED="${DEFAULT_PHYSICAL_RAN}"
   PHYSICAL_RAN_BRIDGE=""
+  NORTHBOUND_ENABLED="${DEFAULT_NORTHBOUND_ENABLED}"
   DASHBOARD_DEV_ENABLED="${DEFAULT_DASHBOARD_DEV_ENABLED}"
   DASHBOARD_AUTH_ENABLED="${DEFAULT_DASHBOARD_AUTH_ENABLED}"
+  EXTERNAL_BASE_DOMAIN="${DEFAULT_EXTERNAL_BASE_DOMAIN}"
   KEYCLOAK_PATH_PREFIX="${DEFAULT_KEYCLOAK_PATH_PREFIX}"
   DASHBOARD_KEYCLOAK_EXTERNAL_URL="${DEFAULT_DASHBOARD_KEYCLOAK_EXTERNAL_URL}"
   DASHBOARD_KEYCLOAK_PATH_PREFIX="${DEFAULT_DASHBOARD_KEYCLOAK_PATH_PREFIX}"
@@ -60,8 +70,10 @@ load_config() {
         DEPLOY_MODE)          DEPLOY_MODE="$value" ;;
         PHYSICAL_RAN_ENABLED) PHYSICAL_RAN_ENABLED="$value" ;;
         PHYSICAL_RAN_BRIDGE)  PHYSICAL_RAN_BRIDGE="$value" ;;
+        NORTHBOUND_ENABLED)   NORTHBOUND_ENABLED="$value" ;;
         DASHBOARD_DEV_ENABLED) DASHBOARD_DEV_ENABLED="$value" ;;
         DASHBOARD_AUTH_ENABLED) DASHBOARD_AUTH_ENABLED="$value" ;;
+        EXTERNAL_BASE_DOMAIN) EXTERNAL_BASE_DOMAIN="$value" ;;
         KEYCLOAK_PATH_PREFIX) KEYCLOAK_PATH_PREFIX="$value" ;;
         DASHBOARD_KEYCLOAK_EXTERNAL_URL) DASHBOARD_KEYCLOAK_EXTERNAL_URL="$value" ;;
         DASHBOARD_KEYCLOAK_PATH_PREFIX) DASHBOARD_KEYCLOAK_PATH_PREFIX="$value" ;;
@@ -96,8 +108,10 @@ EDGE_ENABLED=${EDGE_ENABLED}
 DEPLOY_MODE=${DEPLOY_MODE}
 PHYSICAL_RAN_ENABLED=${PHYSICAL_RAN_ENABLED}
 PHYSICAL_RAN_BRIDGE=${PHYSICAL_RAN_BRIDGE}
+NORTHBOUND_ENABLED=${NORTHBOUND_ENABLED}
 DASHBOARD_DEV_ENABLED=${DASHBOARD_DEV_ENABLED}
 DASHBOARD_AUTH_ENABLED=${DASHBOARD_AUTH_ENABLED}
+EXTERNAL_BASE_DOMAIN=${EXTERNAL_BASE_DOMAIN}
 KEYCLOAK_PATH_PREFIX=${KEYCLOAK_PATH_PREFIX}
 DASHBOARD_KEYCLOAK_EXTERNAL_URL=${DASHBOARD_KEYCLOAK_EXTERNAL_URL}
 DASHBOARD_KEYCLOAK_PATH_PREFIX=${DASHBOARD_KEYCLOAK_PATH_PREFIX}
@@ -477,6 +491,34 @@ do_edge() {
   echo "Edge VM: ${EDGE_ENABLED} (deploy: ${DEPLOY_MODE})"
 }
 
+do_set_northbound() {
+  # One command to turn the whole northbound positioning/CAMARA feature on or off.
+  # Flips NORTHBOUND_ENABLED in .testbed.env; all.yml derives camara_enabled,
+  # positioning_enabled, positioning_demo_enabled and placement_editor_enabled
+  # from it, and phase 08 emits the matching realm objects. See docs/status.md.
+  local toggle="${1:-}"
+  if [[ -z "$toggle" ]]; then
+    if gum_confirm "Enable the northbound positioning/CAMARA feature (phases 10-12 + placement-editor)?"; then
+      toggle="on"
+    else
+      toggle="off"
+    fi
+  fi
+  case "$toggle" in
+    on|true)  NORTHBOUND_ENABLED="true" ;;
+    off|false) NORTHBOUND_ENABLED="false" ;;
+    *) echo "Usage: $0 northbound on|off"; return 1 ;;
+  esac
+  save_config
+  echo "Northbound feature: ${NORTHBOUND_ENABLED} (camara + positioning + demo + placement-editor)"
+  if [[ "$NORTHBOUND_ENABLED" == "true" ]]; then
+    echo "Apply with: testbed provision   (or: testbed run-phase 08-iam / 10-northbound)"
+    echo "NOTE: Keycloak imports the realm only once. On an already-provisioned cluster the new"
+    echo "      camara/positioning/placement clients are NOT auto-created; re-import the realm or add"
+    echo "      them via the admin console. See docs/security/iam.md (realm reconcile limitation)."
+  fi
+}
+
 do_ran() {
   local nic="${1:-}"
   if [[ -z "$nic" ]]; then
@@ -626,40 +668,36 @@ prompt_kc_reconcile() {
   gum style --foreground 12 --bold "Keycloak realm reconcile" >&2
   cat <<'EXPL' >&2
 
-Re-applies the dashboard client redirect URIs, web origins,
-post-logout URIs, realm roles, groups, and composites from the
-template via the Keycloak admin API. Does not touch users, passwords,
-or sessions.
+Keycloak keeps the realm it imported on first boot, so later template
+edits (dashboard redirect URIs, web origins, roles, groups, composites)
+do NOT reach a running cluster on their own. Reconcile pushes them via
+the admin API. It does not touch users, passwords, or sessions.
 
-Run reconcile when: the realm template was edited and the change must
-reach the running cluster (skipped clusters keep the imported snapshot
-unless reconciled).
-
-Skip reconcile when: an operator has customized the dashboard client
-through the Keycloak admin console and that customization must be
-preserved.
+Apply it after changing the external origin or base domain, or any realm
+template edit. Skip it only if you hand-edited the dashboard client in the
+Keycloak console and want to keep that.
 
 EXPL
 
   local choice
   choice="$(gum_choose_or_cancel \
-    "Yes (this run only)" \
-    "No (this run only)" \
-    "Yes and persist as default (always)" \
-    "No and persist as default (never)")"
+    "Apply now: push template to Keycloak (this run)" \
+    "Skip: leave the running realm unchanged (this run)" \
+    "Apply now, and always (save as default)" \
+    "Skip, and never (save as default)")"
   case "$choice" in
-    "Yes (this run only)")
+    "Apply now: push template to Keycloak (this run)")
       KC_RECONCILE_THIS_RUN="true"
       ;;
-    "No (this run only)")
+    "Skip: leave the running realm unchanged (this run)")
       KC_RECONCILE_THIS_RUN="false"
       ;;
-    "Yes and persist as default (always)")
+    "Apply now, and always (save as default)")
       KEYCLOAK_REALM_RECONCILE="true"
       save_config >&2
       KC_RECONCILE_THIS_RUN="true"
       ;;
-    "No and persist as default (never)")
+    "Skip, and never (save as default)")
       KEYCLOAK_REALM_RECONCILE="false"
       save_config >&2
       KC_RECONCILE_THIS_RUN="false"
@@ -670,18 +708,36 @@ EXPL
   esac
 }
 
+do_set_base_domain() {
+  local domain="${1:-}"
+  if [[ -z "$domain" ]]; then
+    if $HAS_GUM; then
+      domain="$(gum input --placeholder "example.com (base domain; subdomains derived)")"
+    else
+      read -rp "External base domain (subdomains derived): " domain
+    fi
+  fi
+  EXTERNAL_BASE_DOMAIN="$domain"
+  save_config
+  if [[ -n "$domain" ]]; then
+    echo "External base domain set to ${domain} (surfaces: kelt/api/demo/placement/dev.${domain})."
+  else
+    echo "External base domain cleared (LAN NodePorts)."
+  fi
+}
+
 do_set_external_origin() {
   local origin="${1:-}"
   if [[ -z "$origin" ]]; then
     if $HAS_GUM; then
-      origin="$(gum input --placeholder "https://core.example.com")"
+      origin="$(gum input --placeholder "https://kelt.example.com (advanced override)")"
     else
       read -rp "Dashboard external origin (https://...): " origin
     fi
   fi
   DASHBOARD_EXTERNAL_ORIGIN="$origin"
   save_config
-  echo "Dashboard external origin set."
+  echo "Dashboard external origin set (advanced override; clear it to use the base domain)."
 }
 
 do_set_positioning_origin() {
@@ -732,18 +788,19 @@ do_auth_network() {
   local arg="${2:-}"
   if [[ -z "$action" ]]; then
     if ! $HAS_GUM; then
-      echo "Usage: $0 auth-network status|mode|auth|origin|positioning-origin|prefix|keycloak-url|preset-cloudflare"
+      echo "Usage: $0 auth-network status|dev|auth|base-domain|origin|positioning-origin|prefix|keycloak-url|preset-cloudflare"
       return 1
     fi
     action="$(gum_choose_or_cancel \
       "Show status" \
       "Toggle dashboard dev frontend (true/false)" \
       "Set dashboard auth (enabled/disabled)" \
+      "Set external base domain" \
+      "Apply cloudflare-style preset" \
       "Set dashboard external origin" \
       "Set positioning demo external origin" \
       "Set keycloak path prefix" \
-      "Set keycloak external URL" \
-      "Apply cloudflare-style preset")"
+      "Set keycloak external URL")"
     [[ -z "$action" ]] && { echo "Cancelled."; return 0; }
   fi
 
@@ -751,6 +808,7 @@ do_auth_network() {
     "Show status"|status)
       echo "DASHBOARD_DEV_ENABLED=${DASHBOARD_DEV_ENABLED}"
       echo "DASHBOARD_AUTH_ENABLED=${DASHBOARD_AUTH_ENABLED}"
+      echo "EXTERNAL_BASE_DOMAIN=${EXTERNAL_BASE_DOMAIN:-<unset, LAN NodePorts>}"
       echo "KEYCLOAK_PATH_PREFIX=${KEYCLOAK_PATH_PREFIX}"
       echo "DASHBOARD_KEYCLOAK_EXTERNAL_URL=${DASHBOARD_KEYCLOAK_EXTERNAL_URL}"
       echo "DASHBOARD_KEYCLOAK_PATH_PREFIX=${DASHBOARD_KEYCLOAK_PATH_PREFIX}"
@@ -777,17 +835,20 @@ do_auth_network() {
     "Set keycloak external URL"|keycloak-url)
       do_set_keycloak_external_url
       ;;
+    "Set external base domain"|base-domain)
+      do_set_base_domain "$arg"
+      ;;
     "Apply cloudflare-style preset"|preset-cloudflare)
-      # Sub-domain convention assumed for cloudflared ingress: each
-      # surface (prod dashboard, dev dashboard, positioning demo) lives
-      # on its own host so cloudflared routes traffic to the right
-      # NodePort without overlapping ingress rules.
+      # Single-base model: set one base domain and let ansible derive every
+      # surface as <subdomain>.<base>. The phase 11 front-door routes them by
+      # Host, so Cloudflare needs ONE wildcard tunnel (*.<base>) and one Access
+      # app, not a route per service. See docs/security/external-access.md.
       local domain="$arg"
       if [[ -z "$domain" ]]; then
         if $HAS_GUM; then
-          domain="$(gum input --placeholder "example.com (root domain, sub-domains derived)")"
+          domain="$(gum input --placeholder "example.com (base domain; subdomains derived)")"
         else
-          read -rp "Public root domain (sub-domains derived): " domain
+          read -rp "Public base domain (subdomains derived): " domain
         fi
       fi
       if [[ -z "$domain" ]]; then
@@ -795,22 +856,29 @@ do_auth_network() {
         return 1
       fi
       DASHBOARD_AUTH_ENABLED="true"
-      KEYCLOAK_PATH_PREFIX="/auth"
-      DASHBOARD_KEYCLOAK_PATH_PREFIX="/auth"
-      DASHBOARD_KEYCLOAK_EXTERNAL_URL="https://core.${domain}"
-      DASHBOARD_EXTERNAL_ORIGIN="https://core.${domain}"
-      DASHBOARD_DEV_EXTERNAL_URL="https://dev.${domain}"
-      CAMARA_GATEWAY_EXTERNAL_ORIGIN="https://api.${domain}"
-      POSITIONING_DEMO_EXTERNAL_ORIGIN="https://demo.${domain}"
+      EXTERNAL_BASE_DOMAIN="${domain}"
+      # Clear per-service overrides so all surfaces derive from the base domain.
+      # (Set one of these again only for a deliberate one-off override.)
+      KEYCLOAK_PATH_PREFIX=""
+      DASHBOARD_KEYCLOAK_PATH_PREFIX=""
+      DASHBOARD_KEYCLOAK_EXTERNAL_URL=""
+      DASHBOARD_EXTERNAL_ORIGIN=""
+      DASHBOARD_DEV_EXTERNAL_URL=""
+      CAMARA_GATEWAY_EXTERNAL_ORIGIN=""
+      POSITIONING_DEMO_EXTERNAL_ORIGIN=""
       save_config
-      echo "Applied preset:"
-      echo "  prod dashboard: https://core.${domain}"
-      echo "  dev dashboard:  https://dev.${domain}"
-      echo "  CAMARA API:     https://api.${domain}"
-      echo "  positioning:    https://demo.${domain}"
+      echo "Applied single-base preset for ${domain}:"
+      echo "  dashboard:   https://kelt.${domain}   (also /auth /api /docs)"
+      echo "  CAMARA API:  https://api.${domain}"
+      echo "  demo:        https://demo.${domain}"
+      echo "  placement:   https://placement.${domain}"
+      echo "  dev:         https://dev.${domain}   (when dashboard dev enabled)"
+      echo ""
+      echo "Cloudflare (one-time): point a wildcard tunnel *.${domain} -> worker:31500 (front-door NodePort),"
+      echo "  add one Access app for *.${domain}, and Bypass /auth/realms/* (OIDC) and api.${domain} (M2M)."
       ;;
     *)
-      echo "Usage: $0 auth-network status|dev|auth|origin|positioning-origin|prefix|keycloak-url|preset-cloudflare"
+      echo "Usage: $0 auth-network status|dev|auth|base-domain|origin|positioning-origin|prefix|keycloak-url|preset-cloudflare"
       return 1
       ;;
   esac
@@ -861,7 +929,7 @@ do_up() {
     return 0
   fi
   (
-    export TESTBED_PROFILE EDGE_ENABLED DEPLOY_MODE PHYSICAL_RAN_ENABLED PHYSICAL_RAN_BRIDGE DASHBOARD_DEV_ENABLED DASHBOARD_AUTH_ENABLED KEYCLOAK_PATH_PREFIX DASHBOARD_KEYCLOAK_EXTERNAL_URL DASHBOARD_KEYCLOAK_PATH_PREFIX DASHBOARD_EXTERNAL_ORIGIN DASHBOARD_DEV_EXTERNAL_URL CAMARA_GATEWAY_EXTERNAL_ORIGIN POSITIONING_DEMO_EXTERNAL_ORIGIN KEYCLOAK_ADMIN_PASSWORD CAMARA_CLIENT_SECRET DASHBOARD_READONLY_SECRET KEYCLOAK_REALM_RECONCILE
+    export TESTBED_PROFILE EDGE_ENABLED DEPLOY_MODE PHYSICAL_RAN_ENABLED PHYSICAL_RAN_BRIDGE NORTHBOUND_ENABLED DASHBOARD_DEV_ENABLED DASHBOARD_AUTH_ENABLED EXTERNAL_BASE_DOMAIN KEYCLOAK_PATH_PREFIX DASHBOARD_KEYCLOAK_EXTERNAL_URL DASHBOARD_KEYCLOAK_PATH_PREFIX DASHBOARD_EXTERNAL_ORIGIN DASHBOARD_DEV_EXTERNAL_URL CAMARA_GATEWAY_EXTERNAL_ORIGIN POSITIONING_DEMO_EXTERNAL_ORIGIN KEYCLOAK_ADMIN_PASSWORD CAMARA_CLIENT_SECRET DASHBOARD_READONLY_SECRET KEYCLOAK_REALM_RECONCILE
     cd "$SCRIPT_DIR"
     vagrant up
   )
@@ -875,7 +943,7 @@ do_provision() {
   fi
   ensure_required_secrets_for_provision || return 1
   (
-    export TESTBED_PROFILE EDGE_ENABLED DEPLOY_MODE PHYSICAL_RAN_ENABLED PHYSICAL_RAN_BRIDGE DASHBOARD_DEV_ENABLED DASHBOARD_AUTH_ENABLED KEYCLOAK_PATH_PREFIX DASHBOARD_KEYCLOAK_EXTERNAL_URL DASHBOARD_KEYCLOAK_PATH_PREFIX DASHBOARD_EXTERNAL_ORIGIN DASHBOARD_DEV_EXTERNAL_URL CAMARA_GATEWAY_EXTERNAL_ORIGIN POSITIONING_DEMO_EXTERNAL_ORIGIN KEYCLOAK_ADMIN_PASSWORD CAMARA_CLIENT_SECRET DASHBOARD_READONLY_SECRET KEYCLOAK_REALM_RECONCILE
+    export TESTBED_PROFILE EDGE_ENABLED DEPLOY_MODE PHYSICAL_RAN_ENABLED PHYSICAL_RAN_BRIDGE NORTHBOUND_ENABLED DASHBOARD_DEV_ENABLED DASHBOARD_AUTH_ENABLED EXTERNAL_BASE_DOMAIN KEYCLOAK_PATH_PREFIX DASHBOARD_KEYCLOAK_EXTERNAL_URL DASHBOARD_KEYCLOAK_PATH_PREFIX DASHBOARD_EXTERNAL_ORIGIN DASHBOARD_DEV_EXTERNAL_URL CAMARA_GATEWAY_EXTERNAL_ORIGIN POSITIONING_DEMO_EXTERNAL_ORIGIN KEYCLOAK_ADMIN_PASSWORD CAMARA_CLIENT_SECRET DASHBOARD_READONLY_SECRET KEYCLOAK_REALM_RECONCILE
     cd "$SCRIPT_DIR"
     if worker_needs_ran_reload; then
       echo "Applying PHYSICAL_RAN_BRIDGE=${PHYSICAL_RAN_BRIDGE} to worker via vagrant reload..."
@@ -1421,12 +1489,14 @@ _testbed_complete() {
   COMPREPLY=()
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
-  opts="show endpoints set-profile edge ran auth-network dashboard-dev dashboard-auth \
+  opts="show endpoints set-profile edge ran northbound dev-hooks auth-network dashboard-dev dashboard-auth \
 iam iam-admin-password secrets run-phase tests up provision env install onboarding \
 autostart help"
   case "$prev" in
     set-profile)        COMPREPLY=( $(compgen -W "laptop server" -- "$cur") ); return ;;
-    edge|dashboard-dev) COMPREPLY=( $(compgen -W "true false on off" -- "$cur") ); return ;;
+    run-phase)          COMPREPLY=( $(compgen -W "$(ls -d ansible/phases/[0-9][0-9]-*/ 2>/dev/null | xargs -n1 basename 2>/dev/null)" -- "$cur") ); return ;;
+    edge|dashboard-dev|northbound) COMPREPLY=( $(compgen -W "true false on off" -- "$cur") ); return ;;
+    dev-hooks)          COMPREPLY=( $(compgen -W "on off status release" -- "$cur") ); return ;;
     dashboard-auth)     COMPREPLY=( $(compgen -W "enabled disabled" -- "$cur") ); return ;;
     auth-network)       COMPREPLY=( $(compgen -W "status dev auth origin positioning-origin prefix keycloak-url preset-cloudflare" -- "$cur") ); return ;;
     iam)                COMPREPLY=( $(compgen -W "reconcile" -- "$cur") ); return ;;
@@ -1456,6 +1526,136 @@ BASH
   echo "    source $rc_file"
   echo "    exec bash"
   echo "Then call:  testbed help"
+}
+
+# ─── Developer git hooks (opt-in, developer-only) ───────────────────────────
+# Local pre-commit (gitleaks, blocks) + pre-push (advisory: reminds to tag the
+# frontend, flags WIP). The actual release/tag is a confirmed command below.
+# See docs/development/contributing.md.
+_devhooks_fe_version() {
+  python3 -c "import json;print(json.load(open('${SCRIPT_DIR}/dashboard/frontend/package.json'))['version'])" 2>/dev/null
+}
+_devhooks_fe_last_tag() {
+  git -C "$SCRIPT_DIR" tag --list 'dashboard-frontend-v*' --sort=-v:refname 2>/dev/null | head -1
+}
+_devhooks_fe_changed_since() {  # $1=tag ; 0 (true) if frontend changed since it
+  local tag="$1"
+  [ -z "$tag" ] && return 0
+  ! git -C "$SCRIPT_DIR" diff --quiet "$tag" HEAD -- dashboard/frontend 2>/dev/null
+}
+_devhooks_bump() {  # $1=x.y.z  $2=patch|minor|major  -> new version
+  python3 - "$1" "$2" <<'PY'
+import sys
+x, y, z = (int(n) for n in sys.argv[1].split("."))
+part = sys.argv[2]
+if part == "major": x, y, z = x + 1, 0, 0
+elif part == "minor": y, z = y + 1, 0
+else: z = z + 1
+print(f"{x}.{y}.{z}")
+PY
+}
+_devhooks_set_fe_version() {  # $1=new version (regex replace, preserves formatting)
+  python3 - "${SCRIPT_DIR}/dashboard/frontend/package.json" "$1" <<'PY'
+import re, sys
+p, new = sys.argv[1], sys.argv[2]
+s = open(p).read()
+open(p, "w").write(re.sub(r'("version"\s*:\s*")[^"]*(")', r'\g<1>' + new + r'\g<2>', s, count=1))
+PY
+}
+
+_devhooks_install() {
+  git -C "$SCRIPT_DIR" config core.hooksPath .githooks
+  chmod +x "$SCRIPT_DIR"/.githooks/* 2>/dev/null || true
+  echo "Dev git hooks enabled (core.hooksPath=.githooks)."
+  if command -v gitleaks &>/dev/null; then
+    echo "  gitleaks: found — pre-commit blocks commits containing secrets."
+  else
+    echo "  gitleaks: NOT found — local leak scan skipped (CI still scans). Install: https://github.com/gitleaks/gitleaks"
+  fi
+  echo "  commit-msg: blocks subjects that are not Conventional Commits (see contributing.md)."
+  echo "  pre-push: advisory reminders (frontend tag, WIP). Tag with: testbed dev-hooks release"
+}
+_devhooks_uninstall() {
+  git -C "$SCRIPT_DIR" config --unset core.hooksPath 2>/dev/null || true
+  echo "Dev git hooks disabled."
+}
+_devhooks_status() {
+  local hp pkg last_tag last_ver
+  hp="$(git -C "$SCRIPT_DIR" config --get core.hooksPath 2>/dev/null || true)"
+  [ "$hp" = ".githooks" ] && echo "Dev hooks: enabled" || echo "Dev hooks: disabled (enable with: testbed dev-hooks on)"
+  command -v gitleaks &>/dev/null && echo "gitleaks: installed" || echo "gitleaks: not installed (local leak scan skipped; CI scans)"
+  echo "commit-msg: Conventional Commits validation active when hooks enabled"
+  pkg="$(_devhooks_fe_version || true)"; last_tag="$(_devhooks_fe_last_tag || true)"; last_ver="${last_tag#dashboard-frontend-v}"
+  echo "frontend: package.json v${pkg:-?}, last published ${last_tag:-<none>}"
+  if [ -n "$pkg" ] && { [ -z "$last_tag" ] || [ "$pkg" != "$last_ver" ] || _devhooks_fe_changed_since "$last_tag"; }; then
+    echo "  -> unpublished frontend changes; run: testbed dev-hooks release"
+  else
+    echo "  -> up to date"
+  fi
+}
+# Advisory check used by the pre-push hook. Never blocks (returns 0).
+_devhooks_check() {
+  local branch pkg last_tag last_ver wip
+  branch="$(git -C "$SCRIPT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  pkg="$(_devhooks_fe_version || true)"; last_tag="$(_devhooks_fe_last_tag || true)"; last_ver="${last_tag#dashboard-frontend-v}"
+  if [ "$branch" = "main" ] && [ -n "$pkg" ]; then
+    if [ -z "$last_tag" ]; then
+      echo "⚠ frontend never published. Tag it with:  testbed dev-hooks release   (-> dashboard-frontend-v$pkg)" >&2
+    elif [ "$pkg" != "$last_ver" ]; then
+      echo "⚠ frontend v$pkg not tagged (last published v$last_ver). Publish with:  testbed dev-hooks release" >&2
+    elif _devhooks_fe_changed_since "$last_tag"; then
+      echo "⚠ frontend changed since v$last_ver, version not bumped. Publish with:  testbed dev-hooks release" >&2
+    fi
+  fi
+  wip="$(git -C "$SCRIPT_DIR" log --format=%s '@{u}..HEAD' 2>/dev/null | grep -ciE '^(wip|fixup!|squash!)' || true)"
+  [ "${wip:-0}" -gt 0 ] && echo "⚠ pushing ${wip} WIP/fixup commit(s) — consider squashing first." >&2
+  return 0
+}
+_devhooks_release() {
+  local area="${1:-frontend}" pkg last_tag last_ver bump newver
+  if [ "$area" != "frontend" ]; then
+    echo "Only 'frontend' is supported here. Docs (kelt-docs) publish automatically on push; NF/northbound images live in separate repos."
+    return 1
+  fi
+  pkg="$(_devhooks_fe_version || true)"; last_tag="$(_devhooks_fe_last_tag || true)"; last_ver="${last_tag#dashboard-frontend-v}"
+  [ -n "$pkg" ] || { echo "Cannot read dashboard/frontend/package.json version."; return 1; }
+
+  if [ -n "$last_tag" ] && [ "$pkg" = "$last_ver" ]; then
+    echo "frontend is at v$pkg (= last published). Pick a bump:" >&2
+    bump="$(gum_choose_or_cancel "patch" "minor" "major")"
+    [ -z "$bump" ] && { echo "Cancelled."; return 0; }
+    newver="$(_devhooks_bump "$pkg" "$bump")"
+    echo "Plan: bump package.json $pkg -> $newver, commit, tag dashboard-frontend-v$newver."
+    gum_confirm "Proceed?" || { echo "Cancelled."; return 0; }
+    _devhooks_set_fe_version "$newver"
+    git -C "$SCRIPT_DIR" add dashboard/frontend/package.json
+    git -C "$SCRIPT_DIR" commit -m "chore(frontend): release v$newver"
+    git -C "$SCRIPT_DIR" tag "dashboard-frontend-v$newver"
+  else
+    newver="$pkg"
+    echo "frontend package.json is v$pkg, not yet tagged. Plan: tag dashboard-frontend-v$pkg on HEAD."
+    gum_confirm "Proceed?" || { echo "Cancelled."; return 0; }
+    git -C "$SCRIPT_DIR" tag "dashboard-frontend-v$newver"
+  fi
+
+  if gum_confirm "Push commit (if any) + tag dashboard-frontend-v$newver now?"; then
+    git -C "$SCRIPT_DIR" push
+    git -C "$SCRIPT_DIR" push origin "dashboard-frontend-v$newver"
+    echo "Pushed. CI builds ghcr.io/jacobbista/dashboard-frontend:$newver and :latest."
+  else
+    echo "Tag created locally. Push when ready:  git push && git push origin dashboard-frontend-v$newver"
+  fi
+}
+
+do_dev_hooks() {
+  case "${1:-status}" in
+    on|install)   _devhooks_install ;;
+    off|uninstall) _devhooks_uninstall ;;
+    status)       _devhooks_status ;;
+    check)        _devhooks_check "${2:-}" ;;
+    release)      _devhooks_release "${2:-frontend}" ;;
+    *) echo "Usage: $0 dev-hooks {on|off|status|release [frontend]}"; return 1 ;;
+  esac
 }
 
 print_help() {
@@ -1491,6 +1691,8 @@ CONFIGURE
     set-profile <laptop|server>  Resource profile
     edge <on|off>                Toggle edge VM
     ran <nic|disable>            Physical RAN bridge
+    northbound <on|off>          Toggle the positioning/CAMARA feature (phases
+                                 10-12 + placement-editor) in one command
 
 EXTERNAL ACCESS
     auth-network [subcmd]        Subcmds:
@@ -1517,6 +1719,13 @@ STATUS & TEST
                                  Keycloak) — external if set, else LAN NodePort
     env                          Print 'export' lines for shell eval
     tests [suite...]             Run test suites (interactive picker if none)
+
+DEVELOPER
+    dev-hooks {on|off|status}    Opt-in local git hooks (developer-only):
+                                 pre-commit secret scan (gitleaks), commit-msg
+                                 Conventional Commits check, pre-push advisory
+                                 reminders. See docs/development/contributing.md.
+    dev-hooks release [frontend] Tag + publish a new frontend version (confirmed).
 
 HELP
     help, -h, --help             Show this page
@@ -1546,6 +1755,11 @@ main() {
       do_edge "${2:-}" ;;
     ran)
       do_ran "${2:-}" ;;
+    northbound)
+      do_set_northbound "${2:-}" ;;
+    dev-hooks)
+      shift
+      do_dev_hooks "$@" ;;
     iam-admin-password)
       do_iam_admin_password "${2:-}" ;;
     iam)
@@ -1575,8 +1789,10 @@ main() {
       echo "export DEPLOY_MODE=${DEPLOY_MODE}"
       echo "export PHYSICAL_RAN_ENABLED=${PHYSICAL_RAN_ENABLED}"
       echo "export PHYSICAL_RAN_BRIDGE=${PHYSICAL_RAN_BRIDGE}"
+      echo "export NORTHBOUND_ENABLED=${NORTHBOUND_ENABLED}"
       echo "export DASHBOARD_DEV_ENABLED=${DASHBOARD_DEV_ENABLED}"
       echo "export DASHBOARD_AUTH_ENABLED=${DASHBOARD_AUTH_ENABLED}"
+      echo "export EXTERNAL_BASE_DOMAIN=${EXTERNAL_BASE_DOMAIN}"
       echo "export KEYCLOAK_PATH_PREFIX=${KEYCLOAK_PATH_PREFIX}"
       echo "export DASHBOARD_KEYCLOAK_EXTERNAL_URL=${DASHBOARD_KEYCLOAK_EXTERNAL_URL}"
       echo "export DASHBOARD_KEYCLOAK_PATH_PREFIX=${DASHBOARD_KEYCLOAK_PATH_PREFIX}"

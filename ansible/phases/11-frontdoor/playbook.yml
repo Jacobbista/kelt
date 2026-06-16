@@ -1,0 +1,23 @@
+---
+# PHASE 11: Front-door (single-origin edge)
+#
+# An in-cluster nginx that routes <subdomain>.<base> by Host header to each
+# service (dashboard, CAMARA gateway, positioning demo, placement-editor gate,
+# dev). A single Cloudflare wildcard tunnel (*.<base>) and one Access app then
+# front every surface, instead of one tunnel route + Access app per service.
+#
+# Core phase, but a no-op unless external_base_domain (all.yml) is set: with no
+# base the testbed uses per-service LAN NodePorts and needs no front-door. Runs
+# last so every enabled upstream already exists; northbound routes are emitted
+# only for enabled services. See docs/security/external-access.md.
+
+- name: "PHASE 11 | Front-door (single-origin edge)"
+  hosts: masters
+  become: true
+  tags:
+    - phase11
+    - frontdoor
+  roles:
+    - role: roles/frontdoor
+      when: external_base_domain | default('') | length > 0
+      tags: [frontdoor]

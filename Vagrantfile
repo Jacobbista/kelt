@@ -54,6 +54,9 @@ Vagrant.configure("2") do |config|
   dashboard_keycloak_path_prefix = ENV['DASHBOARD_KEYCLOAK_PATH_PREFIX'] || ''
   dashboard_external_origin = ENV['DASHBOARD_EXTERNAL_ORIGIN'] || ''
   positioning_demo_external_origin = ENV['POSITIONING_DEMO_EXTERNAL_ORIGIN'] || ''
+  # Northbound positioning/CAMARA feature. all.yml derives camara/positioning/
+  # demo/placement_editor _enabled from this single env var (see group_vars/all.yml).
+  northbound_enabled = ENV['NORTHBOUND_ENABLED'] || 'false'
   keycloak_admin_password = ENV['KEYCLOAK_ADMIN_PASSWORD'] || ''
   camara_client_secret = ENV['CAMARA_CLIENT_SECRET'] || ''
   dashboard_readonly_secret = ENV['DASHBOARD_READONLY_SECRET'] || ''
@@ -369,6 +372,7 @@ INVENTORY
         "DEPLOY_MODE" => deploy_mode,
         "PHYSICAL_RAN_ENABLED" => physical_ran_enabled.to_s,
         "EDGE_ENABLED" => edge_enabled.to_s,
+        "NORTHBOUND_ENABLED" => northbound_enabled,
         "DASHBOARD_AUTH_ENABLED" => dashboard_auth_enabled,
         "KEYCLOAK_PATH_PREFIX" => keycloak_path_prefix,
         "DASHBOARD_KEYCLOAK_EXTERNAL_URL" => dashboard_keycloak_external_url,

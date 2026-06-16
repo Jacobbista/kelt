@@ -1,0 +1,97 @@
+---
+# FRONT-DOOR SETUP
+# In-cluster nginx that routes <subdomain>.<base> by Host to each service, so a
+# single Cloudflare wildcard tunnel + one Access app front every surface. Only
+# runs when a base domain is configured. See docs/security/external-access.md.
+
+- name: Ensure frontdoor namespace exists
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Namespace
+    state: present
+    definition:
+      metadata:
+        name: "{{ frontdoor_namespace }}"
+        labels:
+          name: "{{ frontdoor_namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply front-door nginx ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    force: true
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/frontdoor-configmap.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+# Co-brand ConfigMap (org logo/name under KELT) is owned by the dashboard, so only
+# SEED it when absent — a phase re-run must never clobber a dashboard-set brand.
+- name: Check whether the front-door brand ConfigMap exists
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ConfigMap
+    name: frontdoor-brand
+    namespace: "{{ frontdoor_namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: frontdoor_brand_cm
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Seed the front-door brand ConfigMap (empty = KELT only)
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/frontdoor-brand-cm.yaml.j2') | from_yaml }}"
+  when: frontdoor_brand_cm.resources | length == 0
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy front-door Deployment
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    force: true
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/frontdoor-deployment.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy front-door Service
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/frontdoor-service.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Wait for front-door to be ready
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: frontdoor
+    namespace: "{{ frontdoor_namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: frontdoor_deploy
+  retries: 12
+  delay: 5
+  until: >-
+    frontdoor_deploy.resources | length > 0 and
+    frontdoor_deploy.resources[0].status.availableReplicas | default(0) >= 1
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Display front-door route map
+  debug:
+    msg:
+      - "Front-door listening on NodePort {{ frontdoor_nodeport }} (point the Cloudflare wildcard *.{{ external_base_domain }} here)"
+      - "{{ external_scheme }}://{{ dashboard_subdomain }}.{{ external_base_domain }}  -> dashboard (also /auth /api /docs)"
+      - "{{ (external_scheme ~ '://' ~ camara_subdomain ~ '.' ~ external_base_domain ~ '  -> CAMARA gateway') if (camara_enabled | default(false) | bool) else 'api: (camara disabled)' }}"
+      - "{{ (external_scheme ~ '://' ~ positioning_demo_subdomain ~ '.' ~ external_base_domain ~ '  -> positioning demo') if (positioning_demo_enabled | default(false) | bool) else 'demo: (disabled)' }}"
+      - "{{ (external_scheme ~ '://' ~ placement_editor_subdomain ~ '.' ~ external_base_domain ~ '  -> placement editor (gated)') if (placement_editor_enabled | default(false) | bool) else 'placement: (disabled)' }}"
+      - "{{ (external_scheme ~ '://' ~ dashboard_dev_subdomain ~ '.' ~ external_base_domain ~ '  -> dev (Vite on ansible VM)') if (frontdoor_dev_enabled | default(false) | bool) else 'dev: (disabled)' }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true

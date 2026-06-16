@@ -1,0 +1,218 @@
+{#
+  Front-door nginx config. One server block per public subdomain, routed by Host
+  to the matching in-cluster Service. Cloudflare terminates TLS and forwards a
+  single wildcard *.{{ external_base_domain }} to this NodePort over HTTP, so all
+  surfaces share one tunnel route and one Access app. See
+  docs/security/external-access.md.
+
+  Upstreams are resolved at request time via the cluster DNS resolver and a
+  variable proxy_pass, so a disabled-or-not-yet-deployed service yields a 502
+  rather than crashing nginx at startup. Northbound server blocks are emitted
+  only when their feature flag is on.
+#}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frontdoor-nginx
+  namespace: {{ frontdoor_namespace }}
+data:
+  nginx.conf: |
+    worker_processes auto;
+    events { worker_connections 1024; }
+    http {
+      access_log /dev/stdout;
+      error_log  /dev/stderr warn;
+
+      # Cluster DNS for runtime upstream resolution (variable proxy_pass below).
+      resolver {{ cluster_dns_ip }} valid=10s ipv6=off;
+
+      # WebSocket upgrade (Vite HMR on the dev surface, live log streams).
+      map $http_upgrade $connection_upgrade { default upgrade; '' close; }
+
+      proxy_http_version 1.1;
+      proxy_set_header Host              $host;
+      proxy_set_header X-Real-IP         $remote_addr;
+      proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto {{ external_scheme }};
+      proxy_set_header X-Forwarded-Host  $host;
+      proxy_set_header Upgrade           $http_upgrade;
+      proxy_set_header Connection        $connection_upgrade;
+
+      # OIDC cookies/tokens are large; keep generous header buffers.
+      proxy_buffer_size          16k;
+      proxy_buffers           4  16k;
+      large_client_header_buffers 4 16k;
+      client_max_body_size       25m;
+
+      # Unknown / wrong Host (a mistyped subdomain, or the apex): serve the public
+      # service directory so an operator who does not know what is deployed — or
+      # picked the wrong route — can discover and reach each surface. Pre-auth: it
+      # only lists names + links; each service enforces its own Keycloak gate.
+      server {
+        listen 80 default_server;
+        root /usr/share/nginx/html;
+        # Exact match wins, so the co-brand JSON is served as itself; everything
+        # else falls back to the welcome page.
+        location = /brand.json { default_type application/json; }
+        location / { default_type text/html; try_files /index.html =404; }
+      }
+
+      # kelt.<base> -> dashboard frontend (serves /, and reverse-proxies
+      # /auth /api /docs internally, so this one route covers Keycloak too).
+      server {
+        listen 80;
+        server_name {{ dashboard_subdomain }}.{{ external_base_domain }};
+        location / {
+          set $up http://dashboard-frontend.{{ frontdoor_dashboard_namespace }}.svc.cluster.local:{{ frontdoor_dashboard_port }};
+          proxy_pass $up;
+        }
+      }
+{% if camara_enabled | default(false) | bool %}
+
+      # api.<base> -> CAMARA Location API gateway (M2M; Access Bypass at the edge).
+      server {
+        listen 80;
+        server_name {{ camara_subdomain }}.{{ external_base_domain }};
+        location / {
+          set $up http://camara-gateway.{{ frontdoor_camara_namespace }}.svc.cluster.local:{{ frontdoor_camara_port }};
+          proxy_pass $up;
+        }
+      }
+{% endif %}
+{% if positioning_demo_enabled | default(false) | bool %}
+
+      # demo.<base> -> positioning demo SPA.
+      server {
+        listen 80;
+        server_name {{ positioning_demo_subdomain }}.{{ external_base_domain }};
+        location / {
+          set $up http://positioning-demo.{{ frontdoor_demo_namespace }}.svc.cluster.local:{{ frontdoor_demo_port }};
+          proxy_pass $up;
+        }
+      }
+{% endif %}
+{% if placement_editor_enabled | default(false) | bool %}
+
+      # placement.<base> -> oauth2-proxy gate -> placement-editor (Keycloak login).
+      server {
+        listen 80;
+        server_name {{ placement_editor_subdomain }}.{{ external_base_domain }};
+        location / {
+          set $up http://oauth2-proxy-placement.{{ frontdoor_placement_namespace }}.svc.cluster.local:{{ frontdoor_placement_port }};
+          proxy_pass $up;
+        }
+      }
+{% endif %}
+{% if frontdoor_dev_enabled | default(false) | bool %}
+
+      # dev.<base> -> Vite dev server on the ansible VM (off-cluster upstream).
+      # Literal IP, so no DNS resolution; HMR rides the WebSocket upgrade above.
+      server {
+        listen 80;
+        server_name {{ dashboard_dev_subdomain }}.{{ external_base_domain }};
+        location / {
+          proxy_pass http://{{ frontdoor_dev_upstream }};
+        }
+      }
+{% endif %}
+    }
+  # Public, branded welcome page served on the default (unknown-host) server.
+  # Built from the same subdomain map + feature flags that drive the routing
+  # above, so it never drifts. Brand (name, tagline, accent) is overridable via
+  # the frontdoor_brand_* vars. Each link lands on a service that enforces its
+  # own Keycloak gate; this page only lists names + links (pre-auth).
+  index.html: |
+    <!doctype html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <title>{{ frontdoor_brand_title }} · Services</title>
+      <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cg fill='none' stroke-linecap='round'%3E%3Cpath d='M21 58 C15 50 27 43 21 35 C15 28 25 21 21 14' stroke='%2314b8a6' stroke-width='4'/%3E%3Cpath d='M32 58 C26 49 38 41 32 33 C26 25 38 17 32 8' stroke='%230d9488' stroke-width='4'/%3E%3Cpath d='M43 58 C49 50 37 43 43 35 C49 28 39 22 43 16' stroke='%2314b8a6' stroke-width='4'/%3E%3C/g%3E%3Cg fill='%23f59e0b'%3E%3Ccircle cx='32' cy='8' r='2.8'/%3E%3Ccircle cx='21' cy='14' r='2.6'/%3E%3Ccircle cx='43' cy='16' r='2.6'/%3E%3C/g%3E%3C/svg%3E" />
+      <style>
+        :root { color-scheme: dark; --accent: {{ frontdoor_brand_accent }}; }
+        * { box-sizing: border-box; }
+        body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+               background: radial-gradient(1200px 600px at 50% -10%, #0d2b2a 0%, #0b1120 55%); color: #e2e8f0;
+               font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; }
+        main { width: 100%; max-width: 680px; padding: 2.5rem 1.25rem; }
+        header { text-align: center; margin-bottom: 2rem; }
+        .mark { width: 68px; height: 68px; margin: 0 auto .75rem; display: block; }
+        h1 { font-size: 2rem; letter-spacing: .04em; margin: 0; }
+        h1 .acc { color: var(--accent); }
+        p.sub { margin: .4rem 0 0; color: #94a3b8; font-size: .95rem; }
+        a.card { display: flex; align-items: center; gap: .9rem; text-decoration: none;
+                 border: 1px solid #1e293b; background: rgba(15,23,42,.7); border-radius: .7rem;
+                 padding: .95rem 1.1rem; margin-bottom: .7rem; transition: transform .12s, background .15s, border-color .15s; }
+        a.card:hover { background: #131c30; border-color: var(--accent); transform: translateY(-1px); }
+        .dot { width: .55rem; height: .55rem; border-radius: 50%; background: var(--accent); flex: none; box-shadow: 0 0 10px var(--accent); }
+        .body { display: flex; flex-direction: column; }
+        .name { color: #f1f5f9; font-weight: 600; }
+        .host { color: #5eead4; font-family: ui-monospace, monospace; font-size: .78rem; }
+        .desc { color: #94a3b8; font-size: .8rem; margin-left: auto; text-align: right; }
+        footer { margin-top: 1.5rem; text-align: center; color: #64748b; font-size: .75rem; }
+        footer .lock { color: var(--accent); }
+      </style>
+    </head>
+    <body>
+      <main>
+        <header>
+          <svg class="mark" viewBox="0 0 64 64" aria-hidden="true">
+            <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M16 58 Q32 63 48 58" stroke="#0f766e" stroke-width="3"/>
+              <path d="M21 58 C15 50 27 43 21 35 C15 28 25 21 21 14" stroke="#14b8a6" stroke-width="4"/>
+              <path d="M32 58 C26 49 38 41 32 33 C26 25 38 17 32 8" stroke="#0d9488" stroke-width="4"/>
+              <path d="M43 58 C49 50 37 43 43 35 C49 28 39 22 43 16" stroke="#14b8a6" stroke-width="4"/>
+            </g>
+            <g fill="#f59e0b">
+              <circle cx="21" cy="14" r="2.6"/><circle cx="32" cy="8" r="2.8"/>
+              <circle cx="43" cy="16" r="2.6"/><circle cx="33.5" cy="33" r="2.2"/>
+            </g>
+          </svg>
+          <h1>{{ frontdoor_brand_title | upper }}</h1>
+          <p class="sub">{{ frontdoor_brand_tagline }}</p>
+          <!-- Optional co-brand of the org/team/centre running this instance,
+               configured from the dashboard (writes /brand.json). KELT stays the
+               primary mark; the org appears under it. Empty by default. -->
+          <div id="cobrand" style="margin-top:1rem;min-height:1px"></div>
+        </header>
+        <a class="card" href="{{ external_scheme }}://{{ dashboard_subdomain }}.{{ external_base_domain }}/">
+          <span class="dot"></span><span class="body"><span class="name">Dashboard</span><span class="host">{{ dashboard_subdomain }}.{{ external_base_domain }}</span></span>
+          <span class="desc">control room</span>
+        </a>
+{% if positioning_demo_enabled | default(false) | bool %}
+        <a class="card" href="{{ external_scheme }}://{{ positioning_demo_subdomain }}.{{ external_base_domain }}/">
+          <span class="dot"></span><span class="body"><span class="name">Positioning Demo</span><span class="host">{{ positioning_demo_subdomain }}.{{ external_base_domain }}</span></span>
+          <span class="desc">live 3D map</span>
+        </a>
+{% endif %}
+{% if placement_editor_enabled | default(false) | bool %}
+        <a class="card" href="{{ external_scheme }}://{{ placement_editor_subdomain }}.{{ external_base_domain }}/">
+          <span class="dot"></span><span class="body"><span class="name">Placement Editor</span><span class="host">{{ placement_editor_subdomain }}.{{ external_base_domain }}</span></span>
+          <span class="desc">room geometry</span>
+        </a>
+{% endif %}
+{% if camara_enabled | default(false) | bool %}
+        <a class="card" href="{{ external_scheme }}://{{ camara_subdomain }}.{{ external_base_domain }}/docs">
+          <span class="dot"></span><span class="body"><span class="name">CAMARA Location API</span><span class="host">{{ camara_subdomain }}.{{ external_base_domain }}</span></span>
+          <span class="desc">OpenAPI docs</span>
+        </a>
+{% endif %}
+        <footer><span class="lock">&#128274;</span> Each service prompts for login on entry.</footer>
+      </main>
+      <script>
+        // Co-brand from the dashboard-managed /brand.json (org name + logo +
+        // optional accent). Absent/empty -> KELT only. Kept tiny and dependency-free.
+        fetch('/brand.json', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (b) {
+          if (!b || (!b.org_name && !b.org_logo)) return;
+          if (b.accent) document.documentElement.style.setProperty('--accent', b.accent);
+          var el = document.getElementById('cobrand');
+          var logo = b.org_logo ? '<img src="' + b.org_logo + '" alt="" style="height:34px;max-width:180px;object-fit:contain;vertical-align:middle" />' : '';
+          var name = b.org_name ? '<span style="color:#94a3b8;font-size:.85rem">' + b.org_name + '</span>' : '';
+          el.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;gap:.6rem">'
+            + '<span style="color:#64748b;font-size:.7rem;text-transform:uppercase;letter-spacing:.08em">deployed by</span>'
+            + logo + name + '</div>';
+        }).catch(function () {});
+      </script>
+    </body>
+    </html>

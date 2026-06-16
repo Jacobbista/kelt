@@ -1,0 +1,15 @@
+{#
+  Co-brand config for the welcome page, served at /brand.json. KELT is the baked
+  primary brand; this carries the org/team/centre that co-brands under it. Owned
+  by the dashboard (admin Branding page writes it), so ansible only SEEDS it once
+  and never force-overwrites — a dashboard-set brand survives phase re-runs.
+  Empty object = KELT only. Schema: { org_name, org_logo (URL or data-URI), accent }.
+#}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frontdoor-brand
+  namespace: {{ frontdoor_namespace }}
+data:
+  brand.json: |
+    {}

@@ -513,33 +513,26 @@
     - dashboard
     - ui
 
-- name: "PHASE 10: CAMARA Gateway"
-  import_playbook: 10-camara/playbook.yml
+- name: "PHASE 10: Northbound (CAMARA + Positioning)"
+  import_playbook: 10-northbound/playbook.yml
   vars:
-    phase_name: "CAMARA Gateway"
+    phase_name: "Northbound (CAMARA + Positioning)"
     phase_number: 10
   tags:
     - phase10
+    - northbound
     - camara
+    - positioning
+    - mec
 
-- name: "PHASE 11: Positioning Engine"
-  import_playbook: 11-positioning/playbook.yml
+- name: "PHASE 11: Front-door (single-origin edge)"
+  import_playbook: 11-frontdoor/playbook.yml
   vars:
-    phase_name: "Positioning Engine"
+    phase_name: "Front-door (single-origin edge)"
     phase_number: 11
   tags:
     - phase11
-    - positioning
-
-- name: "PHASE 12: Positioning Demo"
-  import_playbook: 12-positioning-demo/playbook.yml
-  vars:
-    phase_name: "Positioning Demo"
-    phase_number: 12
-  tags:
-    - phase12
-    - positioning-demo
-    - mec
+    - frontdoor
 
 - name: "🎉 DEPLOYMENT COMPLETED SUCCESSFULLY"
   hosts: localhost

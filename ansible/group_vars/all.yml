@@ -122,11 +122,37 @@ n6c_vni: 107
 # UERANSIM (simulated RAN, phase 6): set true to deploy gNB/UE. DEPLOY_MODE=full
 # and `testbed run-phase 06-ueransim-mec` set this automatically.
 ueransim_enabled: false
-# CAMARA/positioning/demo phase structure is being reworked in the 5g-northbound
-# repo; the showcase default-on decision is deferred (see docs/gaps.md).
-camara_enabled: false
-positioning_enabled: false
-positioning_demo_enabled: false
+# Northbound positioning/CAMARA stack (phases 10-12 + placement-editor). Opt-in,
+# off by default. `testbed northbound on` writes NORTHBOUND_ENABLED=true to
+# .testbed.env, which turns the whole path on in one command; each sub-flag can
+# still be overridden individually by its own env var. The env is visible both on
+# `vagrant up` (exported by the Vagrantfile) and on `run-phase` (sources .testbed.env).
+camara_enabled: "{{ (lookup('ansible.builtin.env', 'CAMARA_ENABLED') or lookup('ansible.builtin.env', 'NORTHBOUND_ENABLED') or 'false') | bool }}"
+positioning_enabled: "{{ (lookup('ansible.builtin.env', 'POSITIONING_ENABLED') or lookup('ansible.builtin.env', 'NORTHBOUND_ENABLED') or 'false') | bool }}"
+positioning_demo_enabled: "{{ (lookup('ansible.builtin.env', 'POSITIONING_DEMO_ENABLED') or lookup('ansible.builtin.env', 'NORTHBOUND_ENABLED') or 'false') | bool }}"
+# placement-editor (room-geometry authoring UI) follows the positioning toggle.
+placement_editor_enabled: "{{ (lookup('ansible.builtin.env', 'PLACEMENT_EDITOR_ENABLED') or lookup('ansible.builtin.env', 'NORTHBOUND_ENABLED') or 'false') | bool }}"
+
+# ── External access (single base domain) ─────────────────────────────────────
+# One operator-set base domain fronts every HTTP surface as <subdomain>.<base>,
+# routed by the in-cluster front-door (phase 09) behind a single Cloudflare
+# wildcard (*.<base>). Leave EXTERNAL_BASE_DOMAIN empty to fall back to per-service
+# LAN NodePorts (no external exposure). Each service has a default subdomain below
+# and an individual *_external_origin override (env) that still wins, for one-offs
+# or staged migration. See docs/security/external-access.md.
+external_base_domain: "{{ lookup('ansible.builtin.env', 'EXTERNAL_BASE_DOMAIN') | default('', true) }}"
+external_scheme: "{{ lookup('ansible.builtin.env', 'EXTERNAL_SCHEME') | default('https', true) }}"
+# Per-service subdomains (overridable). The front-door routing, the realm redirect
+# URIs/web origins, and the dashboard public-link derivation all read these so the
+# subdomain of a surface is defined in exactly one place.
+dashboard_subdomain: "{{ lookup('ansible.builtin.env', 'DASHBOARD_SUBDOMAIN') | default('kelt', true) }}"
+dashboard_dev_subdomain: "{{ lookup('ansible.builtin.env', 'DASHBOARD_DEV_SUBDOMAIN') | default('dev', true) }}"
+camara_subdomain: "{{ lookup('ansible.builtin.env', 'CAMARA_SUBDOMAIN') | default('api', true) }}"
+positioning_demo_subdomain: "{{ lookup('ansible.builtin.env', 'POSITIONING_DEMO_SUBDOMAIN') | default('demo', true) }}"
+placement_editor_subdomain: "{{ lookup('ansible.builtin.env', 'PLACEMENT_EDITOR_SUBDOMAIN') | default('placement', true) }}"
+# NodePort the in-cluster front-door (phase 09) listens on; the Cloudflare wildcard
+# tunnel points *.<base> here. Front-door routes by Host to each service.
+frontdoor_nodeport: 31500
 
 # Physical RAN Integration (for femtocell/small cell connectivity)
 # See docs/deployment/physical-ran.md for details
