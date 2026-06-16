@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: positioning-blueprint-seed
+  namespace: {{ positioning_namespace }}
+data:
+  # Cold-start seed for the engine's blueprint store. The engine (authority) reads
+  # this once via BLUEPRINT_SEED_PATH only when its blueprint PVC is empty, then
+  # serves/persists the blueprint itself; the placement-editor PUTs a richer
+  # authored blueprint at runtime. So this is the out-of-box default room +
+  # gps_origin, not a live-read floor-plan. The seed must match the v0.5.0 blueprint
+  # schema (upstream docs/blueprint-vs-bindings.md); see docs/architecture/positioning-adapters.md.
+  blueprint.json: |
+{{ lookup('template', role_path + '/templates/blueprint-seed.json.j2', convert_data=False) | indent(4, True) }}

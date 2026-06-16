@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "gps_origin": { "latitude": {{ floor_plan_gps_lat }}, "longitude": {{ floor_plan_gps_lon }}, "azimuth_deg": {{ floor_plan_gps_azimuth }} },
+  "floors": [
+    {
+      "id": 0,
+      "label": "Ground Floor",
+      "width_m": {{ floor_width_m }},
+      "depth_m": {{ floor_depth_m }},
+      "height_m": {{ floor_height_m }},
+      "walls": [
+        {"x": 0,                    "z": 0,                    "w": {{ floor_width_m }}, "d": 0.2, "h": {{ floor_height_m }}},
+        {"x": 0,                    "z": {{ floor_depth_m }},  "w": {{ floor_width_m }}, "d": 0.2, "h": {{ floor_height_m }}},
+        {"x": 0,                    "z": 0,                    "w": 0.2, "d": {{ floor_depth_m }}, "h": {{ floor_height_m }}},
+        {"x": {{ floor_width_m }},  "z": 0,                    "w": 0.2, "d": {{ floor_depth_m }}, "h": {{ floor_height_m }}}
+      ]
+    }
+  ]
+}

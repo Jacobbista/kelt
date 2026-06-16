@@ -1,0 +1,18 @@
+---
+# placement-editor: room-geometry authoring UI. A pure write-client that PUTs the
+# authored blueprint to the engine (the authority) over HTTP; it mounts no PVC. It
+# is ALWAYS fronted by the frontdoor_gate (it has no native auth, so the Keycloak
+# gate is mandatory, not optional). See the phase README and docs/security/external-access.md.
+placement_editor_enabled: "{{ lookup('ansible.builtin.env', 'PLACEMENT_EDITOR_ENABLED') | default(lookup('ansible.builtin.env', 'NORTHBOUND_ENABLED') or 'false', true) | bool }}"
+positioning_namespace: positioning
+placement_editor_image: "ghcr.io/jacobbista/5g-northbound/placement-editor:0.6.0"
+
+# ── front-door gate parameters (passed to the frontdoor_gate role) ───────────
+# Must match the placement-editor-proxy confidential client in phase 08.
+placement_gate_nodeport: 31950
+placement_editor_proxy_secret: "{{ lookup('ansible.builtin.env', 'PLACEMENT_EDITOR_PROXY_SECRET') | default('changeme-placement', true) }}"
+# Browser-facing origin the gate redirects back to (redirect URI base). Derives
+# <scheme>://<placement>.<base> when external_base_domain (all.yml) is set, else
+# the LAN NodePort, identical to the phase 08 derivation so the realm redirectUris
+# match. Env override wins.
+placement_editor_external_origin: "{{ lookup('ansible.builtin.env', 'PLACEMENT_EDITOR_EXTERNAL_ORIGIN') | default( ((external_scheme ~ '://' ~ placement_editor_subdomain ~ '.' ~ external_base_domain) if external_base_domain else ('http://' ~ hostvars[groups['workers'][0]]['ansible_host'] ~ ':' ~ placement_gate_nodeport)), true) }}"

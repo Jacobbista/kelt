@@ -1,0 +1,37 @@
+---
+# Generic Keycloak front-door gate (oauth2-proxy). A caller role/playbook includes
+# this role with the gate_* vars set for the service it protects. It gives any
+# no-auth UI a Layer-2 Keycloak login + group authorization. The browser is sent
+# to the canonical issuer; the proxy redeems tokens and fetches JWKS in-cluster
+# (dual-URL split), so the same config works local or behind a tunnel.
+# See docs/security/external-access.md.
+
+oauth2_proxy_image: "quay.io/oauth2-proxy/oauth2-proxy:v7.6.0"
+
+# Keycloak coordinates (kept consistent with phases 08/09/12).
+iam_namespace: iam
+keycloak_realm: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_REALM') | default('5g-testbed', true) }}"
+# Defaults to /auth under the single-origin model (base set), empty in LAN mode,
+# matching phases 08/09. Env override wins.
+keycloak_path_prefix: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_PATH_PREFIX') | default(('/auth' if external_base_domain else ''), true) }}"
+# Canonical origin Keycloak is fronted on (KC_HOSTNAME); the same value the
+# dashboard and demo use, so login behaves identically in both deploy modes.
+# Derives <scheme>://<kelt>.<base> when external_base_domain (all.yml) is set,
+# else the LAN NodePort, identical to the phase 08 derivation. Env override wins.
+dashboard_external_origin: "{{ lookup('ansible.builtin.env', 'DASHBOARD_EXTERNAL_ORIGIN') | default( ((external_scheme ~ '://' ~ dashboard_subdomain ~ '.' ~ external_base_domain) if external_base_domain else ('http://' ~ hostvars[groups['workers'][0]]['ansible_host'] ~ ':31573')), true) }}"
+
+# ── gate_* : per-instance parameters (the caller overrides these per service) ──
+gate_name: "gate"                         # resource suffix -> oauth2-proxy-<name>
+gate_namespace: "default"
+gate_upstream: ""                         # http://<service>.<ns>.svc.cluster.local:<port>
+gate_client_id: ""                        # confidential realm client (phase 08)
+gate_client_secret: "changeme"
+gate_allowed_groups: []                   # full-path groups, e.g. ["/g-dashboard-admins"]
+gate_nodeport: 31950
+gate_external_origin: ""                  # browser-facing origin (redirect URI base)
+gate_image: "{{ oauth2_proxy_image }}"
+# Cookie secret must be 16, 24, or 32 bytes. Override for non-lab deploys.
+gate_cookie_secret: "{{ lookup('ansible.builtin.env', 'OAUTH2_PROXY_COOKIE_SECRET') | default('changeme-cookie-secret-32bytes!!', true) }}"
+# Canonical issuer (browser + `iss` validation) and in-cluster issuer (server-side).
+gate_issuer_url: "{{ dashboard_external_origin }}{{ keycloak_path_prefix }}/realms/{{ keycloak_realm }}"
+gate_internal_issuer_url: "http://keycloak.{{ iam_namespace }}.svc.cluster.local:8080{{ keycloak_path_prefix }}/realms/{{ keycloak_realm }}"

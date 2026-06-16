@@ -1,0 +1,50 @@
+---
+# placement-editor (geometry authoring UI). A pure write-client: it PUTs the
+# authored blueprint to the engine (the authority) over HTTP, then the mandatory
+# Keycloak front-door gate (the SPA has no native auth). No blueprint PVC here
+# (the engine owns it). The whole role is gated by placement_editor_enabled in the
+# phase playbook. See docs/architecture/positioning-adapters.md and docs/security/external-access.md.
+
+- name: Pre-pull placement-editor image on worker
+  command: >
+    k3s ctr -n k8s.io images pull {{ placement_editor_image }}
+  delegate_to: "{{ groups['workers'][0] }}"
+  run_once: true
+  changed_when: false
+  register: prepull_placement
+  failed_when: prepull_placement.rc != 0 and 'already exists' not in (prepull_placement.stderr | default(''))
+
+- name: Deploy placement-editor Deployment
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    force: true
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/placement-editor-deployment.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy placement-editor Service
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/placement-editor-service.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+# Mandatory Keycloak gate in front of the editor (no native auth). The generic
+# frontdoor_gate role does the OIDC login + group authorization.
+- name: Gate placement-editor behind oauth2-proxy (Keycloak)
+  ansible.builtin.include_role:
+    name: frontdoor_gate
+  vars:
+    gate_name: placement
+    gate_namespace: "{{ positioning_namespace }}"
+    gate_upstream: "http://placement-editor.{{ positioning_namespace }}.svc.cluster.local:8080"
+    gate_client_id: placement-editor-proxy
+    gate_client_secret: "{{ placement_editor_proxy_secret }}"
+    gate_allowed_groups:
+      - /g-positioning-editors
+      - /g-dashboard-admins
+    gate_nodeport: "{{ placement_gate_nodeport }}"
+    gate_external_origin: "{{ placement_editor_external_origin }}"

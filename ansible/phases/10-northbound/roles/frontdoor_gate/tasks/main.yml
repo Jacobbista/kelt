@@ -1,0 +1,42 @@
+---
+# Generic Keycloak front-door gate. Included by a caller role/playbook with the
+# gate_* vars set; deploys one oauth2-proxy (Secret + Deployment + NodePort
+# Service) in front of a no-auth upstream. See docs/security/external-access.md.
+
+- name: "Pre-pull oauth2-proxy image on worker ({{ gate_name }} gate)"
+  command: >
+    k3s ctr -n k8s.io images pull {{ gate_image }}
+  delegate_to: "{{ groups['workers'][0] }}"
+  run_once: true
+  changed_when: false
+  register: prepull_gate
+  failed_when: prepull_gate.rc != 0 and 'already exists' not in (prepull_gate.stderr | default(''))
+
+- name: "Deploy oauth2-proxy Secret ({{ gate_name }} gate)"
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    force: true
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/oauth2-proxy-secret.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  no_log: true
+
+- name: "Deploy oauth2-proxy Deployment ({{ gate_name }} gate)"
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    force: true
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/oauth2-proxy-deployment.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: "Deploy oauth2-proxy Service ({{ gate_name }} gate)"
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/oauth2-proxy-service.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true

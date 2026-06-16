@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: placement-editor
+  namespace: {{ positioning_namespace }}
+  labels:
+    app: placement-editor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: placement-editor
+  template:
+    metadata:
+      labels:
+        app: placement-editor
+    spec:
+      # Pinned to the worker for image-prepull locality; no PVC dependency anymore
+      # (the editor is a pure write-client to the engine over HTTP).
+      nodeSelector:
+        kubernetes.io/hostname: worker
+      terminationGracePeriodSeconds: 15
+      containers:
+        - name: placement-editor
+          image: {{ placement_editor_image }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+          # Single config mechanism: ConfigMap (upstreams, layout) + Secret
+          # (VITE_MAPBOX_TOKEN) via envFrom, both optional for degraded boot. The
+          # image entrypoint re-renders window.__ENV__ from these on restart. The
+          # dashboard guided setup writes them by the contract's `sensitive` flag.
+          envFrom:
+            - configMapRef:
+                name: placement-editor-config
+                optional: true
+            - secretRef:
+                name: placement-editor-secrets
+                optional: true
+          # v0.5.0 write-client model: the editor PUTs the authored blueprint to
+          # the engine (the authority); no PVC, no LAYOUT_FILE. See the upstream
+          # blueprint model (docs/blueprint-vs-bindings.md, 5g-northbound).
+          env:
+            - name: POSITIONING_ENGINE_URL
+              value: "http://positioning-engine.{{ positioning_namespace }}.svc.cluster.local:8080"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 6

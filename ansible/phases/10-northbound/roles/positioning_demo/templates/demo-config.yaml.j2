@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: positioning-demo-config
+  namespace: {{ demo_namespace }}
+data:
+  # Browser config delivered as POD ENV VARS (envFrom). The image entrypoint
+  # (/docker-entrypoint.d/40-render-env-config.sh) renders these into
+  # window.__ENV__ at start. We deliberately do NOT mount env-config.js as a file:
+  # that mounts read-only and shadows the entrypoint (the legacy anti-pattern).
+  # CAMARA stays same-origin via the nginx proxy (see positioning-demo-nginx).
+  # Keycloak is the canonical IAM hostname so OIDC cookies stay on one domain;
+  # realm webOrigins must include this demo origin for CORS.
+  VITE_CAMARA_API_BASE: "/api/camara"
+  VITE_KEYCLOAK_URL: "{{ dashboard_external_origin }}{{ keycloak_path_prefix | default('/auth') }}"
+  VITE_KEYCLOAK_REALM: "{{ keycloak_realm }}"
+  VITE_KEYCLOAK_CLIENT_ID: "positioning-demo"

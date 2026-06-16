@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-positioning
+  namespace: {{ positioning_namespace }}
+  labels:
+    app: mock-positioning
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-positioning
+  template:
+    metadata:
+      labels:
+        app: mock-positioning
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: worker
+      terminationGracePeriodSeconds: 15
+      containers:
+        - name: mock-positioning
+          image: {{ mock_positioning_image }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+          env:
+            - name: SOURCE
+              value: "mock"
+            # v0.6.0 self-registration: the adapter announces itself to the engine
+            # (POST /adapters) at boot + heartbeats, and the engine evicts it on TTL
+            # if it stops. No static ADAPTER_URLS on the engine. See docs/adapter-registry.md
+            # (5g-northbound) and docs/architecture/positioning-adapters.md.
+            - name: POSITIONING_ENGINE_URL
+              value: "http://positioning-engine.{{ positioning_namespace }}.svc.cluster.local:8080"
+            - name: ADAPTER_NAME
+              value: "mock"
+            - name: ADAPTER_BASE_URL
+              value: "http://mock-positioning.{{ positioning_namespace }}.svc.cluster.local:8080"
+            - name: ADAPTER_KIND
+              value: "mock"
+            # Room bounds for the random walk; kept in sync with the engine floor plan.
+            - name: WIDTH_M
+              value: "{{ floor_width_m }}"
+            - name: DEPTH_M
+              value: "{{ floor_depth_m }}"
+            - name: HEIGHT_M
+              value: "{{ floor_height_m }}"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 6

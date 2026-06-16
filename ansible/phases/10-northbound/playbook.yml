@@ -1,0 +1,35 @@
+---
+# PHASE 10: Northbound (CAMARA Location API + Positioning)
+#
+# The northbound platform, deployed as one phase composed of focused roles:
+#   - positioning_engine : fusion engine + standalone mock adapter
+#   - camara_gateway     : CAMARA Location API gateway (JWT via phase 08)
+#   - placement_editor   : room-geometry UI + its mandatory Keycloak front-door
+#                          gate (includes the generic frontdoor_gate role)
+#   - positioning_demo   : 3D demo SPA consuming the CAMARA API
+#
+# Each role is gated by its own *_enabled flag; the umbrella NORTHBOUND_ENABLED
+# (testbed northbound on) flips them together. Requires phase 08 (Keycloak/IAM).
+# Optional addon, off by default. Run a single piece with, e.g.:
+#   testbed run-phase 10-northbound  (then --tags camara | positioning | placement | demo)
+# Images built from the 5g-northbound monorepo and published to GHCR.
+
+- name: "PHASE 10 | Northbound (CAMARA + Positioning)"
+  hosts: masters
+  become: true
+  tags:
+    - phase10
+    - northbound
+  roles:
+    - role: roles/positioning_engine
+      when: positioning_enabled | default(true) | bool
+      tags: [positioning]
+    - role: roles/camara_gateway
+      when: camara_enabled | default(true) | bool
+      tags: [camara]
+    - role: roles/placement_editor
+      when: placement_editor_enabled | default(false) | bool
+      tags: [placement, positioning]
+    - role: roles/positioning_demo
+      when: positioning_demo_enabled | default(true) | bool
+      tags: [demo, mec]

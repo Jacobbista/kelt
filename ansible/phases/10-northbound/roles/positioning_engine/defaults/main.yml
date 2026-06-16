@@ -1,0 +1,59 @@
+---
+positioning_enabled: true
+positioning_namespace: positioning
+
+positioning_engine_image: "ghcr.io/jacobbista/5g-northbound/positioning-engine:0.6.0"
+positioning_engine_nodeport: 31930
+
+# Engine-owned blueprint store (v0.5.0 authority model): only the engine mounts
+# this RWO PVC at /app/data and serves GET/PUT /blueprint. No shared PVC.
+positioning_blueprint_pvc_size: "100Mi"
+
+# v0.6.0: adapters SELF-REGISTER with the engine (POST /adapters + heartbeat); the
+# engine is the registry authority. The baseline mock self-registers (see its
+# deployment env), so no static ADAPTER_URLS is rendered into positioning-config.
+# This var is an OPTIONAL cold-start seed (engine reads it once on an empty
+# registry) for off-cluster adapters that cannot self-register; empty by default.
+# Real cluster adapters (wifi-positioning, rest-adapter) self-register when deployed
+# from the dashboard catalog. See docs/architecture/positioning-adapters.md.
+engine_adapter_urls: ""
+
+# Optional per-device routing: CSV of device_id=adapter_name. Empty = the engine
+# polls every configured adapter for every device.
+engine_device_map: ""
+
+# Devices the engine tracks and broadcasts on the WebSocket.
+engine_device_ids: "demo-001"
+
+# Fusion (classical estimators, no ML). FUSION_COMPARE is a CSV of extra
+# strategies rendered side by side; empty disables comparison.
+engine_fusion_strategy: "weighted_avg"
+engine_fusion_compare: ""
+
+# WebSocket position broadcast interval, milliseconds.
+engine_websocket_interval_ms: 500
+
+# ── mock-positioning reference adapter (lean baseline) ───────────────────────
+# Synthetic random-walk adapter deployed alongside the engine so the demo shows
+# live movement out of the box. Room bounds come from the floor_* dims below.
+mock_positioning_image: "ghcr.io/jacobbista/5g-northbound/mock-positioning:0.6.0"
+
+# Floor plan defaults (passed to the engine for mock bounds and to the demo
+# for 3D rendering). Override at deploy time for real room dimensions:
+#   -e floor_width_m=12 -e floor_depth_m=18
+floor_width_m: 20
+floor_depth_m: 30
+floor_height_m: 3
+
+# WGS84 georeference for the floor-plan local frame: without it the engine cannot
+# convert local x/z to lat/lon and returns 0,0 (the demo then can't place devices
+# in LAT/LON mode). azimuth_deg = bearing of the +z axis clockwise from true north
+# (0 = north-aligned). Defaults to the RISE/Kista area; override for the real
+# building. Seeds the engine blueprint store on cold start (empty PVC); once the
+# placement-editor PUTs an authored blueprint (WORLD step), that takes over.
+floor_plan_gps_lat: "{{ lookup('ansible.builtin.env', 'FLOOR_PLAN_GPS_LAT') | default('59.40455', true) }}"
+floor_plan_gps_lon: "{{ lookup('ansible.builtin.env', 'FLOOR_PLAN_GPS_LON') | default('17.94754', true) }}"
+floor_plan_gps_azimuth: "{{ lookup('ansible.builtin.env', 'FLOOR_PLAN_GPS_AZIMUTH') | default('0', true) }}"
+
+positioning_ready_retries: 6
+positioning_ready_delay: 10

@@ -1,0 +1,92 @@
+{# Generic Keycloak front-door gate. Renders one oauth2-proxy in front of a
+   service that has no native auth, parameterized entirely on gate_* vars so any
+   phase/role can reuse it (placement-editor today; any future no-auth UI next).
+   See docs/security/external-access.md (front-door auth). #}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oauth2-proxy-{{ gate_name }}
+  namespace: {{ gate_namespace }}
+  labels:
+    app: oauth2-proxy-{{ gate_name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oauth2-proxy-{{ gate_name }}
+  template:
+    metadata:
+      labels:
+        app: oauth2-proxy-{{ gate_name }}
+      annotations:
+        checksum/secret: "{{ (gate_client_secret ~ gate_cookie_secret) | hash('sha256') }}"
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: worker
+      terminationGracePeriodSeconds: 15
+      containers:
+        - name: oauth2-proxy
+          image: {{ gate_image }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --provider=keycloak-oidc
+            # Canonical issuer: validates the token `iss` and is the origin the
+            # browser is sent to for login (same one the dashboard/demo use).
+            - --oidc-issuer-url={{ gate_issuer_url }}
+            # Dual-URL split — skip discovery and pin endpoints explicitly so the
+            # browser uses the canonical login URL while the proxy redeems tokens
+            # and fetches JWKS from in-cluster Keycloak (no tunnel hairpin). Works
+            # identically local or external. See docs/security/external-access.md.
+            - --skip-oidc-discovery=true
+            - --login-url={{ gate_issuer_url }}/protocol/openid-connect/auth
+            - --redeem-url={{ gate_internal_issuer_url }}/protocol/openid-connect/token
+            - --oidc-jwks-url={{ gate_internal_issuer_url }}/protocol/openid-connect/certs
+            - --client-id={{ gate_client_id }}
+            # Keycloak's default token audience is "account", not the client id, so
+            # accept it (the auth-code flow + group check already bind the token to
+            # this client). Avoids a realm-side audience mapper.
+            - --oidc-extra-audience=account
+            # The realm client enforces PKCE (pkce.code.challenge.method=S256), so
+            # the proxy must send the code challenge or the auth-code flow is rejected.
+            - --code-challenge-method=S256
+            - --redirect-url={{ gate_external_origin }}/oauth2/callback
+            - --upstream={{ gate_upstream }}
+            - --http-address=0.0.0.0:4180
+            - --email-domain=*
+            # Realm users are username-based with placeholder emails (e.g.
+            # admin@local) and email_verified=false, so don't reject on the
+            # unverified-email check; group membership is the real authorization.
+            - --insecure-oidc-allow-unverified-email=true
+            - --scope=openid profile email
+            - --oidc-groups-claim=groups
+            # Repeated flag = member of ANY listed group (groups claim from the
+            # realm mapper). The caller decides which groups gate this service.
+{% for group in gate_allowed_groups %}
+            - --allowed-group={{ group }}
+{% endfor %}
+            - --skip-provider-button=true
+            - --reverse-proxy=true
+            # LAN is HTTP; set true (or front with a TLS-terminating tunnel) for prod.
+            - --cookie-secure=false
+          env:
+            - name: OAUTH2_PROXY_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: oauth2-proxy-{{ gate_name }}
+                  key: client-secret
+            - name: OAUTH2_PROXY_COOKIE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: oauth2-proxy-{{ gate_name }}
+                  key: cookie-secret
+          ports:
+            - containerPort: 4180
+              name: http
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: 4180
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 6

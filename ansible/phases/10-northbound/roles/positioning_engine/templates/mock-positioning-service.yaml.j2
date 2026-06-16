@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-positioning
+  namespace: {{ positioning_namespace }}
+  labels:
+    app: mock-positioning
+spec:
+  selector:
+    app: mock-positioning
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+      name: http
+  # ClusterIP only: the engine reaches it over in-cluster DNS. Not externally exposed.
+  type: ClusterIP

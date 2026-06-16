@@ -1,0 +1,44 @@
+---
+camara_enabled: true
+camara_namespace: camara
+
+camara_gateway_image: "ghcr.io/jacobbista/5g-northbound/camara-gateway:0.6.0"
+camara_gateway_nodeport: 31920
+
+# Must match Phase 08/09. Read from env so a single CAMARA_CLIENT_SECRET /
+# KEYCLOAK_REALM / KEYCLOAK_PATH_PREFIX applies across phases without -e.
+camara_client_secret: "{{ lookup('ansible.builtin.env', 'CAMARA_CLIENT_SECRET') | default('changeme', true) }}"
+keycloak_realm: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_REALM') | default('5g-testbed', true) }}"
+# Path prefix when Keycloak runs under a relative path (KC_HTTP_RELATIVE_PATH,
+# e.g. "/auth"). Applies to internal access too, so the JWKS/issuer URL the
+# gateway builds must include it. Empty for root-path deploys.
+# /auth under the single-origin model (base set), empty in LAN mode, matching
+# phases 08/09. The gateway reaches in-cluster Keycloak at KEYCLOAK_URL + this
+# prefix, so it must match Keycloak's KC_HTTP_RELATIVE_PATH. Env override wins.
+keycloak_path_prefix: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_PATH_PREFIX') | default(('/auth' if external_base_domain else ''), true) }}"
+iam_namespace: iam
+keycloak_nodeport: 31910
+
+# Upstream service URLs (K8s DNS)
+smf_url: "http://smf.5g.svc.cluster.local:9090"
+positioning_engine_url: "http://positioning-engine.positioning.svc.cluster.local:8080"
+
+# Realm role required on Bearer tokens for the Location endpoints. Matches the
+# orthogonal camara-location-read role seeded by phase 08 (see docs/security/iam.md).
+camara_required_role: "camara-location-read"
+# Development override only: true bypasses JWT validation in the gateway.
+camara_skip_auth: false
+# Flat phoneNumber->deviceId map the gateway exposes via GET /devices and resolves
+# for CAMARA lookups. The default maps one demo number to the engine's demo device
+# (engine_device_ids in the positioning_engine role). Override for real numbers/assets.
+camara_device_registry: '{"+10000000001":"demo-001"}'
+
+# External base URL the gateway advertises (OpenAPI `servers`, webhook callbacks,
+# redirect-uri allow lists at the operator IdP). Resolves in three steps: explicit
+# CAMARA_GATEWAY_EXTERNAL_ORIGIN env override wins, else derived as
+# <scheme>://<camara_subdomain>.<base> when external_base_domain (all.yml) is set,
+# else the LAN NodePort URL so a clean clone runs without external exposure work.
+camara_gateway_external_origin: "{{ lookup('ansible.builtin.env', 'CAMARA_GATEWAY_EXTERNAL_ORIGIN') | default( ((external_scheme ~ '://' ~ camara_subdomain ~ '.' ~ external_base_domain) if external_base_domain else ('http://' ~ hostvars[groups['workers'][0]]['ansible_host'] ~ ':' ~ camara_gateway_nodeport)), true) }}"
+
+camara_ready_retries: 6
+camara_ready_delay: 10

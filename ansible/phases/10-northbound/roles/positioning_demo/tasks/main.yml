@@ -1,0 +1,74 @@
+---
+# POSITIONING DEMO APP SETUP
+# mec namespace is created by Phase 05 — no namespace task needed.
+
+- name: Pre-pull positioning demo image on worker
+  command: >
+    k3s ctr -n k8s.io images pull {{ positioning_demo_image }}
+  delegate_to: "{{ groups['workers'][0] }}"
+  run_once: true
+  changed_when: false
+  register: prepull_demo
+  failed_when: prepull_demo.rc != 0 and 'already exists' not in (prepull_demo.stderr | default(''))
+
+- name: Apply positioning-demo-config ConfigMap (browser env for envFrom)
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    force: true
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/demo-config.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply positioning-demo-nginx ConfigMap (reverse-proxy + /contract route)
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    force: true
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/demo-nginx-configmap.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy positioning demo Deployment
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    force: true
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/demo-deployment.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy positioning demo Service
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/demo-service.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Wait for positioning demo to be ready
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: positioning-demo
+    namespace: "{{ demo_namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: demo_deploy
+  retries: "{{ demo_ready_retries }}"
+  delay: "{{ demo_ready_delay }}"
+  until: >-
+    demo_deploy.resources | length > 0 and
+    demo_deploy.resources[0].status.availableReplicas | default(0) >= 1
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Display demo app summary
+  debug:
+    msg:
+      - "Positioning demo deployed"
+      - "URL: http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ positioning_demo_nodeport }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true

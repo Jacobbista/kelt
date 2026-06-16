@@ -1,0 +1,168 @@
+---
+# POSITIONING ENGINE
+#
+# Provisions the engine backbone plus the standalone mock adapter. The engine is
+# the thin fusion layer that polls one or more positioning adapters via HTTP and
+# exposes a unified Position to the CAMARA gateway. Concrete adapters (wifi-
+# positioning, vendor-specific) are NOT deployed here; they are added at runtime
+# by the dashboard adapter-provisioning workflow. The placement-editor UI and its
+# Keycloak gate are separate roles in this phase.
+# See docs/architecture/positioning-adapters.md.
+
+- name: Ensure positioning namespace exists
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Namespace
+    state: present
+    definition:
+      metadata:
+        name: "{{ positioning_namespace }}"
+        labels:
+          name: "{{ positioning_namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Pre-pull positioning engine image on worker
+  command: >
+    k3s ctr -n k8s.io images pull {{ positioning_engine_image }}
+  delegate_to: "{{ groups['workers'][0] }}"
+  run_once: true
+  changed_when: false
+  register: prepull_pos
+  failed_when: prepull_pos.rc != 0 and 'already exists' not in (prepull_pos.stderr | default(''))
+
+- name: Pre-pull mock-positioning image on worker
+  command: >
+    k3s ctr -n k8s.io images pull {{ mock_positioning_image }}
+  delegate_to: "{{ groups['workers'][0] }}"
+  run_once: true
+  changed_when: false
+  register: prepull_mock
+  failed_when: prepull_mock.rc != 0 and 'already exists' not in (prepull_mock.stderr | default(''))
+
+- name: Apply positioning-config ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    force: true
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/positioning-config.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  register: pos_config_apply
+
+# Engine-owned blueprint store (v0.5.0): only the engine mounts this PVC (RW at
+# /app/data). The editor PUTs and consumers GET the blueprint over HTTP, so there
+# is no shared PVC. See docs/architecture/positioning-adapters.md.
+- name: Create engine blueprint PVC
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/blueprint-pvc.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply blueprint cold-start seed ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    force: true
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/blueprint-seed-cm.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  register: pos_seed_apply
+
+# Standalone mock adapter (lean baseline): created before the engine so the
+# engine has a live adapter at the seeded ADAPTER_URLS on first poll.
+- name: Deploy mock-positioning adapter Deployment
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    force: true
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/mock-positioning-deployment.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy mock-positioning adapter Service
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/mock-positioning-service.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy positioning engine Deployment
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    force: true
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/positioning-engine-deployment.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Deploy positioning engine Service
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/positioning-engine-service.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+# The engine reads ADAPTER_URLS at startup (and the seed only on an empty PVC), so
+# it must roll whenever its config ConfigMap actually changed. The template
+# `checksum/config` annotation only catches template edits; this also catches the
+# live ConfigMap being reverted from a dashboard-side change (register/unregister
+# adapter), keeping the running engine in sync instead of drifting. The seed change
+# is included for completeness (it only re-seeds an empty PVC, never overwrites an
+# authored blueprint). Autonomous: we know engine<-config.
+- name: Roll positioning-engine when its config changed
+  kubernetes.core.k8s:
+    state: patched
+    api_version: apps/v1
+    kind: Deployment
+    name: positioning-engine
+    namespace: "{{ positioning_namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition:
+      spec:
+        template:
+          metadata:
+            annotations:
+              kelt.dev/config-rolled-at: "{{ lookup('pipe', 'date +%s') }}"
+  when: (pos_config_apply.changed | default(false)) or (pos_seed_apply.changed | default(false))
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Wait for positioning engine to be ready
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: positioning-engine
+    namespace: "{{ positioning_namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: pos_deploy
+  retries: "{{ positioning_ready_retries }}"
+  delay: "{{ positioning_ready_delay }}"
+  until: >-
+    pos_deploy.resources | length > 0 and
+    pos_deploy.resources[0].status.availableReplicas | default(0) >= 1
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Display positioning engine summary
+  debug:
+    msg:
+      - "Positioning engine + mock-positioning adapter deployed"
+      - "REST: http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ positioning_engine_nodeport }}"
+      - "WebSocket: ws://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ positioning_engine_nodeport }}/ws/positions"
+      - "Adapters: self-register with the engine (GET /adapters for the live registry){{ ' | seed: ' ~ engine_adapter_urls if engine_adapter_urls else '' }}"
+      - "FUSION_STRATEGY: {{ engine_fusion_strategy }}{{ ' (compare: ' ~ engine_fusion_compare ~ ')' if engine_fusion_compare else '' }}"
+      - "DEVICE_IDS: {{ engine_device_ids }}"
+      - "Adapters appear automatically when deployed (mock baseline self-registers; wifi-positioning/rest-adapter from the dashboard catalog)"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true

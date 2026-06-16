@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: positioning-engine
+  namespace: {{ positioning_namespace }}
+  labels:
+    app: positioning-engine
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: positioning-engine
+  template:
+    metadata:
+      labels:
+        app: positioning-engine
+      annotations:
+        checksum/config: "{{ lookup('template', role_path + '/templates/positioning-config.yaml.j2') | hash('sha256') }}"
+        checksum/blueprint-seed: "{{ lookup('template', role_path + '/templates/blueprint-seed.json.j2') | hash('sha256') }}"
+    spec:
+      # Pinned to the worker: the engine is the sole mounter of the RWO blueprint
+      # PVC (node-local local-path), and it owns the blueprint as authority.
+      nodeSelector:
+        kubernetes.io/hostname: worker
+      # The engine persists the blueprint to the PVC (PUT /blueprint); fsGroup lets
+      # the non-root container write the mounted volume (upstream convention).
+      securityContext:
+        fsGroup: 1001
+      terminationGracePeriodSeconds: 15
+      containers:
+        - name: positioning-engine
+          image: {{ positioning_engine_image }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+          # Single config mechanism (ConfigMap + optional Secret via envFrom);
+          # both optional for degraded boot. See docs/dashboard/modules.md.
+          envFrom:
+            - configMapRef:
+                name: positioning-config
+                optional: true
+            - secretRef:
+                name: positioning-engine-secrets
+                optional: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 6
+          volumeMounts:
+            # Engine-owned blueprint store (authority): RW so PUT /blueprint persists.
+            - name: blueprint
+              mountPath: /app/data
+            # Cold-start seed (RO): consumed once via BLUEPRINT_SEED_PATH when the
+            # blueprint PVC is empty. Subpath single-file mount, not the whole dir.
+            - name: blueprint-seed
+              mountPath: /app/seed/blueprint.json
+              subPath: blueprint.json
+      volumes:
+        - name: blueprint
+          persistentVolumeClaim:
+            claimName: positioning-blueprint
+        - name: blueprint-seed
+          configMap:
+            name: positioning-blueprint-seed
