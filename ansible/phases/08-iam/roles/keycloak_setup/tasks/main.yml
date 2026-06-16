@@ -151,6 +151,9 @@
   register: _kc_positioning_client
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
+  # Skipped (with the rest of the camara/positioning reconcile) when no northbound
+  # phase is enabled, so the client is absent and there is nothing to reconcile.
+  when: northbound_enabled | bool
 
 - name: Fetch full dashboard client configuration
   ansible.builtin.uri:
@@ -176,7 +179,9 @@
   register: _kc_positioning_full
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
-  when: _kc_positioning_client.json | length > 0
+  when:
+    - northbound_enabled | bool
+    - _kc_positioning_client.json | length > 0
 
 - name: Compute dashboard allowed origins (prod baseline + optional dev)
   ansible.builtin.set_fact:
@@ -234,8 +239,93 @@
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
   when:
+    - northbound_enabled | bool
     - _kc_positioning_client.json | length > 0
     - (_kc_positioning_full.json.redirectUris | default([])) != [positioning_demo_external_origin ~ '/*'] or (_kc_positioning_full.json.webOrigins | default([])) != [positioning_demo_external_origin]
+
+# Keycloak imports the realm JSON only on first boot, so enabling northbound on an
+# already-provisioned cluster leaves the placement-editor-proxy client absent (the
+# oauth2-proxy front-door gate cannot authenticate without it). These two tasks
+# create it idempotently: a fresh import already has it (resolve returns it, create
+# skips); an existing cluster gets it via POST without a destructive re-import.
+# See docs/security/iam.md and docs/security/external-access.md.
+- name: Resolve placement-editor-proxy client id
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/clients?clientId=placement-editor-proxy"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    return_content: true
+    status_code: 200
+  register: _kc_placement_proxy_client
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: northbound_enabled | bool
+
+- name: Create placement-editor-proxy client when missing
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/clients"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    body_format: json
+    body:
+      clientId: placement-editor-proxy
+      name: "Placement Editor (oauth2-proxy)"
+      description: "Confidential client used by oauth2-proxy to gate the placement-editor UI. Authorization-code flow; oauth2-proxy restricts access via the groups claim."
+      enabled: true
+      publicClient: false
+      clientAuthenticatorType: client-secret
+      secret: "{{ placement_editor_proxy_secret }}"
+      standardFlowEnabled: true
+      implicitFlowEnabled: false
+      directAccessGrantsEnabled: false
+      serviceAccountsEnabled: false
+      redirectUris:
+        - "{{ placement_editor_external_origin }}/oauth2/callback"
+      webOrigins:
+        - "{{ placement_editor_external_origin }}"
+      protocol: openid-connect
+      attributes:
+        pkce.code.challenge.method: S256
+        access.token.lifespan: "3600"
+      protocolMappers:
+        - name: groups
+          protocol: openid-connect
+          protocolMapper: oidc-group-membership-mapper
+          config:
+            claim.name: groups
+            full.path: "true"
+            id.token.claim: "true"
+            access.token.claim: "true"
+            userinfo.token.claim: "true"
+    status_code: [201, 409]
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when:
+    - northbound_enabled | bool
+    - _kc_placement_proxy_client.json | length == 0
+
+# An EXISTING placement-editor-proxy client keeps its first-created redirect URI,
+# so a changed external origin (e.g. the core->kelt / base-domain migration) must
+# be pushed here, exactly like the dashboard/demo reconcile above. Self-heals when
+# the URI differs; oauth2-proxy's redirect_uri must match or Keycloak 400s with
+# "Invalid parameter: redirect_uri".
+- name: Reconcile placement-editor-proxy client redirect URIs
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/clients/{{ _kc_placement_proxy_client.json[0].id }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    body_format: json
+    body: "{{ _kc_placement_proxy_client.json[0] | combine({'redirectUris': [placement_editor_external_origin ~ '/oauth2/callback'], 'webOrigins': [placement_editor_external_origin]}, recursive=True) }}"
+    status_code: 204
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when:
+    - northbound_enabled | bool
+    - (_kc_placement_proxy_client.json | default([])) | length > 0
+    - (_kc_placement_proxy_client.json[0].redirectUris | default([])) != [placement_editor_external_origin ~ '/oauth2/callback']
 
 - name: Resolve dashboard admin group id
   ansible.builtin.uri:
@@ -426,6 +516,8 @@
   register: _kc_camara_role
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
+  # The role exists only when northbound is enabled; GET would 404 otherwise.
+  when: northbound_enabled | bool
 
 - name: Fetch dashboard-admin role composites
   ansible.builtin.uri:
@@ -438,6 +530,7 @@
   register: _kc_dashboard_admin_composites
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
+  when: northbound_enabled | bool
 
 # Make dashboard-admin a composite role that inherits camara-location-read.
 # This unifies the role model: a dashboard admin can also call the CAMARA
@@ -459,6 +552,7 @@
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
   when:
+    - northbound_enabled | bool
     - _kc_dashboard_admin_composites.json | selectattr('name', 'equalto', 'camara-location-read') | list | length == 0
 
 - name: Display IAM deployment summary
@@ -470,6 +564,7 @@
       - "Seed users (force password reset on first login):"
       - "  admin  -> g-dashboard-admins  -> dashboard-admin"
       - "  viewer -> g-dashboard-viewers -> dashboard-viewer"
+      - "Northbound realm objects (camara/positioning/placement clients+role+group): {{ 'enabled' if (northbound_enabled | bool) else 'disabled (no northbound phase on)' }}"
       - "Realm reconcile: {{ keycloak_realm_reconcile | bool }}"
       - "Token endpoint: http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}/realms/{{ keycloak_realm }}/protocol/openid-connect/token"
   delegate_to: "{{ groups['masters'][0] }}"

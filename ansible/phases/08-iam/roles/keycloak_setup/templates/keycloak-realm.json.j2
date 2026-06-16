@@ -11,18 +11,14 @@
   "roles": {
     "realm": [
       {
-        "name": "camara-location-read",
-        "description": "Read access to CAMARA Location API",
-        "composite": false,
-        "clientRole": false
-      },
-      {
         "name": "dashboard-admin",
-        "description": "Full read/write access to the dashboard (exec, scale, restart, NF update). Composite: inherits camara-location-read so dashboard admins can also call the CAMARA Location API from the positioning demo.",
-        "composite": true,
+        "description": "Full read/write access to the dashboard (exec, scale, restart, NF update){% if northbound_enabled %}. Composite: inherits camara-location-read so dashboard admins can also call the CAMARA Location API from the positioning demo{% endif %}.",
+        "composite": {{ 'true' if northbound_enabled else 'false' }},
+{% if northbound_enabled %}
         "composites": {
           "realm": ["camara-location-read"]
         },
+{% endif %}
         "clientRole": false
       },
       {
@@ -30,14 +26,23 @@
         "description": "Read-only access to the dashboard (GET endpoints, log streaming)",
         "composite": false,
         "clientRole": false
-      }
+      }{% if northbound_enabled %},
+      {
+        "name": "camara-location-read",
+        "description": "Service-plane VIEW: read access to the CAMARA Location API (the positioning demo / customer view).",
+        "composite": false,
+        "clientRole": false
+      },
+      {
+        "name": "positioning-edit",
+        "description": "Service-plane EDIT: author positioning geometry (placement-editor). Separate from cluster admin so a partner can edit without dashboard/cluster access.",
+        "composite": false,
+        "clientRole": false
+      }{% endif %}
+
     ]
   },
   "groups": [
-    {
-      "name": "g-camara-users",
-      "realmRoles": ["camara-location-read"]
-    },
     {
       "name": "g-dashboard-admins",
       "realmRoles": ["dashboard-admin"]
@@ -45,47 +50,18 @@
     {
       "name": "g-dashboard-viewers",
       "realmRoles": ["dashboard-viewer"]
-    }
+    }{% if northbound_enabled %},
+    {
+      "name": "g-camara-users",
+      "realmRoles": ["camara-location-read"]
+    },
+    {
+      "name": "g-positioning-editors",
+      "realmRoles": ["positioning-edit"]
+    }{% endif %}
+
   ],
   "clients": [
-    {
-      "clientId": "camara-gateway",
-      "name": "CAMARA Gateway (M2M)",
-      "description": "Service account for the CAMARA Location API gateway. Uses client_credentials.",
-      "enabled": true,
-      "publicClient": false,
-      "clientAuthenticatorType": "client-secret",
-      "secret": "{{ camara_client_secret }}",
-      "standardFlowEnabled": false,
-      "implicitFlowEnabled": false,
-      "directAccessGrantsEnabled": false,
-      "serviceAccountsEnabled": true,
-      "protocol": "openid-connect",
-      "attributes": {
-        "access.token.lifespan": "3600"
-      }
-    },
-    {
-      "clientId": "positioning-demo",
-      "name": "Positioning Demo App",
-      "description": "Browser-side public client. PKCE flow for end-user login.",
-      "enabled": true,
-      "publicClient": true,
-      "standardFlowEnabled": true,
-      "implicitFlowEnabled": false,
-      "directAccessGrantsEnabled": false,
-      "serviceAccountsEnabled": false,
-      "redirectUris": [
-        "{{ positioning_demo_external_origin }}/*"
-      ],
-      "webOrigins": [
-        "{{ positioning_demo_external_origin }}"
-      ],
-      "protocol": "openid-connect",
-      "attributes": {
-        "pkce.code.challenge.method": "S256"
-      }
-    },
     {
       "clientId": "dashboard",
       "name": "5G Dashboard (browser)",
@@ -128,20 +104,98 @@
       "attributes": {
         "access.token.lifespan": "3600"
       }
-    }
+    }{% if northbound_enabled %},
+    {
+      "clientId": "camara-gateway",
+      "name": "CAMARA Gateway (M2M)",
+      "description": "Service account for the CAMARA Location API gateway. Uses client_credentials.",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "{{ camara_client_secret }}",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "protocol": "openid-connect",
+      "attributes": {
+        "access.token.lifespan": "3600"
+      }
+    },
+    {
+      "clientId": "positioning-demo",
+      "name": "Positioning Demo App",
+      "description": "Browser-side public client. PKCE flow for end-user login.",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "{{ positioning_demo_external_origin }}/*"
+      ],
+      "webOrigins": [
+        "{{ positioning_demo_external_origin }}"
+      ],
+      "protocol": "openid-connect",
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
+    },
+    {
+      "clientId": "placement-editor-proxy",
+      "name": "Placement Editor (oauth2-proxy)",
+      "description": "Confidential client used by oauth2-proxy to gate the placement-editor UI. Authorization-code flow; oauth2-proxy restricts access to g-dashboard-admins via the groups claim.",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "{{ placement_editor_proxy_secret }}",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "{{ placement_editor_external_origin }}/oauth2/callback"
+      ],
+      "webOrigins": [
+        "{{ placement_editor_external_origin }}"
+      ],
+      "protocol": "openid-connect",
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "access.token.lifespan": "3600"
+      },
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "config": {
+            "claim.name": "groups",
+            "full.path": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }{% endif %}
+
   ],
   "users": [
-    {
-      "username": "service-account-camara-gateway",
-      "enabled": true,
-      "serviceAccountClientId": "camara-gateway",
-      "realmRoles": ["camara-location-read"]
-    },
     {
       "username": "service-account-dashboard-readonly",
       "enabled": true,
       "serviceAccountClientId": "dashboard-readonly",
       "realmRoles": ["dashboard-viewer"]
-    }
+    }{% if northbound_enabled %},
+    {
+      "username": "service-account-camara-gateway",
+      "enabled": true,
+      "serviceAccountClientId": "camara-gateway",
+      "realmRoles": ["camara-location-read"]
+    }{% endif %}
+
   ]
 }

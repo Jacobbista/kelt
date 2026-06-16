@@ -1,9 +1,9 @@
 ---
 # PHASE 8: IAM (Keycloak + PostgreSQL)
 # Deploys Keycloak OAuth2/OIDC server backed by PostgreSQL.
-# Provides authentication for the Dashboard (phase 09), CAMARA gateway
-# (phase 10), positioning demo (phase 12), and any other service that
-# validates JWTs against the realm JWKS.
+# Provides authentication for the Dashboard (phase 09), the northbound
+# services (phase 10): CAMARA gateway and positioning demo, and any other
+# service that validates JWTs against the realm JWKS.
 
 - name: "PHASE 8 | Create Namespace"
   hosts: masters

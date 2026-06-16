@@ -2,8 +2,8 @@
 
 Deploys a Keycloak OAuth2/OIDC server backed by PostgreSQL inside the
 `iam` namespace. Provides JWT authentication for every downstream service
-that needs it: dashboard (phase 09), CAMARA gateway (phase 10), positioning
-demo (phase 12).
+that needs it: dashboard (phase 09) and the northbound services (phase 10):
+CAMARA gateway and positioning demo.
 
 ## Run
 
@@ -124,4 +124,4 @@ curl -fsS -X POST \
 - [IAM](../../../docs/security/iam.md) — realm structure, role matrix, user provisioning
 - [External Access](../../../docs/security/external-access.md) — tunnel layout
 - [Phase 09: Dashboard](../09-dashboard/README.md)
-- [Phase 10: CAMARA](../10-camara/README.md)
+- [Phase 10: Northbound](../10-northbound/README.md)

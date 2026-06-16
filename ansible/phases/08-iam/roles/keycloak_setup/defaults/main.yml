@@ -1,6 +1,6 @@
 ---
 # IAM phase defaults. Keycloak provides JWT authentication for the Dashboard
-# (phase 09) and the CAMARA Northbound stack (phases 10 to 12). All defaults
+# (phase 09) and the CAMARA Northbound stack (phase 10). All defaults
 # are safe placeholders; override at deploy time with -e or ansible-vault.
 
 # ── PostgreSQL (Keycloak backing store) ─────────────────────────────────────
@@ -22,25 +22,45 @@ keycloak_nodeport: 31910
 
 # Relative path prefix when serving Keycloak under a shared origin (for
 # example "/auth" when the dashboard frontend reverse-proxies /auth/* to
-# Keycloak). Leave empty for root-path deploys (Keycloak on its own host
-# or subdomain). Used by the deployment template (KC_HTTP_RELATIVE_PATH).
-keycloak_path_prefix: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_PATH_PREFIX') | default('', true) }}"
+# Keycloak). Under the single-origin model (external_base_domain set) Keycloak
+# is served at <kelt>.<base>/auth, so this defaults to "/auth"; in LAN mode (no
+# base) it stays empty (Keycloak on its own NodePort at root). Env override wins.
+# Used by the deployment template (KC_HTTP_RELATIVE_PATH) and KC_HOSTNAME.
+keycloak_path_prefix: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_PATH_PREFIX') | default(('/auth' if external_base_domain else ''), true) }}"
 
-# External origin used to populate redirect URIs and Web Origins inside the
-# realm. Defaults to the worker LAN URL. Override when fronted by a tunnel:
-#   -e dashboard_external_origin=https://dashboard.example.com
-#   -e positioning_demo_external_origin=https://demo.example.com
-dashboard_external_origin: "{{ lookup('ansible.builtin.env', 'DASHBOARD_EXTERNAL_ORIGIN') | default('http://' ~ hostvars[groups['workers'][0]]['ansible_host'] ~ ':31573', true) }}"
-# Optional second origin for the opt-in dev frontend (Vite on ansible
-# VM). When set, added to the dashboard client redirect URIs and Web
-# Origins so OIDC works from both origins.
-dashboard_dev_external_url: "{{ lookup('ansible.builtin.env', 'DASHBOARD_DEV_EXTERNAL_URL') | default('', true) }}"
-positioning_demo_external_origin: "{{ lookup('ansible.builtin.env', 'POSITIONING_DEMO_EXTERNAL_ORIGIN') | default('http://' ~ hostvars[groups['workers'][0]]['ansible_host'] ~ ':31940', true) }}"
+# External origins used to populate redirect URIs and Web Origins inside the
+# realm. Each resolves in three steps: an explicit per-service env override wins
+# (back-compat / one-off), else it is derived as <scheme>://<subdomain>.<base>
+# when external_base_domain (all.yml) is set, else it falls back to the worker LAN
+# NodePort (no external exposure). The subdomains live in all.yml so the front-door
+# (phase 09), these realm origins, and the dashboard links all agree.
+dashboard_external_origin: "{{ lookup('ansible.builtin.env', 'DASHBOARD_EXTERNAL_ORIGIN') | default( ((external_scheme ~ '://' ~ dashboard_subdomain ~ '.' ~ external_base_domain) if external_base_domain else ('http://' ~ hostvars[groups['workers'][0]]['ansible_host'] ~ ':31573')), true) }}"
+# Optional second origin for the opt-in dev frontend (Vite on ansible VM). When
+# set, added to the dashboard client redirect URIs and Web Origins so OIDC works
+# from both origins. Derived from the dev subdomain when a base domain is set.
+dashboard_dev_external_url: "{{ lookup('ansible.builtin.env', 'DASHBOARD_DEV_EXTERNAL_URL') | default( ((external_scheme ~ '://' ~ dashboard_dev_subdomain ~ '.' ~ external_base_domain) if external_base_domain else ''), true) }}"
+positioning_demo_external_origin: "{{ lookup('ansible.builtin.env', 'POSITIONING_DEMO_EXTERNAL_ORIGIN') | default( ((external_scheme ~ '://' ~ positioning_demo_subdomain ~ '.' ~ external_base_domain) if external_base_domain else ('http://' ~ hostvars[groups['workers'][0]]['ansible_host'] ~ ':31940')), true) }}"
+# External origin oauth2-proxy advertises for the placement-editor login redirect.
+placement_editor_external_origin: "{{ lookup('ansible.builtin.env', 'PLACEMENT_EDITOR_EXTERNAL_ORIGIN') | default( ((external_scheme ~ '://' ~ placement_editor_subdomain ~ '.' ~ external_base_domain) if external_base_domain else ('http://' ~ hostvars[groups['workers'][0]]['ansible_host'] ~ ':31950')), true) }}"
+
+# ── Northbound realm gating ─────────────────────────────────────────────────
+# The camara/positioning/placement realm objects (camara-location-read role,
+# g-camara-users group, camara-gateway / positioning-demo / placement-editor-proxy
+# clients, the camara service-account, and the dashboard-admin->camara composite)
+# are emitted ONLY when a northbound phase is enabled, so an IAM-only deploy
+# creates no orphan clients. Derived from the all.yml feature flags so a single
+# `testbed northbound on` flips IAM and phase 10 (northbound) together. Keycloak imports
+# the realm once: enabling northbound on an already-provisioned cluster needs the
+# reconcile workaround in docs/security/iam.md (fresh realm or manual add).
+northbound_enabled: "{{ (camara_enabled | default(false) | bool) or (positioning_enabled | default(false) | bool) or (positioning_demo_enabled | default(false) | bool) or (placement_editor_enabled | default(false) | bool) }}"
 
 # ── Client secrets (M2M / confidential clients) ─────────────────────────────
 # Replace before any non-lab deploy. Documentation: docs/security/iam.md
 camara_client_secret: "{{ lookup('ansible.builtin.env', 'CAMARA_CLIENT_SECRET') | default('changeme-camara', true) }}"
 dashboard_readonly_secret: "{{ lookup('ansible.builtin.env', 'DASHBOARD_READONLY_SECRET') | default('changeme-readonly', true) }}"
+# Secret for the placement-editor-proxy confidential client (consumed by the
+# oauth2-proxy that gates placement-editor; see phase 10 (northbound) / docs/security/iam.md).
+placement_editor_proxy_secret: "{{ lookup('ansible.builtin.env', 'PLACEMENT_EDITOR_PROXY_SECRET') | default('changeme-placement', true) }}"
 
 # ── Bootstrap end-users for dashboard login (realm 5g-testbed) ──────────────
 # Two seed accounts mirror the two-role model documented in docs/security/iam.md:
