@@ -18,8 +18,9 @@ const NAV_ITEMS = [
   // Services hub (positioning/CAMARA now; NEF/MEC later). Visible to viewers
   // (read-only); write controls inside each page are gated on dashboard-admin.
   { id: "services",      label: "Services",    icon: "\u25a6", path: "/services"   },
-  // IAM entry is rendered conditionally below: visible only to dashboard-admin.
-  { id: "iam",           label: "IAM",         icon: "\u26BF", path: "/iam",        adminOnly: true },
+  // Settings (admin only): identity reference + front-door branding as tabs, so
+  // these config surfaces share one sidebar entry instead of two.
+  { id: "settings",      label: "Settings",    icon: "\uD83C\uDF9B\uFE0F", path: "/settings",   adminOnly: true },
   // Manual + Learn: docs links into the live site + short in-app concept notes.
   { id: "manual",        label: "Manual",      icon: "\u24D8", path: "/manual"     },
 ];

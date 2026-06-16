@@ -96,6 +96,18 @@ class LogLevelPayload(BaseModel):
     level: str  # debug, info, warning, error
 
 
+# ── Front-door co-branding (welcome page) ────────────────────────────────────
+class BrandRequest(BaseModel):
+    # Org co-brand for the front-door welcome page (written to the frontdoor-brand
+    # ConfigMap / brand.json). All optional; empty clears that field (KELT-only /
+    # default tagline). org_logo is a data-URI (uploaded image) or a URL.
+    org_name: str = ""
+    org_logo: str = ""
+    accent: str = ""
+    tagline: str = ""
+    logo_bg: str = ""  # backdrop behind the logo for contrast: "" | "light" | "dark"
+
+
 # ── Northbound (positioning/CAMARA) service-management console ───────────────
 class AdapterUpgradeRequest(BaseModel):
     # Targeted, in-place upgrade of a catalog adapter: patch only the deployment

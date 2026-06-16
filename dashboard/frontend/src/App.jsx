@@ -12,7 +12,7 @@ import PodTerminal from "./components/PodTerminal";
 import CallbackPage from "./pages/CallbackPage";
 import CorePage from "./pages/CorePage";
 import DiagnosticsPage from "./pages/DiagnosticsPage";
-import IamPage from "./pages/IamPage";
+import SettingsPage from "./pages/SettingsPage";
 import KubernetesPage from "./pages/KubernetesPage";
 import LoggedOutPage from "./pages/LoggedOutPage";
 import MetricsPage from "./pages/MetricsPage";
@@ -37,7 +37,7 @@ const ROUTES = {
   diagnostics:    "/diagnostics",
   metrics:        "/metrics",
   services:       "/services",
-  iam:            "/iam",
+  settings:       "/settings",
   manual:         "/manual",
 };
 
@@ -167,7 +167,9 @@ function AppInner() {
         <Route path="/services/northbound" element={<NorthboundPage />} />
         <Route path="/services/custom" element={<CustomWorkloadPage />} />
         <Route path="/northbound" element={<Navigate to="/services/northbound" replace />} />
-        <Route path="/iam" element={<IamPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/iam" element={<Navigate to="/settings" replace />} />
+        <Route path="/branding" element={<Navigate to="/settings" replace />} />
         <Route path="/manual" element={<ManualPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
