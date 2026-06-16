@@ -17,6 +17,11 @@ dashboard_backend_service_name: dashboard-backend
 dashboard_frontend_service_name: dashboard-frontend
 dashboard_admin_token: change-me
 dashboard_allow_configmap_write: true
+# Gate for the Northbound console's deploy-from-image (creates Deployments /
+# Services / Secrets in the northbound namespaces, admin-gated + guardrailed).
+# Enabled by default so the console is usable; set DASHBOARD_ALLOW_WORKLOAD_CREATE=false
+# to harden a deploy to a read-only console. See docs/security/iam.md.
+dashboard_allow_workload_create: "{{ lookup('ansible.builtin.env', 'DASHBOARD_ALLOW_WORKLOAD_CREATE') | default('true', true) | bool }}"
 
 # CORS origin enforced on direct NodePort access. Single-origin via Vite proxy
 # is the primary path so this only matters when LAN clients hit the backend
@@ -38,15 +43,20 @@ dashboard_keycloak_accepted_clients: "dashboard,dashboard-readonly"
 # Internal target used by Vite dev/preview proxy for /auth/* Keycloak requests.
 dashboard_keycloak_proxy_target: "{{ lookup('ansible.builtin.env', 'DASHBOARD_KEYCLOAK_PROXY_TARGET') | default(dashboard_keycloak_url, true) }}"
 # Path prefix when Keycloak is served behind a reverse proxy (for example
-# "/auth" if the dashboard frontend proxies /auth/* to Keycloak). Empty for
-# root-path deploys.
-dashboard_keycloak_path_prefix: "{{ lookup('ansible.builtin.env', 'DASHBOARD_KEYCLOAK_PATH_PREFIX') | default(lookup('ansible.builtin.env', 'KEYCLOAK_PATH_PREFIX') | default('', true), true) }}"
+# "/auth" if the dashboard frontend proxies /auth/* to Keycloak). Under the
+# single-origin model (external_base_domain set) Keycloak lives at <kelt>.<base>/auth,
+# so the prefix defaults to "/auth"; in LAN mode (no base) it stays empty
+# (Keycloak on its own NodePort at root). Env override wins either way.
+dashboard_keycloak_path_prefix: "{{ lookup('ansible.builtin.env', 'DASHBOARD_KEYCLOAK_PATH_PREFIX') | default(lookup('ansible.builtin.env', 'KEYCLOAK_PATH_PREFIX') | default(('/auth' if external_base_domain else ''), true), true) }}"
 
 # Frontend OIDC settings. The browser must reach Keycloak through whichever
 # URL the user types in their address bar, so this URL is *external*
 # (tunnel / LAN / subdomain), distinct from the backend-internal URL above.
 # Authority is the realm root (Keycloak base + optional path prefix + /realms/<realm>).
-dashboard_keycloak_external_url: "{{ lookup('ansible.builtin.env', 'DASHBOARD_KEYCLOAK_EXTERNAL_URL') | default(dashboard_keycloak_url, true) }}"
+# Under the single-origin model the browser reaches Keycloak at <kelt>.<base>
+# (same origin as the dashboard, /auth proxied), so this derives from the base;
+# in LAN mode it falls back to the backend-internal Keycloak URL. Env override wins.
+dashboard_keycloak_external_url: "{{ lookup('ansible.builtin.env', 'DASHBOARD_KEYCLOAK_EXTERNAL_URL') | default( ((external_scheme ~ '://' ~ dashboard_subdomain ~ '.' ~ external_base_domain) if external_base_domain else dashboard_keycloak_url), true) }}"
 dashboard_keycloak_client_id: "{{ lookup('ansible.builtin.env', 'DASHBOARD_KEYCLOAK_CLIENT_ID') | default('dashboard', true) }}"
 
 # ── Frontend targets (cluster baseline + optional dev) ─────────────────
@@ -71,6 +81,12 @@ dashboard_dev_enabled: "{{ lookup('ansible.builtin.env', 'DASHBOARD_DEV_ENABLED'
 dashboard_namespace: dashboard
 dashboard_frontend_image: "ghcr.io/jacobbista/dashboard-frontend:latest"
 dashboard_cluster_nodeport: 31573
+
+# In-cluster docs server (MkDocs site, own image/tag built by the docs-site
+# workflow). Served same-origin under /docs via the frontend proxy so the
+# Manual works offline / LAN-only and refreshes independently of the frontend.
+dashboard_docs_enabled: true
+kelt_docs_image: "ghcr.io/jacobbista/kelt-docs:latest"
 dashboard_cluster_ready_retries: 12
 dashboard_cluster_ready_delay: 5
 

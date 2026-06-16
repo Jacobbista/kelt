@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard-docs
+  namespace: {{ dashboard_namespace }}
+  labels:
+    app: dashboard-docs
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dashboard-docs
+  template:
+    metadata:
+      labels:
+        app: dashboard-docs
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: worker
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: docs
+          # Standalone MkDocs site image with its own tag (built by the docs-site
+          # workflow), so docs refresh independently of the frontend image.
+          image: {{ kelt_docs_image }}
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 80
+              name: http
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            failureThreshold: 10

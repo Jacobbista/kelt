@@ -12,7 +12,8 @@ data:
       VITE_KEYCLOAK_PATH_PREFIX: "{{ dashboard_keycloak_path_prefix }}",
       VITE_KEYCLOAK_REALM: "{{ dashboard_keycloak_realm }}",
       VITE_KEYCLOAK_CLIENT_ID: "{{ dashboard_keycloak_client_id }}",
-      DASHBOARD_DEV_EXTERNAL_URL: "{{ dashboard_dev_external_url if dashboard_dev_external_url else 'http://' ~ hostvars[groups['control'][0]]['ansible_host'] ~ ':' ~ dashboard_frontend_port }}"
+      DASHBOARD_DEV_EXTERNAL_URL: "{{ dashboard_dev_external_url if dashboard_dev_external_url else 'http://' ~ hostvars[groups['control'][0]]['ansible_host'] ~ ':' ~ dashboard_frontend_port }}",
+      VITE_DOCS_URL: "{{ '/docs' if dashboard_docs_enabled | default(true) | bool else 'https://jacobbista.github.io/kelt' }}"
     };
   default.conf: |
     server {
@@ -42,6 +43,15 @@ data:
       location /watchdog/ {
         proxy_pass http://{{ hostvars[groups['control'][0]]['ansible_host'] }}:{{ dashboard_watchdog_port }}/;
       }
+{% if dashboard_docs_enabled | default(true) | bool %}
+      # In-cluster MkDocs site (own image), served same-origin so the Manual
+      # works offline. Trailing slash strips the /docs prefix.
+      location /docs/ {
+        proxy_pass http://dashboard-docs.{{ dashboard_namespace }}.svc.cluster.local/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+      }
+{% endif %}
 
       # The OIDC client redirects the browser back to /auth/callback after
       # Keycloak login. That path is a React route, not a Keycloak endpoint,

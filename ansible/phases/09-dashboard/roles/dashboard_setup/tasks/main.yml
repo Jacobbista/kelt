@@ -61,12 +61,16 @@
 - name: Sync dashboard sources from ansible-ro to writable workspace
   ansible.builtin.command:
     cmd: >-
-      rsync -a --delete
+      rsync -a -i --delete
       --exclude node_modules
       --exclude venv
       "{{ dashboard_source_dir }}/"
       "{{ dashboard_work_dir }}/"
-  changed_when: true
+  register: dashboard_sync
+  # -i itemizes changes; non-empty stdout means files actually changed, so the
+  # backend restart below fires only on a real source edit (keeps re-runs idempotent
+  # while making `run-phase 09-dashboard` a working backend refresh).
+  changed_when: (dashboard_sync.stdout | default('') | trim) | length > 0
 
 - name: Ensure dashboard launcher scripts are executable
   ansible.builtin.file:
@@ -101,6 +105,7 @@
       DASHBOARD_BACKEND_SERVICE_NAME={{ dashboard_backend_service_name }}
       DASHBOARD_FRONTEND_SERVICE_NAME={{ dashboard_frontend_service_name }}
       DASHBOARD_ALLOW_CONFIGMAP_WRITE={{ dashboard_allow_configmap_write | bool | lower }}
+      DASHBOARD_ALLOW_WORKLOAD_CREATE={{ dashboard_allow_workload_create | bool | lower }}
       DASHBOARD_AUDIT_LOG_PATH={{ dashboard_backend_dir }}/logs/audit.log
       DASHBOARD_SKIP_AUTH={{ (not (dashboard_auth_enabled | bool)) | lower }}
       DASHBOARD_KEYCLOAK_URL={{ dashboard_keycloak_url }}
@@ -109,6 +114,7 @@
       DASHBOARD_KEYCLOAK_PATH_PREFIX={{ dashboard_keycloak_path_prefix }}
       DASHBOARD_CORS_ORIGIN={{ dashboard_cors_origin }}
       DASHBOARD_DEV_EXTERNAL_URL={{ dashboard_dev_external_url }}
+  register: backend_env_file
 
 - name: Create frontend environment file (used by Vite dev only)
   ansible.builtin.copy:
@@ -127,6 +133,7 @@
       VITE_AUTH_ENABLED={{ dashboard_auth_enabled | bool | lower }}
       VITE_KEYCLOAK_AUTHORITY={{ dashboard_keycloak_external_url }}{{ dashboard_keycloak_path_prefix }}/realms/{{ dashboard_keycloak_realm }}
       VITE_KEYCLOAK_CLIENT_ID={{ dashboard_keycloak_client_id }}
+  register: frontend_env_file
   when: dashboard_dev_enabled | bool
 
 - name: Stat frontend package.json
@@ -216,14 +223,19 @@
   ansible.builtin.systemd:
     name: "{{ dashboard_backend_service_name }}"
     enabled: true
-    state: started
+    # restart (not just start) when the unit, runtime env, or backend source
+    # changed, so a new KC_HOSTNAME / origin / code edit actually reaches the
+    # running process. state: started is a no-op on an already-running service.
+    state: "{{ 'restarted' if ((backend_service_unit.changed | default(false)) or (backend_env_file.changed | default(false)) or (dashboard_sync.changed | default(false))) else 'started' }}"
 
 - name: Enable and start dashboard dev frontend service
   become: true
   ansible.builtin.systemd:
     name: "{{ dashboard_frontend_service_name }}"
     enabled: true
-    state: started
+    # Same reasoning: restart on unit/.env change so the Vite dev server picks
+    # up a new VITE_KEYCLOAK_AUTHORITY instead of serving the previous origin.
+    state: "{{ 'restarted' if ((frontend_service_unit.changed | default(false)) or (frontend_env_file.changed | default(false))) else 'started' }}"
   when: dashboard_dev_enabled | bool
 
 - name: Stop dashboard dev frontend service (opt-out)
@@ -318,6 +330,35 @@
     definition: "{{ lookup('template', role_path + '/templates/dashboard-frontend-service.yaml.j2') | from_yaml }}"
   when: dashboard_cluster_enabled | bool
 
+# In-cluster docs server (own image), served same-origin under /docs so the
+# Manual works offline. imagePullPolicy: Always picks up the latest docs build.
+- name: Pre-pull dashboard docs image on worker
+  ansible.builtin.command:
+    cmd: "k3s ctr -n k8s.io images pull {{ kelt_docs_image }}"
+  delegate_to: "{{ groups['workers'][0] }}"
+  become: true
+  run_once: true
+  changed_when: false
+  register: prepull_docs
+  failed_when: prepull_docs.rc != 0 and 'already exists' not in (prepull_docs.stderr | default(''))
+  when: dashboard_cluster_enabled | bool and (dashboard_docs_enabled | default(true) | bool)
+
+- name: Apply dashboard docs Deployment
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    force: true
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/dashboard-docs-deployment.yaml.j2') | from_yaml }}"
+  when: dashboard_cluster_enabled | bool and (dashboard_docs_enabled | default(true) | bool)
+
+- name: Apply dashboard docs Service
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/dashboard-docs-service.yaml.j2') | from_yaml }}"
+  when: dashboard_cluster_enabled | bool and (dashboard_docs_enabled | default(true) | bool)
+
 # Image tag is mutable (:latest) so the Deployment manifest hash does not
 # change when CI publishes a new digest. A rollout restart is required
 # to make kubelet honor imagePullPolicy: Always and pull the fresh image.
@@ -329,6 +370,18 @@
   become: true
   changed_when: true
   when: dashboard_cluster_enabled | bool
+
+# Docs use :latest (imagePullPolicy: Always). Docs publish automatically on push
+# (the docs-site workflow rebuilds kelt-docs); this forced rollout makes a phase
+# 09 re-run pull the freshly built image into the live pod.
+- name: Rollout restart dashboard docs Deployment
+  ansible.builtin.command:
+    cmd: >-
+      k3s kubectl -n {{ dashboard_namespace }} rollout restart deploy/dashboard-docs
+  delegate_to: "{{ groups['masters'][0] }}"
+  become: true
+  changed_when: true
+  when: dashboard_cluster_enabled | bool and (dashboard_docs_enabled | default(true) | bool)
 
 - name: Wait for dashboard frontend pod ready
   kubernetes.core.k8s_info:
