@@ -1,0 +1,63 @@
+name: contracts drift
+
+# Anti-drift cross-check between this deployment repo (kelt) and the upstream
+# application repo 5g-northbound. The upstream owns the env.contract.yaml files;
+# this job clones it at a pinned ref and verifies our phase ConfigMaps still
+# provide every required env var. The upstream is NOT vendored.
+
+on:
+  push:
+    paths:
+      - "ansible/phases/10-northbound/**"
+      - ".github/scripts/check_env_contract.py"
+      - ".github/workflows/contracts-drift.yml"
+  pull_request:
+    paths:
+      - "ansible/phases/10-northbound/**"
+      - ".github/scripts/check_env_contract.py"
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: "5g-northbound git ref to check against"
+        required: true
+        default: "main"
+
+permissions:
+  contents: read
+
+env:
+  # Pin to a 5g-northbound release tag once one is cut; main is the moving default.
+  UPSTREAM_REF: ${{ github.event.inputs.upstream_ref || 'main' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Checkout upstream 5g-northbound
+        uses: actions/checkout@v5
+        with:
+          repository: Jacobbista/5g-northbound
+          ref: ${{ env.UPSTREAM_REF }}
+          path: upstream
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install pyyaml
+
+      - name: Upstream self-validation (soft)
+        # Tolerant: a CLI change upstream should warn, not break our gate.
+        run: |
+          if [ -f upstream/deploy/tools/contracts.py ]; then
+            python3 upstream/deploy/tools/contracts.py validate || \
+              echo "::warning::upstream contracts.py validate failed or signature changed"
+          else
+            echo "::warning::upstream deploy/tools/contracts.py not found at ref ${UPSTREAM_REF}"
+          fi
+
+      - name: Check testbed ConfigMaps cover required contract vars (hard gate)
+        run: python3 .github/scripts/check_env_contract.py upstream

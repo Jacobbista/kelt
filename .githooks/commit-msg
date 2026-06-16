@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Developer commit-msg hook. Installed by: testbed dev-hooks on
+# Blocks commits whose subject line does not follow Conventional Commits, the
+# same format documented in docs/development/contributing.md. Pure bash, no
+# Node/commitlint dependency. Developer-only (not part of the operator install).
+set -euo pipefail
+
+msg_file="$1"
+# First non-empty, non-comment line = the subject line we validate.
+subject="$(grep -vE '^[[:space:]]*#' "$msg_file" | grep -vE '^[[:space:]]*$' | head -n1 || true)"
+
+# Nothing to validate (empty message — git aborts the commit on its own).
+[ -n "$subject" ] || exit 0
+
+# Pass through machine-generated subjects that are not author-written:
+# merges, git-revert, and rebase autosquash markers.
+case "$subject" in
+  "Merge "*|"Revert \""*|"fixup!"*|"squash!"*|"amend!"*) exit 0 ;;
+esac
+
+# Conventional Commits: type(optional-scope)(optional !): description
+types='feat|fix|docs|refactor|test|chore|perf|ci|build|style|revert'
+pattern="^(${types})(\([a-zA-Z0-9._/-]+\))?(!)?: .+"
+
+if ! printf '%s' "$subject" | grep -qE "$pattern"; then
+  echo "" >&2
+  echo "✗ Commit message does not follow Conventional Commits — commit blocked." >&2
+  echo "  Got:      $subject" >&2
+  echo "  Expected: type(optional-scope): description" >&2
+  echo "  Types:    ${types//|/, }" >&2
+  echo "  Examples: feat(5g-core): add BSF network function" >&2
+  echo "            docs: update northbound deploy notes" >&2
+  echo "  See docs/development/contributing.md (Commit Messages)." >&2
+  exit 1
+fi
+
+# Soft length guard (commitlint's default header limit) — a runaway subject is
+# almost always body text that belongs below the blank line.
+if [ "${#subject}" -gt 100 ]; then
+  echo "" >&2
+  echo "✗ Commit subject is ${#subject} chars (max 100) — commit blocked." >&2
+  echo "  Keep the subject short; move detail into the body after a blank line." >&2
+  exit 1
+fi

@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Developer pre-push hook. Installed by: testbed dev-hooks on
+# Advisory only — never blocks. Reminds you when the frontend has changes that
+# need a version tag to publish, and flags WIP commits. The actual tagging is a
+# confirmed, explicit command (testbed dev-hooks release), not done here, because
+# git hooks have no reliable TTY for interactive prompts.
+root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+[ -x "$root/testbed-config" ] || exit 0
+"$root/testbed-config" dev-hooks check prepush || true
+exit 0

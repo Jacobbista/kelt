@@ -76,10 +76,12 @@ iam:
     - positioning-demo
     - dashboard
     - dashboard-readonly
+    - placement-editor-proxy
   expected_realm_roles:
     - camara-location-read
     - dashboard-admin
     - dashboard-viewer
+    - positioning-edit
 
 # Network configuration (from ansible/group_vars/all.yml)
 network:

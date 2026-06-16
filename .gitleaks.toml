@@ -1,0 +1,27 @@
+# gitleaks config for KELT. Read by both the CI scan and the dev-hooks pre-commit
+# hook. The findings below are lab/test credentials and PUBLIC keys in a
+# reproducible testbed, not real secrets. Prefer a precise VALUE regex over a
+# blanket path; never allowlist a real secret pattern.
+title = "KELT gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Lab test SIM credentials, 5G public keys, and removed legacy lab artifacts."
+regexTarget = "line"
+regexes = [
+  # UERANSIM / Open5GS standard TEST SIM credentials (well-known public example
+  # values shipped in the simulated-RAN config; not real subscriber keys).
+  '''8baf473f2f8fd09487cccbd7097c6862''',   # test authentication key (K)
+  '''1{32}''',                               # test operator key (OP)
+  # 5G SUCI home-network PUBLIC key. Public by design: it encrypts the SUPI on the
+  # UE side, the matching PRIVATE key lives only in the core and is never committed.
+  '''5a8d38864820197c3394b92613b20b91633cbd897119273bf8e4a6f4eec0a650''',
+]
+paths = [
+  # Legacy kubeadm lab join configs and notes, removed from the tree when the
+  # testbed moved to k3s; still present in git history. Throwaway local cluster,
+  # bootstrap tokens long dead.
+  '''kubernetes/.*''',
+]

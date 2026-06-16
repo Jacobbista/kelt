@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Developer pre-commit hook. Installed by: testbed dev-hooks on
+# Blocks commits containing secrets, mirroring the CI gitleaks scan so leaks are
+# caught before they ever leave your machine. Developer-only (not part of the
+# operator install). See docs/development/contributing.md.
+set -euo pipefail
+
+if command -v gitleaks >/dev/null 2>&1; then
+  if ! gitleaks protect --staged --redact -v; then
+    echo "" >&2
+    echo "✗ gitleaks found potential secrets in the staged changes — commit blocked." >&2
+    echo "  Remove the secret, or if it is a false positive add a rule to .gitleaks.toml." >&2
+    exit 1
+  fi
+else
+  echo "⚠ gitleaks not installed: local secret scan skipped (CI still scans on push)." >&2
+  echo "  Install it to block leaks locally: https://github.com/gitleaks/gitleaks" >&2
+fi
