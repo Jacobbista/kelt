@@ -13,7 +13,7 @@ frontdoor_image: "docker.io/library/nginx:1.27-alpine"
 # (which writes the frontdoor-brand ConfigMap / brand.json) — not these vars.
 # Override only for a full white-label. See docs/security/external-access.md.
 frontdoor_brand_title: "{{ lookup('ansible.builtin.env', 'FRONTDOOR_BRAND_TITLE') | default('KELT', true) }}"
-frontdoor_brand_tagline: "{{ lookup('ansible.builtin.env', 'FRONTDOOR_BRAND_TAGLINE') | default('Reproducible cloud-edge 5G testbed', true) }}"
+frontdoor_brand_tagline: "{{ lookup('ansible.builtin.env', 'FRONTDOOR_BRAND_TAGLINE') | default('Private 5G testbed', true) }}"
 frontdoor_brand_accent: "{{ lookup('ansible.builtin.env', 'FRONTDOOR_BRAND_ACCENT') | default('#14b8a6', true) }}"
 
 # Cluster DNS used by nginx for runtime upstream resolution. k3s default is

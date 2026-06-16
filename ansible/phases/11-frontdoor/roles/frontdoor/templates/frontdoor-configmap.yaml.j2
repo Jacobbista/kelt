@@ -137,9 +137,13 @@ data:
                font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; }
         main { width: 100%; max-width: 680px; padding: 2.5rem 1.25rem; }
         header { text-align: center; margin-bottom: 2rem; }
-        .mark { width: 68px; height: 68px; margin: 0 auto .75rem; display: block; }
-        h1 { font-size: 2rem; letter-spacing: .04em; margin: 0; }
+        .mark { width: 46px; height: 46px; display: block; }
+        h1 { font-size: 1.7rem; letter-spacing: .04em; margin: 0; }
         h1 .acc { color: var(--accent); }
+        .brandrow { display: flex; align-items: center; justify-content: center; gap: 1.1rem; flex-wrap: wrap; }
+        .kelt { display: flex; align-items: center; gap: .55rem; }
+        #cobrand { display: flex; align-items: center; gap: .7rem; }
+        .divider { width: 1px; height: 44px; background: #334155; }
         p.sub { margin: .4rem 0 0; color: #94a3b8; font-size: .95rem; }
         a.card { display: flex; align-items: center; gap: .9rem; text-decoration: none;
                  border: 1px solid #1e293b; background: rgba(15,23,42,.7); border-radius: .7rem;
@@ -157,24 +161,29 @@ data:
     <body>
       <main>
         <header>
-          <svg class="mark" viewBox="0 0 64 64" aria-hidden="true">
-            <g fill="none" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M16 58 Q32 63 48 58" stroke="#0f766e" stroke-width="3"/>
-              <path d="M21 58 C15 50 27 43 21 35 C15 28 25 21 21 14" stroke="#14b8a6" stroke-width="4"/>
-              <path d="M32 58 C26 49 38 41 32 33 C26 25 38 17 32 8" stroke="#0d9488" stroke-width="4"/>
-              <path d="M43 58 C49 50 37 43 43 35 C49 28 39 22 43 16" stroke="#14b8a6" stroke-width="4"/>
-            </g>
-            <g fill="#f59e0b">
-              <circle cx="21" cy="14" r="2.6"/><circle cx="32" cy="8" r="2.8"/>
-              <circle cx="43" cy="16" r="2.6"/><circle cx="33.5" cy="33" r="2.2"/>
-            </g>
-          </svg>
-          <h1>{{ frontdoor_brand_title | upper }}</h1>
-          <p class="sub">{{ frontdoor_brand_tagline }}</p>
-          <!-- Optional co-brand of the org/team/centre running this instance,
-               configured from the dashboard (writes /brand.json). KELT stays the
-               primary mark; the org appears under it. Empty by default. -->
-          <div id="cobrand" style="margin-top:1rem;min-height:1px"></div>
+          <!-- KELT and the org co-brand sit side by side, split by a thin rule.
+               KELT stays primary; the org (set from the dashboard, /brand.json)
+               appears beside it so the page reads as "<Org>'s private 5G testbed".
+               #cobrand is filled by the script below; empty by default. -->
+          <div class="brandrow">
+            <div class="kelt">
+              <svg class="mark" viewBox="0 0 64 64" aria-hidden="true">
+                <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M16 58 Q32 63 48 58" stroke="#0f766e" stroke-width="3"/>
+                  <path d="M21 58 C15 50 27 43 21 35 C15 28 25 21 21 14" stroke="#14b8a6" stroke-width="4"/>
+                  <path d="M32 58 C26 49 38 41 32 33 C26 25 38 17 32 8" stroke="#0d9488" stroke-width="4"/>
+                  <path d="M43 58 C49 50 37 43 43 35 C49 28 39 22 43 16" stroke="#14b8a6" stroke-width="4"/>
+                </g>
+                <g fill="#f59e0b">
+                  <circle cx="21" cy="14" r="2.6"/><circle cx="32" cy="8" r="2.8"/>
+                  <circle cx="43" cy="16" r="2.6"/><circle cx="33.5" cy="33" r="2.2"/>
+                </g>
+              </svg>
+              <h1>{{ frontdoor_brand_title | upper }}</h1>
+            </div>
+            <span id="cobrand"></span>
+          </div>
+          <p class="sub" id="tagline">{{ frontdoor_brand_tagline }}</p>
         </header>
         <a class="card" href="{{ external_scheme }}://{{ dashboard_subdomain }}.{{ external_base_domain }}/">
           <span class="dot"></span><span class="body"><span class="name">Dashboard</span><span class="host">{{ dashboard_subdomain }}.{{ external_base_domain }}</span></span>
@@ -204,14 +213,28 @@ data:
         // Co-brand from the dashboard-managed /brand.json (org name + logo +
         // optional accent). Absent/empty -> KELT only. Kept tiny and dependency-free.
         fetch('/brand.json', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (b) {
-          if (!b || (!b.org_name && !b.org_logo)) return;
+          if (!b) return;
           if (b.accent) document.documentElement.style.setProperty('--accent', b.accent);
-          var el = document.getElementById('cobrand');
-          var logo = b.org_logo ? '<img src="' + b.org_logo + '" alt="" style="height:34px;max-width:180px;object-fit:contain;vertical-align:middle" />' : '';
-          var name = b.org_name ? '<span style="color:#94a3b8;font-size:.85rem">' + b.org_name + '</span>' : '';
-          el.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;gap:.6rem">'
-            + '<span style="color:#64748b;font-size:.7rem;text-transform:uppercase;letter-spacing:.08em">deployed by</span>'
-            + logo + name + '</div>';
+          if (b.tagline) document.getElementById('tagline').textContent = b.tagline;
+          if (!b.org_name && !b.org_logo) return;
+          var logo = '';
+          if (b.org_logo) {
+            logo = '<img src="' + b.org_logo + '" alt="" style="height:40px;max-width:200px;object-fit:contain;display:block" />';
+            // Optional backdrop so the logo stays legible on the dark page.
+            var plate = {
+              light: 'background:#ffffff;padding:7px 11px;border-radius:9px',
+              dark: 'background:#0b1120;border:1px solid #1e293b;padding:7px 11px;border-radius:9px',
+              glass: 'background:rgba(148,163,184,.10);border:1px solid rgba(148,163,184,.22);border-radius:10px;padding:7px 11px;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);box-shadow:0 2px 14px rgba(0,0,0,.28)'
+            }[b.logo_bg];
+            if (plate) logo = '<span style="display:inline-flex;' + plate + '">' + logo + '</span>';
+          }
+          var name = b.org_name ? '<span style="color:#f1f5f9;font-size:1.15rem;font-weight:600">' + b.org_name + '</span>' : '';
+          // Side by side with KELT, split by a thin vertical rule; "operated by"
+          // sits as a small label above the org so the ownership reads clearly.
+          document.getElementById('cobrand').innerHTML = '<span class="divider"></span>'
+            + '<div style="display:flex;flex-direction:column;align-items:center;gap:.4rem">'
+            + '<span style="color:#64748b;font-size:.6rem;text-transform:uppercase;letter-spacing:.16em">operated by</span>'
+            + '<div style="display:flex;align-items:center;gap:.6rem">' + logo + name + '</div></div>';
         }).catch(function () {});
       </script>
     </body>
