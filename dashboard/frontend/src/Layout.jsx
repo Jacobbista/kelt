@@ -6,7 +6,7 @@ import { useOperations } from "./context/OperationsContext";
 import { useAuth } from "./auth/AuthContext";
 import { getWatchdogToken } from "./api";
 
-export default function Layout({ onNavigate, runtime, children, backendUnreachable, serverTime }) {
+export default function Layout({ onNavigate, runtime, children, backendUnreachable, sessionExpired, serverTime }) {
   const ops = useOperations();
   const auth = useAuth();
   const [statusExpanded, setStatusExpanded] = useState(false);
@@ -84,7 +84,9 @@ export default function Layout({ onNavigate, runtime, children, backendUnreachab
             <div className="flex items-center justify-between px-4 py-3">
               <span className="flex items-center gap-2">
                 <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
-                Backend unreachable — reconnecting…
+                {sessionExpired
+                  ? "Session expired — reload to sign in again."
+                  : "Backend unreachable — reconnecting…"}
               </span>
               <div className="flex items-center gap-2">
                 <button

@@ -12,6 +12,7 @@ const FETCH_TIMEOUT_MS = 5000;
  */
 export function useBackendHealth() {
   const [unreachable, setUnreachable] = useState(false);
+  const [sessionExpired, setSessionExpired] = useState(false);
   const [serverTime, setServerTime] = useState(null);
 
   const check = useCallback(async () => {
@@ -21,10 +22,20 @@ export function useBackendHealth() {
       const res = await fetch(`/health`, {
         method: "GET",
         signal: ctrl.signal,
+        // redirect: "manual" so a perimeter gate (e.g. Cloudflare Access)
+        // bouncing us to its login page returns an opaqueredirect instead of
+        // a CORS failure we would misread as "backend down".
+        redirect: "manual",
       });
       clearTimeout(to);
+      if (res.type === "opaqueredirect" || res.status === 0) {
+        setSessionExpired(true);
+        setUnreachable(true);
+        return false;
+      }
       if (res.ok) {
         setUnreachable(false);
+        setSessionExpired(false);
         try {
           const data = await res.json();
           if (data.server_time_utc) setServerTime(data.server_time_utc);

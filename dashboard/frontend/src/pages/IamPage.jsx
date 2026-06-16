@@ -50,6 +50,18 @@ const ROLE_MATRIX = [
       "No access to the dashboard backend (the dashboard requires dashboard-viewer or dashboard-admin)",
     ],
   },
+  {
+    role: "positioning-edit",
+    group: "g-positioning-editors",
+    description: "Service-plane EDIT role for authoring room geometry.",
+    abilities: [
+      "Reach the placement-editor UI through its Keycloak front-door gate",
+    ],
+    restrictions: [
+      "No dashboard backend access (needs dashboard-viewer or dashboard-admin)",
+      "g-dashboard-admins also passes the placement-editor gate",
+    ],
+  },
 ];
 
 const CLIENTS = [
@@ -57,6 +69,7 @@ const CLIENTS = [
   { id: "positioning-demo",    type: "public",       flow: "PKCE (browser)",            note: "Positioning demo SPA." },
   { id: "camara-gateway",      type: "confidential", flow: "client_credentials (M2M)",  note: "CAMARA Northbound gateway service account." },
   { id: "dashboard-readonly",  type: "confidential", flow: "client_credentials (M2M)",  note: "Headless read-only consumer (CI, monitoring agents)." },
+  { id: "placement-editor-proxy", type: "confidential", flow: "authorization-code (oauth2-proxy)", note: "Front-door gate for the no-auth placement-editor; admits g-positioning-editors or g-dashboard-admins." },
 ];
 
 const SEED_USERS = [
@@ -227,6 +240,24 @@ export default function IamPage() {
       </section>
 
       <section>
+        <h3 className="mb-2 text-sm font-semibold text-slate-200">Granting access</h3>
+        <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-3 text-xs text-slate-300">
+          <p className="mb-2">
+            Add a user to a group in the realm console (<span className="font-mono">Open realm console ↗</span>);
+            the role follows the group. Groups are orthogonal, so combine them for a persona. You never
+            need admin to show someone the positioning demo.
+          </p>
+          <ul className="space-y-1">
+            <li>👁 <b>Positioning demo only</b> (no dashboard) → <span className="font-mono text-slate-200">g-camara-users</span></li>
+            <li>🗺 <b>Demo + read-only 5G core view</b> → <span className="font-mono text-slate-200">g-camara-users</span> + <span className="font-mono text-slate-200">g-dashboard-viewers</span></li>
+            <li>✏️ <b>Author room geometry</b> (placement-editor) → <span className="font-mono text-slate-200">g-positioning-editors</span></li>
+            <li>📊 <b>Read-only operator</b> (dashboard, no writes) → <span className="font-mono text-slate-200">g-dashboard-viewers</span></li>
+            <li>🔧 <b>Full control</b> → <span className="font-mono text-slate-200">g-dashboard-admins</span></li>
+          </ul>
+        </div>
+      </section>
+
+      <section>
         <h3 className="mb-2 text-sm font-semibold text-slate-200">Seed users (phase 08)</h3>
         <table className="w-full text-xs">
           <thead className="text-left text-slate-400">
@@ -270,6 +301,23 @@ export default function IamPage() {
               {isAdmin && c.flow.startsWith("client_credentials") && <CurlSnippet clientId={c.id} />}
             </div>
           ))}
+        </div>
+      </section>
+
+      <section>
+        <h3 className="mb-2 text-sm font-semibold text-slate-200">Front-door gate</h3>
+        <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-3 text-xs text-slate-300">
+          <p className="mb-2">
+            Services without native auth (today the <span className="font-mono">placement-editor</span>)
+            are fronted by a generic <span className="font-mono">oauth2-proxy</span> gate that performs the
+            Keycloak login and admits only the configured groups. The dashboard, demo, and CAMARA gateway
+            authenticate on their own and need no gate.
+          </p>
+          <p>
+            The gate sends the browser to the canonical Keycloak issuer while redeeming tokens in-cluster,
+            so it behaves the same served locally or behind a tunnel. See the External access doc for the
+            routes-versus-subdomains model.
+          </p>
         </div>
       </section>
 

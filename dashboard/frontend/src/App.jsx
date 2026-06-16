@@ -3,6 +3,7 @@ import { Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import { getRuntimeInfo } from "./api";
 import { AuthProvider, useAuth } from "./auth/AuthContext";
 import { OperationsProvider } from "./context/OperationsContext";
+import { ToastProvider } from "./context/ToastContext";
 import { useBackendHealth } from "./hooks/useBackendHealth";
 import ErrorBoundary from "./components/ErrorBoundary";
 import Layout from "./Layout";
@@ -15,7 +16,11 @@ import IamPage from "./pages/IamPage";
 import KubernetesPage from "./pages/KubernetesPage";
 import LoggedOutPage from "./pages/LoggedOutPage";
 import MetricsPage from "./pages/MetricsPage";
+import NorthboundPage from "./pages/NorthboundPage";
 import OverviewPage from "./pages/OverviewPage";
+import ServicesPage from "./pages/ServicesPage";
+import CustomWorkloadPage from "./pages/CustomWorkloadPage";
+import ManualPage from "./pages/ManualPage";
 import RanPage from "./pages/RanPage";
 import SubscribersPage from "./pages/SubscribersPage";
 import TopologyPage from "./pages/TopologyPage";
@@ -31,7 +36,9 @@ const ROUTES = {
   "ue-monitoring": "/ue-monitor",
   diagnostics:    "/diagnostics",
   metrics:        "/metrics",
+  services:       "/services",
   iam:            "/iam",
+  manual:         "/manual",
 };
 
 export default function App() {
@@ -49,7 +56,7 @@ function AppInner() {
   const [logTarget, setLogTarget] = useState(null);
   const [termTarget, setTermTarget] = useState(null);
   const [expandNfType, setExpandNfType] = useState(null);
-  const { unreachable: backendUnreachable, serverTime } = useBackendHealth();
+  const { unreachable: backendUnreachable, sessionExpired, serverTime } = useBackendHealth();
 
   useEffect(() => {
     // When auth is enabled but the user is not signed in, redirect to
@@ -112,14 +119,35 @@ function AppInner() {
     navigate(ROUTES[id] ?? "/");
   }
 
+  // While auth is enabled and the session is unresolved or absent, do not mount
+  // the app: the redirect to Keycloak is already in flight (effect above).
+  // Rendering pages here would fire API calls with no token and flash a 401
+  // banner before the redirect lands. The callback and logged-out routes must
+  // still render to drive their own flow, so they are exempt.
+  const authPath = window.location.pathname;
+  if (
+    auth.enabled
+    && authPath !== "/auth/callback"
+    && authPath !== "/logged-out"
+    && (auth.loading || !auth.user)
+  ) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-400">
+        Signing in…
+      </div>
+    );
+  }
+
   return (
     <ErrorBoundary>
+    <ToastProvider>
     <OperationsProvider>
     <Layout
       onNavigate={onNavigate}
       runtime={runtime}
       serverTime={serverTime}
       backendUnreachable={backendUnreachable}
+      sessionExpired={sessionExpired}
     >
       <Routes>
         <Route path="/auth/callback" element={<CallbackPage />} />
@@ -135,7 +163,12 @@ function AppInner() {
         <Route path="/ue-monitor" element={<UEMonitoringPage />} />
         <Route path="/diagnostics" element={<DiagnosticsPage />} />
         <Route path="/metrics" element={<MetricsPage />} />
+        <Route path="/services" element={<ServicesPage />} />
+        <Route path="/services/northbound" element={<NorthboundPage />} />
+        <Route path="/services/custom" element={<CustomWorkloadPage />} />
+        <Route path="/northbound" element={<Navigate to="/services/northbound" replace />} />
         <Route path="/iam" element={<IamPage />} />
+        <Route path="/manual" element={<ManualPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
 
@@ -164,6 +197,7 @@ function AppInner() {
       )}
     </Layout>
     </OperationsProvider>
+    </ToastProvider>
     </ErrorBoundary>
   );
 }

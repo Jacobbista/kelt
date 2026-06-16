@@ -70,7 +70,11 @@ export function AuthProvider({ children }) {
   const login = useCallback(async () => {
     const um = getUserManager();
     if (!um) return;
-    await um.signinRedirect();
+    // Preserve where the user was so the callback returns them there, not to "/"
+    // (CallbackPage navigates to user.state). Keeps deep links across login.
+    const here = window.location.pathname + window.location.search;
+    const state = here && here !== "/auth/callback" ? here : "/";
+    await um.signinRedirect({ state });
   }, []);
 
   const logout = useCallback(async () => {

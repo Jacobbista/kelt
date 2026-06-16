@@ -106,3 +106,44 @@ body {
   font-size: 12px;
   color: #64748b;
 }
+
+.health-gate__reload {
+  margin: 4px 0 12px;
+  padding: 8px 20px;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  background: #1e293b;
+  color: #e2e8f0;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.health-gate__reload:hover {
+  background: #334155;
+}
+
+/* Services hub: a couple of small, restrained helpers. This is an ops
+   dashboard, not a showcase, so no heavy effects: clean cards consistent
+   with NfCard, an icon badge, and one subtle fade-in. */
+.svc-badge {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: rgba(56, 189, 248, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  color: #7dd3fc;
+  flex-shrink: 0;
+}
+
+@keyframes svc-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.svc-fade { animation: svc-fade 0.25s ease-out both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .svc-fade { animation: none; }
+}

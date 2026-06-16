@@ -4,15 +4,28 @@
 const API_BASE = "";
 
 import { getCurrentAccessToken } from "./auth/AuthContext";
+import { AUTH_ENABLED, getUserManager } from "./auth/oidc";
 
 function _authHeader() {
   const token = getCurrentAccessToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+// A 401 means the request had no valid token (not logged in, or session expired):
+// start a fresh Keycloak login instead of surfacing a raw "failed: 401" error.
+// Guarded so several concurrent 401s trigger a single redirect. 403 (authenticated
+// but forbidden) is NOT a re-auth case — it falls through and is shown normally.
+let _reauthing = false;
+function _maybeReauth(status) {
+  if (status !== 401 || !AUTH_ENABLED || _reauthing) return;
+  _reauthing = true;
+  const um = getUserManager();
+  if (um) um.signinRedirect().catch(() => { _reauthing = false; });
+}
+
 async function get(path) {
   const res = await fetch(`${API_BASE}${path}`, { headers: { ..._authHeader() } });
-  if (!res.ok) throw new Error(`${path} failed: ${res.status}`);
+  if (!res.ok) { _maybeReauth(res.status); throw new Error(`${path} failed: ${res.status}`); }
   return res.json();
 }
 
@@ -23,6 +36,7 @@ async function post(path, body) {
     body: JSON.stringify(body),
   });
   if (!res.ok) {
+    _maybeReauth(res.status);
     const text = await res.text();
     throw new Error(`${path} failed: ${res.status} ${text}`);
   }
@@ -36,6 +50,7 @@ async function put(path, body) {
     body: JSON.stringify(body),
   });
   if (!res.ok) {
+    _maybeReauth(res.status);
     const text = await res.text();
     throw new Error(`${path} failed: ${res.status} ${text}`);
   }
@@ -45,6 +60,7 @@ async function put(path, body) {
 async function del(path) {
   const res = await fetch(`${API_BASE}${path}`, { method: "DELETE", headers: { ..._authHeader() } });
   if (!res.ok) {
+    _maybeReauth(res.status);
     const text = await res.text();
     throw new Error(`${path} failed: ${res.status} ${text}`);
   }
@@ -58,6 +74,7 @@ async function patch(path, body) {
     body: JSON.stringify(body),
   });
   if (!res.ok) {
+    _maybeReauth(res.status);
     const text = await res.text();
     throw new Error(`${path} failed: ${res.status} ${text}`);
   }
@@ -332,3 +349,39 @@ export const getK8sEvents = (ns, limit = 200) => {
 // NF version management (5g-nf-platform integration)
 export const getNfVersions = () => get("/api/v1/nf/versions");
 export const getNfUpdateStreamUrl = () => "/api/v1/nf/update/stream";
+
+// Northbound (positioning/CAMARA) service-management console
+export const getNorthboundServices = () => get("/api/v1/northbound/services");
+export const getNorthboundAdapters = () => get("/api/v1/northbound/adapters");
+export const getNorthboundContract = () => get("/api/v1/northbound/contract");
+export const getNorthboundBindings = () => get("/api/v1/northbound/bindings");
+export const getNorthboundReadiness = () => get("/api/v1/northbound/readiness");
+export const getNorthboundServiceContract = (service) =>
+  get(`/api/v1/northbound/contract/${encodeURIComponent(service)}`);
+export const getNorthboundServiceConfig = (service) =>
+  get(`/api/v1/northbound/config/${encodeURIComponent(service)}`);
+export const applyNorthboundServiceConfig = (service, values) =>
+  put(`/api/v1/northbound/config/${encodeURIComponent(service)}`, { values });
+export const getNorthboundServiceFile = (service, path) =>
+  get(`/api/v1/northbound/files/${encodeURIComponent(service)}?path=${encodeURIComponent(path)}`);
+export const applyNorthboundServiceFile = (service, path, content) =>
+  put(`/api/v1/northbound/files/${encodeURIComponent(service)}`, { path, content });
+// Adapters self-register with the engine (v0.6.0); there is no manual register.
+// DELETE force-removes a stale registry entry.
+export const unregisterNorthboundAdapter = (name) =>
+  del(`/api/v1/northbound/adapters/${encodeURIComponent(name)}`);
+// Targeted upgrade of a catalog adapter: image-only patch (config preserved).
+export const upgradeNorthboundAdapter = (name, image) =>
+  post(`/api/v1/northbound/adapters/${encodeURIComponent(name)}/upgrade`, { image });
+export const deployNorthboundImage = (body) => post("/api/v1/northbound/deploy", body);
+export const deployNorthboundWorkload = (body) => post("/api/v1/northbound/workloads", body);
+export const deleteNorthboundWorkload = (name) =>
+  del(`/api/v1/northbound/workloads/${encodeURIComponent(name)}`);
+export const setNorthboundFusion = (body) => put("/api/v1/northbound/fusion", body);
+export const rolloutNorthboundManaged = (deployment, image) =>
+  post(`/api/v1/northbound/managed/${encodeURIComponent(deployment)}/image`, { image });
+
+// Dashboard self-update (deployed-vs-registry for frontend/docs)
+export const getDashboardComponents = () => get("/api/v1/dashboard/components");
+export const updateDashboardComponent = (name) =>
+  post(`/api/v1/dashboard/components/${encodeURIComponent(name)}/update`, {});

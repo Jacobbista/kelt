@@ -15,8 +15,13 @@ const NAV_ITEMS = [
   { id: "ue-monitoring", label: "UE Monitor",  icon: "\u25C9", path: "/ue-monitor" },
   { id: "diagnostics",   label: "Diagnostics", icon: "\u2295", path: "/diagnostics"},
   { id: "metrics",       label: "Metrics",     icon: "\u2261", path: "/metrics"    },
+  // Services hub (positioning/CAMARA now; NEF/MEC later). Visible to viewers
+  // (read-only); write controls inside each page are gated on dashboard-admin.
+  { id: "services",      label: "Services",    icon: "\u25a6", path: "/services"   },
   // IAM entry is rendered conditionally below: visible only to dashboard-admin.
   { id: "iam",           label: "IAM",         icon: "\u26BF", path: "/iam",        adminOnly: true },
+  // Manual + Learn: docs links into the live site + short in-app concept notes.
+  { id: "manual",        label: "Manual",      icon: "\u24D8", path: "/manual"     },
 ];
 
 const _localFmt = new Intl.DateTimeFormat(undefined, {
@@ -58,11 +63,14 @@ export default function Sidebar({ onNavigate, runtime, serverTime }) {
   const clockStr = useServerClock(serverTime);
   const toggleSync = useCallback(() => setShowSync((v) => !v), []);
   const closeSync = useCallback(() => setShowSync(false), []);
-  const roleLabel = auth.roles.includes("dashboard-admin")
-    ? "role: admin"
+  // Explicit role chip so a viewer immediately sees they are read-only and an
+  // admin knows they can write. Orthogonal roles (camara/positioning) are shown
+  // in full on the IAM page; here we surface the dashboard-plane role.
+  const roleBadge = auth.roles.includes("dashboard-admin")
+    ? { label: "admin", cls: "bg-emerald-500/15 text-emerald-300" }
     : auth.roles.includes("dashboard-viewer")
-      ? "role: viewer"
-      : "role: none";
+      ? { label: "viewer · read-only", cls: "bg-amber-500/15 text-amber-300" }
+      : { label: "no access", cls: "bg-rose-500/15 text-rose-300" };
 
   const handleLogout = useCallback(async () => {
     if (loggingOut) return;
@@ -91,9 +99,12 @@ export default function Sidebar({ onNavigate, runtime, serverTime }) {
 
   return (
     <aside className="fixed left-0 top-0 flex h-screen w-56 flex-col bg-slate-900 border-r border-slate-800">
-      <div className="px-4 py-5">
-        <h1 className="text-lg font-semibold text-white">5G Dashboard</h1>
-        <p className="mt-0.5 text-xs text-slate-400">Out-of-band control room</p>
+      <div className="flex items-center gap-2.5 px-4 py-5">
+        <img src="/kelt-mark.svg" alt="KELT" className="h-7 w-7 shrink-0" />
+        <div>
+          <h1 className="text-lg font-semibold leading-tight text-white">5G Dashboard</h1>
+          <p className="mt-0.5 text-[11px] text-slate-400">KELT · out-of-band control room</p>
+        </div>
       </div>
 
       <nav className="flex-1 px-2">
@@ -103,7 +114,7 @@ export default function Sidebar({ onNavigate, runtime, serverTime }) {
             type="button"
             onClick={() => onNavigate(item.id)}
             className={`mb-1 flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors ${
-              pathname === item.path
+              pathname === item.path || (item.path !== "/" && pathname.startsWith(item.path + "/"))
                 ? "bg-indigo-600/20 text-indigo-300 font-medium"
                 : "text-slate-300 hover:bg-slate-800 hover:text-white"
             }`}
@@ -157,8 +168,8 @@ export default function Sidebar({ onNavigate, runtime, serverTime }) {
               <span className="truncate text-[10px] font-medium text-slate-300" title={auth.username || ""}>
                 {auth.username || "unknown-user"}
               </span>
-              <span className="truncate text-[9px] text-slate-500" title={auth.roles.join(", ") || "no-role"}>
-                {roleLabel}
+              <span className={`mt-0.5 inline-block w-fit rounded px-1.5 py-0.5 text-[9px] font-medium ${roleBadge.cls}`} title={auth.roles.join(", ") || "no-role"}>
+                {roleBadge.label}
               </span>
             </div>
             <button

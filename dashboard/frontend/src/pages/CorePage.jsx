@@ -180,10 +180,21 @@ export default function CorePage({ onOpenLogs, onOpenTerminal, onOpenIperf3Logs,
     );
   }
 
+  const allNfs = [
+    ...(nfStatus.control_plane || []),
+    ...(nfStatus.user_plane || []),
+    ...(nfStatus.data || []),
+    ...(nfStatus.other || []),
+  ];
+  const runningCount = allNfs.filter((p) => p.phase === "Running").length;
+
   return (
-    <div>
-      <div className="mb-4 flex items-center gap-3">
-        <h2 className="text-lg font-semibold">5G Core Network Functions</h2>
+    <div className="svc-fade">
+      <div className="mb-4 flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-100">5G Core Network Functions</h2>
+          <p className="text-xs text-slate-500">{runningCount}/{allNfs.length} running · Open5GS service-based architecture</p>
+        </div>
         <button
           type="button"
           onClick={refreshVersions}
@@ -247,7 +258,10 @@ export default function CorePage({ onOpenLogs, onOpenTerminal, onOpenIperf3Logs,
         if (items.length === 0) return null;
         return (
           <div key={key} className="mb-6">
-            <h3 className="mb-2 text-sm font-medium text-slate-400 uppercase tracking-wide">{title}</h3>
+            <h3 className="mb-2 flex items-center gap-2 text-sm font-medium uppercase tracking-wide text-slate-400">
+              {title}
+              <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] tabular-nums text-slate-500">{items.length}</span>
+            </h3>
             <div className="flex flex-col gap-2">
               {items.map((nf) => (
                 <NfCard
