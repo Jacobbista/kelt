@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import HTTPException
 from kubernetes import client, config
 from kubernetes.client.exceptions import ApiException
+from kubernetes.stream import stream as _k8s_stream
 
 from app.config import settings
 from app.models import NodeSummary, PodSummary
@@ -94,6 +95,71 @@ class K8sService:
         cm = self.core.read_namespaced_config_map(name=name, namespace=namespace)
         return {"name": cm.metadata.name, "namespace": cm.metadata.namespace, "data": cm.data or {}}
 
+    # HTTP to an in-cluster Service via the API-server proxy. The backend runs off
+    # the cluster (ansible VM) and reaches ClusterIP services only this way, using
+    # the kubeconfig it already holds. `name:port` selects the Service port.
+    # _preload_content=False returns the raw response: without it the client
+    # str()s a JSON body into a Python-repr string (single quotes) that json.loads
+    # cannot parse, so always read .data here.
+    # Patch a deployment's container image (in-place upgrade); optionally (re)bind
+    # envFrom to the given ConfigMap/Secret names (both optional refs). The
+    # container name equals the deployment name in every northbound manifest.
+    # Strategic-merge leaves inline env and volumes untouched.
+    def set_workload_image(self, namespace: str, name: str, image: str,
+                           envfrom: list[str] | None = None) -> None:
+        container: dict[str, Any] = {"name": name, "image": image}
+        if envfrom:
+            container["envFrom"] = [{"configMapRef": {"name": envfrom[0], "optional": True}}]
+            if len(envfrom) > 1:
+                container["envFrom"].append({"secretRef": {"name": envfrom[1], "optional": True}})
+        patch = {"spec": {"template": {"spec": {"containers": [container]}}}}
+        self.apps.patch_namespaced_deployment(name=name, namespace=namespace, body=patch)
+
+    # Delete specific keys from a ConfigMap / Secret (read-modify-replace, so the
+    # keys are actually removed rather than merged). Used to UNSET a config var,
+    # e.g. clearing an inline override so a file-backed value takes effect.
+    def unset_configmap_keys(self, namespace: str, name: str, keys: list[str]) -> bool:
+        try:
+            cm = self.core.read_namespaced_config_map(name=name, namespace=namespace)
+        except ApiException as exc:
+            if exc.status == 404:
+                return False
+            raise
+        data = cm.data or {}
+        removed = [k for k in keys if k in data]
+        for k in removed:
+            del data[k]
+        if removed:
+            cm.data = data
+            self.core.replace_namespaced_config_map(name=name, namespace=namespace, body=cm)
+        return bool(removed)
+
+    def unset_secret_keys(self, namespace: str, name: str, keys: list[str]) -> bool:
+        try:
+            sec = self.core.read_namespaced_secret(name=name, namespace=namespace)
+        except ApiException as exc:
+            if exc.status == 404:
+                return False
+            raise
+        data = sec.data or {}
+        removed = [k for k in keys if k in data]
+        for k in removed:
+            del data[k]
+        if removed:
+            sec.data = data
+            self.core.replace_namespaced_secret(name=name, namespace=namespace, body=sec)
+        return bool(removed)
+
+    def service_proxy_get(self, namespace: str, service: str, port: int, path: str) -> str:
+        resp = self.core.connect_get_namespaced_service_proxy_with_path(
+            name=f"{service}:{port}", namespace=namespace, path=path, _preload_content=False)
+        return resp.data.decode("utf-8")
+
+    def service_proxy_delete(self, namespace: str, service: str, port: int, path: str) -> str:
+        resp = self.core.connect_delete_namespaced_service_proxy_with_path(
+            name=f"{service}:{port}", namespace=namespace, path=path, _preload_content=False)
+        return resp.data.decode("utf-8")
+
     def apply_configmap(self, namespace: str, name: str, data: dict[str, str]) -> None:
         body = client.V1ConfigMap(
             metadata=client.V1ObjectMeta(name=name, namespace=namespace),
@@ -104,7 +170,14 @@ class K8sService:
         except ApiException as exc:
             if exc.status != 404:
                 raise
-            self.core.create_namespaced_config_map(namespace=namespace, body=body)
+            try:
+                self.core.create_namespaced_config_map(namespace=namespace, body=body)
+            except ApiException as ce:
+                # Lost a create race (two near-simultaneous applies): the object
+                # now exists, so patch it instead of erroring with 409.
+                if ce.status != 409:
+                    raise
+                self.core.patch_namespaced_config_map(name=name, namespace=namespace, body=body)
 
     def list_deployments(self, namespace: str, label_selector: str = "") -> list[dict[str, Any]]:
         deps = self.apps.list_namespaced_deployment(
@@ -249,6 +322,73 @@ class K8sService:
     def delete_statefulset(self, namespace: str, name: str) -> None:
         try:
             self.apps.delete_namespaced_stateful_set(name=name, namespace=namespace)
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
+
+    def upsert_service(self, namespace: str, manifest: dict[str, Any]) -> None:
+        name = manifest.get("metadata", {}).get("name")
+        if not name:
+            raise ValueError("Service manifest missing metadata.name")
+        try:
+            self.core.read_namespaced_service(name=name, namespace=namespace)
+            self.core.patch_namespaced_service(name=name, namespace=namespace, body=manifest)
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
+            self.core.create_namespaced_service(namespace=namespace, body=manifest)
+
+    def delete_service(self, namespace: str, name: str) -> None:
+        try:
+            self.core.delete_namespaced_service(name=name, namespace=namespace)
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
+
+    def upsert_secret(
+        self,
+        namespace: str,
+        name: str,
+        string_data: dict[str, str],
+        secret_type: str = "Opaque",
+    ) -> None:
+        body = client.V1Secret(
+            metadata=client.V1ObjectMeta(name=name, namespace=namespace),
+            string_data=string_data,
+            type=secret_type,
+        )
+        try:
+            self.core.patch_namespaced_secret(name=name, namespace=namespace, body=body)
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
+            self.core.create_namespaced_secret(namespace=namespace, body=body)
+
+    def delete_secret(self, namespace: str, name: str) -> None:
+        try:
+            self.core.delete_namespaced_secret(name=name, namespace=namespace)
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
+
+    def exec_in_pod(self, namespace: str, pod: str, command: list[str], container: str | None = None) -> str | None:
+        """Run a command in a pod and return combined stdout (best-effort). Used for
+        read-only probes like `cat <path>`; returns None on any failure."""
+        try:
+            return _k8s_stream(
+                self.core.connect_get_namespaced_pod_exec,
+                pod, namespace,
+                command=command,
+                container=container,
+                stderr=True, stdin=False, stdout=True, tty=False,
+                _preload_content=True, _request_timeout=6,
+            )
+        except Exception:
+            return None
+
+    def delete_configmap(self, namespace: str, name: str) -> None:
+        try:
+            self.core.delete_namespaced_config_map(name=name, namespace=namespace)
         except ApiException as exc:
             if exc.status != 404:
                 raise

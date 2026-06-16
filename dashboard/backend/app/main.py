@@ -30,10 +30,21 @@ from app.routers.time_sync import router as time_sync_router
 from app.routers.exec_ws import router as exec_ws_router
 from app.routers.ue import router as ue_router
 from app.routers.nf import router as nf_router
+from app.routers.northbound import read_router as northbound_read_router
+from app.routers.northbound import write_router as northbound_write_router
+from app.routers.selfupdate import read_router as selfupdate_read_router
+from app.routers.selfupdate import write_router as selfupdate_write_router
 
 log = logging.getLogger(__name__)
 
-app = FastAPI(title=settings.app_name)
+# Serve the auto-generated OpenAPI + Swagger UI under /api so it rides the
+# existing single-origin /api reverse proxy (the frontend nginx proxies /api).
+app = FastAPI(
+    title=settings.app_name,
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    openapi_url="/api/openapi.json",
+)
 
 
 class CatchAllMiddleware(BaseHTTPMiddleware):
@@ -98,6 +109,10 @@ app.include_router(traffic_router,     dependencies=_viewer)
 app.include_router(ue_router,          dependencies=_viewer)
 app.include_router(time_sync_router,   dependencies=_viewer)
 app.include_router(experiments_router, dependencies=_viewer)
+# Northbound console reads (inventory, adapter registry, contract guidance).
+app.include_router(northbound_read_router, dependencies=_viewer)
+# Dashboard self-update status (deployed-vs-registry for frontend/docs).
+app.include_router(selfupdate_read_router, dependencies=_viewer)
 
 # Admin-only: privileged actions with cluster-wide blast radius.
 # - subscribers: read access also gated because the records contain K and OPc
@@ -111,6 +126,11 @@ app.include_router(nf_router,          dependencies=_admin)
 app.include_router(ran_router,         dependencies=_admin)
 app.include_router(sniffer_router,     dependencies=_admin)
 app.include_router(exec_ws_router,     dependencies=_admin)
+# Northbound console writes: adapter registry, deploy-from-image (also gated by
+# settings.allow_workload_create), fusion config, managed image rollout.
+app.include_router(northbound_write_router, dependencies=_admin)
+# Dashboard self-update action: targeted rollout of a component (admin).
+app.include_router(selfupdate_write_router, dependencies=_admin)
 
 
 @app.on_event("startup")

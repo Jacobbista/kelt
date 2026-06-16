@@ -25,6 +25,11 @@ class Settings(BaseSettings):
 
     admin_token: str = "change-me"
     allow_configmap_write: bool = False
+    # Gate for the Northbound console's deploy-from-image endpoint, which creates
+    # arbitrary Deployments/Services/Secrets in the northbound namespaces. Off by
+    # default (read-only console); phase 09 sets DASHBOARD_ALLOW_WORKLOAD_CREATE=true
+    # to enable it. Always admin-gated on top of this. See docs/security/iam.md.
+    allow_workload_create: bool = False
     backend_service_name: str = "dashboard-backend"
     frontend_service_name: str = "dashboard-frontend"
     # Optional external URL the dev frontend is reachable at. Used by the
