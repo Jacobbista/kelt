@@ -81,10 +81,16 @@ def _read_ips() -> dict[str, str]:
     }
 
 
+# Marker for a transient exec-handshake failure (K8s API flow-control returns 200
+# instead of 101 under load). Callers map this to "unknown", not a hard error: the
+# link being checked is fine, the diagnostics exec just couldn't open this tick.
+_EXEC_BUSY = "exec unavailable (Kubernetes API busy, transient)"
+
+
 def _exec(core, pod: str, container: str, cmd: list[str]) -> str:
-    # Retry once on transient WebSocket handshake failures (K8s API returns
-    # 200 instead of 101 under load; a brief pause usually resolves it).
-    for attempt in range(2):
+    # Retry transient WebSocket handshake failures with a short backoff before
+    # giving up (a brief pause usually resolves the 200-not-101 handshake).
+    for attempt in range(3):
         try:
             return stream(
                 core.connect_get_namespaced_pod_exec,
@@ -94,14 +100,17 @@ def _exec(core, pod: str, container: str, cmd: list[str]) -> str:
                 _request_timeout=8,
             )
         except Exception as exc:
-            msg = str(exc)
-            if " -+-+- " in msg:
-                msg = msg.split(" -+-+- ")[0].strip()
-            if attempt == 0 and "Handshake status" in msg:
-                time.sleep(1)
-                continue
-            return f"ERROR: {msg}"
-    return "ERROR: exec unavailable after retry"
+            # websocket-client / ApiException handshake errors carry the response
+            # headers and body after " -+-+- " and across newlines; keep only the
+            # short summary so the UI never shows the raw header dump.
+            msg = str(exc).split(" -+-+- ")[0].replace("\n", " ").strip()
+            if "Handshake status" in msg:
+                if attempt < 2:
+                    time.sleep(0.5 * (attempt + 1))
+                    continue
+                return f"ERROR: {_EXEC_BUSY}"
+            return f"ERROR: {msg[:160]}"
+    return f"ERROR: {_EXEC_BUSY}"
 
 
 def _find_pod(core, app: str) -> tuple[str, str] | None:
@@ -364,7 +373,7 @@ class NetworkHealthService:
             if m:
                 result["latency_ms"] = float(m.group(1))
         elif "ERROR" in out:
-            result["status"] = "error"
+            result["status"] = "unknown" if _EXEC_BUSY in out else "error"
             result["detail"] = out[:200]
         else:
             result["status"] = "fail"
@@ -409,7 +418,8 @@ class NetworkHealthService:
             if m:
                 result["latency_ms"] = float(m.group(1))
         elif "ERROR" in out:
-            result["status"] = "error"
+            # A transient exec-handshake hiccup is not an N6 fault: report unknown.
+            result["status"] = "unknown" if _EXEC_BUSY in out else "error"
             result["detail"] = out[:200]
         else:
             result["status"] = "fail"
