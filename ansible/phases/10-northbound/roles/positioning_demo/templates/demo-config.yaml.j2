@@ -15,3 +15,14 @@ data:
   VITE_KEYCLOAK_URL: "{{ dashboard_external_origin }}{{ keycloak_path_prefix | default('/auth') }}"
   VITE_KEYCLOAK_REALM: "{{ keycloak_realm }}"
   VITE_KEYCLOAK_CLIENT_ID: "positioning-demo"
+  # Frame consistency with the engine (the blueprint/frame authority, positioning_engine
+  # role): the demo projects CAMARA area.center back into the local floor frame, so these
+  # MUST match the engine's gps_origin + floor dims or markers land off-canvas (the cause
+  # of "marker disappears with real data"). Both roles run in this phase play, so the
+  # engine vars are in scope. See docs/architecture/positioning-adapters.md.
+  VITE_GPS_ORIGIN_LAT: "{{ floor_plan_gps_lat }}"
+  VITE_GPS_ORIGIN_LON: "{{ floor_plan_gps_lon }}"
+  VITE_FLOOR_W: "{{ floor_width_m }}"
+  VITE_FLOOR_D: "{{ floor_depth_m }}"
+  # Fix accuracy (m) above which a device renders greyed-out / "imprecise" instead of live.
+  VITE_ACCURACY_MAX_M: "15"

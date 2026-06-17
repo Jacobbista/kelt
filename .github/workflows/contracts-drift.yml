@@ -27,7 +27,7 @@ permissions:
 
 env:
   # Pin to a 5g-northbound release tag once one is cut; main is the moving default.
-  UPSTREAM_REF: ${{ github.event.inputs.upstream_ref || 'main' }}
+  UPSTREAM_REF: ${{ github.event.inputs.upstream_ref || 'v0.8.0' }}
 
 jobs:
   check:

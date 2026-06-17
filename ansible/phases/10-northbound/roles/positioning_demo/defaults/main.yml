@@ -4,7 +4,7 @@ positioning_demo_enabled: true
 # mec namespace already created by Phase 05; no namespace task needed here.
 demo_namespace: mec
 
-positioning_demo_image: "ghcr.io/jacobbista/5g-northbound/positioning-demo:0.6.0"
+positioning_demo_image: "ghcr.io/jacobbista/5g-northbound/positioning-demo:0.8.0"
 positioning_demo_nodeport: 31940
 
 # Must match Phase 09 and 10 defaults

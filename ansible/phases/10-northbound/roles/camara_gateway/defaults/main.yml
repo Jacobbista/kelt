@@ -2,7 +2,7 @@
 camara_enabled: true
 camara_namespace: camara
 
-camara_gateway_image: "ghcr.io/jacobbista/5g-northbound/camara-gateway:0.6.0"
+camara_gateway_image: "ghcr.io/jacobbista/5g-northbound/camara-gateway:0.8.0"
 camara_gateway_nodeport: 31920
 
 # Must match Phase 08/09. Read from env so a single CAMARA_CLIENT_SECRET /
@@ -19,8 +19,9 @@ keycloak_path_prefix: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_PATH_PREFIX') 
 iam_namespace: iam
 keycloak_nodeport: 31910
 
-# Upstream service URLs (K8s DNS)
-smf_url: "http://smf.5g.svc.cluster.local:9090"
+# Upstream service URL (K8s DNS). The gateway reads positions from the engine; it
+# has no SMF dependency (positioning is non-3GPP, see
+# docs/known-issues/no-network-based-positioning.md).
 positioning_engine_url: "http://positioning-engine.positioning.svc.cluster.local:8080"
 
 # Realm role required on Bearer tokens for the Location endpoints. Matches the
@@ -28,10 +29,20 @@ positioning_engine_url: "http://positioning-engine.positioning.svc.cluster.local
 camara_required_role: "camara-location-read"
 # Development override only: true bypasses JWT validation in the gateway.
 camara_skip_auth: false
-# Flat phoneNumber->deviceId map the gateway exposes via GET /devices and resolves
-# for CAMARA lookups. The default maps one demo number to the engine's demo device
-# (engine_device_ids in the positioning_engine role). Override for real numbers/assets.
-camara_device_registry: '{"+10000000001":"demo-001"}'
+
+# Asset Identity Map: the gateway is the network authority (GET/PUT /assets),
+# persisting to the camara-assets PVC. ASSET_STORE_FILE is the writable path;
+# ASSET_SEED_FILE seeds the store once on first boot from camara-assets-seed
+# (asset.schema.json v2). Assets are authored at runtime over HTTP (dashboard),
+# not by editing the seed. See docs/architecture/positioning-adapters.md.
+camara_asset_store_file: "/app/data/assets.json"
+camara_asset_seed_file: "/app/config/assets.seed.json"
+camara_assets_pvc_size: "64Mi"
+
+# Optional: internal URL of the catalog wifi-positioning adapter. When set, the
+# gateway proxies GET /anchors/calibration so the demo reads real per-AP RF.
+# Empty (default) disables the extension; wifi-positioning is an opt-in catalog adapter.
+camara_wifi_positioning_url: "{{ lookup('ansible.builtin.env', 'WIFI_POSITIONING_URL') | default('', true) }}"
 
 # External base URL the gateway advertises (OpenAPI `servers`, webhook callbacks,
 # redirect-uri allow lists at the operator IdP). Resolves in three steps: explicit

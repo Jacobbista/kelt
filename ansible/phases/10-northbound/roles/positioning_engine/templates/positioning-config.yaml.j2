@@ -13,7 +13,9 @@ data:
 {% if engine_adapter_urls %}
   ADAPTER_URLS: "{{ engine_adapter_urls }}"
 {% endif %}
-  # Optional per-device routing: CSV of device_id=adapter_name. Empty = poll all.
+  # Optional per-device routing override: CSV of device_id=adapter_name. Empty
+  # (default, v0.8.0) = capability-driven routing (the gateway passes the asset's
+  # ?source=, the engine fans out to registered adapters and fuses who answers).
   DEVICE_MAP: "{{ engine_device_map }}"
   DEVICE_IDS: "{{ engine_device_ids }}"
   # Classical fusion (no ML). FUSION_COMPARE renders extra strategies side by side.

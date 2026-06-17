@@ -41,6 +41,12 @@ spec:
               value: "http://mock-positioning.{{ positioning_namespace }}.svc.cluster.local:8080"
             - name: ADAPTER_KIND
               value: "mock"
+            # v0.7.0 capabilities: the adapter advertises what it can locate so the
+            # gateway aggregates it into GET /capabilities. JSON form of the mock's
+            # adapter.contract.yaml (kept in sync; `make positioning-check` asserts
+            # they agree). See docs/architecture/positioning-adapters.md.
+            - name: ADAPTER_CAPABILITIES
+              value: '{"source":"mock","kinds":["forklift","asset"],"frame":"local","streaming":false,"z":true,"accuracy_class":"coarse"}'
             # Room bounds for the random walk; kept in sync with the engine floor plan.
             - name: WIDTH_M
               value: "{{ floor_width_m }}"

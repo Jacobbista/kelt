@@ -4,7 +4,6 @@ metadata:
   name: camara-config
   namespace: {{ camara_namespace }}
 data:
-  SMF_URL: "{{ smf_url }}"
   POSITIONING_ENGINE_URL: "{{ positioning_engine_url }}"
   KEYCLOAK_URL: "http://keycloak.{{ iam_namespace }}.svc.cluster.local:8080{{ keycloak_path_prefix }}"
   KEYCLOAK_REALM: "{{ keycloak_realm }}"
@@ -12,11 +11,17 @@ data:
   REQUIRED_ROLE: "{{ camara_required_role }}"
   # Development override only: bypasses JWT validation. Keep "false".
   SKIP_AUTH: "{{ camara_skip_auth | string | lower }}"
-  # Flat phoneNumber->deviceId map the gateway resolves for CAMARA lookups and
-  # exposes via GET /devices. For the richer {phoneNumber,deviceId,label} form,
-  # mount a devices.json ConfigMap and set DEVICE_REGISTRY_FILE instead.
-  DEVICE_REGISTRY: '{{ camara_device_registry }}'
-  # Advertised in the OpenAPI `servers` block and any absolute URL the
-  # gateway emits. Operators expose this via reverse proxy (cloudflared,
-  # nginx, traefik, etc.) so external clients call a stable hostname.
-  CAMARA_EXTERNAL_BASE_URL: "{{ camara_gateway_external_origin }}"
+  # Asset Identity Map: the gateway is the network authority (GET/PUT /assets),
+  # persisting to the camara-assets PVC at /app/data. ASSET_SEED_FILE seeds the
+  # store once on first boot when it is empty (asset.schema.json v2). The store
+  # content is Tier-1 (org/asset inventory); the path itself is not sensitive.
+  # See docs/architecture/positioning-adapters.md.
+  ASSET_STORE_FILE: "{{ camara_asset_store_file }}"
+  ASSET_SEED_FILE: "{{ camara_asset_seed_file }}"
+  # Optional: internal URL of the catalog wifi-positioning adapter. When set, the
+  # gateway proxies GET /anchors/calibration so the demo reads real per-AP RF.
+  # Empty disables the extension.
+  WIFI_POSITIONING_URL: "{{ camara_wifi_positioning_url }}"
+  # Reachability metadata only (the gateway does not read this); the deploy portal
+  # tracks the gateway public origin under this name.
+  CAMARA_GATEWAY_EXTERNAL_ORIGIN: "{{ camara_gateway_external_origin }}"

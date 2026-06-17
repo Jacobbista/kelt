@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: camara-assets
+  namespace: {{ camara_namespace }}
+  labels:
+    app: camara-gateway
+spec:
+  # Gateway-owned Asset Identity Map store: only the gateway mounts this RW at
+  # /app/data; consumers author it over HTTP (GET/PUT /assets), mirroring the
+  # engine's blueprint PVC. RWO on the default local-path StorageClass is fine
+  # because the single mounter (the gateway) is pinned to the worker node.
+  # See docs/architecture/positioning-adapters.md.
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ camara_assets_pvc_size }}

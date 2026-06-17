@@ -2,7 +2,7 @@
 positioning_enabled: true
 positioning_namespace: positioning
 
-positioning_engine_image: "ghcr.io/jacobbista/5g-northbound/positioning-engine:0.6.0"
+positioning_engine_image: "ghcr.io/jacobbista/5g-northbound/positioning-engine:0.8.0"
 positioning_engine_nodeport: 31930
 
 # Engine-owned blueprint store (v0.5.0 authority model): only the engine mounts
@@ -18,8 +18,9 @@ positioning_blueprint_pvc_size: "100Mi"
 # from the dashboard catalog. See docs/architecture/positioning-adapters.md.
 engine_adapter_urls: ""
 
-# Optional per-device routing: CSV of device_id=adapter_name. Empty = the engine
-# polls every configured adapter for every device.
+# Optional per-device routing OVERRIDE: CSV of device_id=adapter_name. Empty (default,
+# v0.8.0) = capability-driven routing: the gateway passes the asset's source (?source=)
+# and the engine fans out to registered adapters, fusing those that answer.
 engine_device_map: ""
 
 # Devices the engine tracks and broadcasts on the WebSocket.
@@ -36,7 +37,7 @@ engine_websocket_interval_ms: 500
 # ── mock-positioning reference adapter (lean baseline) ───────────────────────
 # Synthetic random-walk adapter deployed alongside the engine so the demo shows
 # live movement out of the box. Room bounds come from the floor_* dims below.
-mock_positioning_image: "ghcr.io/jacobbista/5g-northbound/mock-positioning:0.6.0"
+mock_positioning_image: "ghcr.io/jacobbista/5g-northbound/mock-positioning:0.8.0"
 
 # Floor plan defaults (passed to the engine for mock bounds and to the demo
 # for 3D rendering). Override at deploy time for real room dimensions:

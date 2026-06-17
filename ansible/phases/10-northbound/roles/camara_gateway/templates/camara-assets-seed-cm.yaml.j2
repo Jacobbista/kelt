@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: camara-assets-seed
+  namespace: {{ camara_namespace }}
+data:
+  # Cold-start seed for the Asset Identity Map, consumed once via ASSET_SEED_FILE
+  # when the camara-assets store is empty (then persisted to ASSET_STORE_FILE).
+  # Conforms to schema/asset.schema.json (v2). The demo asset maps to the engine's
+  # mock device (engine_device_ids in the positioning_engine role). Author real
+  # assets at runtime via GET/PUT /assets (dashboard), not by editing this seed.
+  assets.seed.json: |
+    {
+      "version": 2,
+      "assets": [
+        {
+          "asset_id": "demo-asset-01",
+          "positioning_id": "demo-001",
+          "kind": "asset",
+          "source": "mock",
+          "org": "demo",
+          "label": "Mock demo asset",
+          "simulated": true
+        }
+      ]
+    }

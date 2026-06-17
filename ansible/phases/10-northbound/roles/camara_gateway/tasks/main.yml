@@ -34,6 +34,25 @@
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
+- name: Apply camara-assets PVC (Asset Identity Map store)
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/camara-assets-pvc.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply camara-assets seed ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    force: true
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/camara-assets-seed-cm.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
 - name: Deploy CAMARA gateway Deployment
   kubernetes.core.k8s:
     state: present

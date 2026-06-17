@@ -16,9 +16,16 @@ spec:
         app: camara-gateway
       annotations:
         checksum/config: "{{ lookup('template', role_path + '/templates/camara-config.yaml.j2') | hash('sha256') }}"
+        checksum/assets-seed: "{{ lookup('template', role_path + '/templates/camara-assets-seed-cm.yaml.j2') | hash('sha256') }}"
     spec:
+      # Pinned to the worker: the gateway is the sole mounter of the RWO assets PVC
+      # (node-local local-path) and owns the Asset Identity Map as authority.
       nodeSelector:
         kubernetes.io/hostname: worker
+      # The gateway persists the Asset Identity Map to the PVC (PUT /assets); fsGroup
+      # lets the non-root container write the mounted volume (mirrors the engine).
+      securityContext:
+        fsGroup: 1001
       terminationGracePeriodSeconds: 15
       containers:
         - name: camara-gateway
@@ -56,3 +63,19 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 10
             failureThreshold: 6
+          volumeMounts:
+            # Gateway-owned Asset Identity Map store (authority): RW so PUT /assets persists.
+            - name: assets
+              mountPath: /app/data
+            # Cold-start seed (RO): consumed once via ASSET_SEED_FILE when the store
+            # is empty. Subpath single-file mount, not the whole dir.
+            - name: assets-seed
+              mountPath: /app/config/assets.seed.json
+              subPath: assets.seed.json
+      volumes:
+        - name: assets
+          persistentVolumeClaim:
+            claimName: camara-assets
+        - name: assets-seed
+          configMap:
+            name: camara-assets-seed
