@@ -142,6 +142,7 @@ Platform-specific limitations with documented workarounds. These are bugs or con
 | [KubeEdge ServiceAccount Tokens](known-issues/kubeedge-serviceaccount-token.md) | Token projection bugs — use `automountServiceAccountToken: false` |
 | [UPF-Edge CNI Route Conflict](known-issues/upf-edge-cni-route-conflict.md) | UPF-Edge stuck in ContainerCreating — open issue, investigation roadmap |
 | [TCP Performance over 5G DRX](known-issues/tcp-performance-5g-drx.md) | TCP throughput degradation on the radio path from DRX latency variance |
+| [No Network-Based Positioning](known-issues/no-network-based-positioning.md) | 3GPP/LMF positioning is out of scope on current hardware; position comes from non-3GPP adapters |
 
 ---
 
