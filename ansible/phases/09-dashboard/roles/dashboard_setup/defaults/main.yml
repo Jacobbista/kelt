@@ -90,11 +90,13 @@ kelt_docs_image: "ghcr.io/jacobbista/kelt-docs:latest"
 dashboard_cluster_ready_retries: 12
 dashboard_cluster_ready_delay: 5
 
-# Optional external URL the prod frontend advertises as the "Open dev" link
-# target in the sidebar dev-mode indicator. Empty defaults to the LAN URL
-# of the dev frontend on the ansible VM. Operators with a separate tunnel
-# for the dev frontend (e.g. dev.example.com) can override here.
-dashboard_dev_external_url: "{{ lookup('ansible.builtin.env', 'DASHBOARD_DEV_EXTERNAL_URL') | default('', true) }}"
+# External URL the prod frontend advertises as the "Open dev" link + probes for
+# the Vite HMR bypass. Derived as <scheme>://<dev-subdomain>.<base> when
+# external_base_domain (all.yml) is set, mirroring phase 08 so the dev-mode
+# indicator probes the PUBLIC dev origin over wss: no mixed content / local-network
+# prompt, and the Cloudflare /__vite_hmr* bypass applies. Empty (no base domain)
+# falls back to the LAN URL of the dev frontend. Explicit env override wins.
+dashboard_dev_external_url: "{{ lookup('ansible.builtin.env', 'DASHBOARD_DEV_EXTERNAL_URL') | default( ((external_scheme ~ '://' ~ dashboard_dev_subdomain ~ '.' ~ external_base_domain) if external_base_domain else ''), true) }}"
 
 # HMR over a tunnel can be fragile if the reverse proxy / Zero-Trust
 # layer does not pass through WebSocket upgrades on the dev origin. The
