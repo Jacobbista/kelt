@@ -111,6 +111,7 @@ class IamTestSuite:
             ("Realm clients present", self.test_clients_present),
             ("Realm roles present", self.test_realm_roles_present),
             ("CAMARA client_credentials token", self.test_camara_client_credentials),
+            ("Per-consumer org claim (camara-consumer-demo)", self.test_consumer_demo_org_claim),
         ]
 
         passed = 0
@@ -277,7 +278,49 @@ class IamTestSuite:
         if "camara-location-read" not in roles:
             self.logger.error(f"Token missing camara-location-read role. Got: {roles}")
             return False
-        self.logger.success("CAMARA token carries camara-location-read")
+        # The gateway client is the deliberate org-less operator bypass (a token with
+        # no org claim sees every org's assets); per-consumer clients carry an org
+        # claim instead. If an org mapper leaks onto this client the bypass breaks.
+        if claims.get("org") is not None:
+            self.logger.error(f"camara-gateway must stay org-less (operator bypass); got org={claims.get('org')!r}")
+            return False
+        self.logger.success("CAMARA token carries camara-location-read (org-less operator bypass)")
+        return True
+
+    def test_consumer_demo_org_claim(self) -> bool:
+        """The reference per-consumer client (camara-consumer-demo) carries its tenant
+        org claim (org=demo) plus camara-location-read, so the gateway's 2-legged org
+        join scopes it to its tenant's assets. Falls back to the role-default secret
+        ('changeme-consumer') when no CAMARA_CONSUMER_DEMO_SECRET override is set, so
+        the test runs on a clean deploy."""
+        secret = self._get_secret("CAMARA_CONSUMER_DEMO_SECRET") or "changeme-consumer"
+        resp = requests.post(
+            f"{self.base_url}/realms/{self.realm}/protocol/openid-connect/token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": "camara-consumer-demo",
+                "client_secret": secret,
+            },
+            timeout=self.timeout,
+        )
+        if resp.status_code != 200:
+            self.logger.error(f"consumer-demo grant returned HTTP {resp.status_code}: {resp.text}")
+            return False
+        token = resp.json().get("access_token", "")
+        if not token:
+            self.logger.error("Grant succeeded but no access_token in response")
+            return False
+        claims = _decode_jwt_payload(token)
+        org = claims.get("org")
+        roles = claims.get("realm_access", {}).get("roles", [])
+        self.logger.info(f"[debug] org={org} roles={roles}")
+        if org != "demo":
+            self.logger.error(f"Token missing org=demo claim (the hardcoded org mapper). Got org={org!r}")
+            return False
+        if "camara-location-read" not in roles:
+            self.logger.error(f"Token missing camara-location-read role. Got: {roles}")
+            return False
+        self.logger.success("consumer-demo token carries org=demo + camara-location-read")
         return True
 
 
