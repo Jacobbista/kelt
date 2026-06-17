@@ -169,3 +169,13 @@ class ServiceFileRequest(BaseModel):
     # stored in the service's <name>-files ConfigMap and mounted at `path`.
     path: str
     content: str = ""
+
+
+class AssetStoreRequest(BaseModel):
+    # Full Asset Identity Map store (asset.schema.json v2). The gateway PUT /assets
+    # replaces the store, so the dashboard sends the complete set (load-all, edit,
+    # save-all); the gateway validates each entry against the upstream schema. The
+    # editor is admin-only and the caller's Bearer (dashboard-admin, composite with
+    # camara-location-read) is forwarded to the gateway.
+    version: int = 2
+    assets: list[dict[str, Any]] = Field(default_factory=list)

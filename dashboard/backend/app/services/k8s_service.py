@@ -160,6 +160,31 @@ class K8sService:
             name=f"{service}:{port}", namespace=namespace, path=path, _preload_content=False)
         return resp.data.decode("utf-8")
 
+    def any_node_ip(self) -> str:
+        """An InternalIP of any cluster node. A NodePort is reachable on every node,
+        and the backend (off-cluster on the ansible VM) routes to the node host-only
+        IPs. Used to reach a service that enforces its own auth (the CAMARA gateway),
+        which the API-server service proxy cannot carry (its Authorization slot
+        authenticates to the API server, not the proxied service)."""
+        for n in self.core.list_node().items:
+            for addr in (n.status.addresses or []):
+                if addr.type == "InternalIP" and addr.address:
+                    return addr.address
+        raise RuntimeError("no node InternalIP found")
+
+    def service_nodeport(self, namespace: str, name: str, target_port: int) -> int:
+        """The NodePort exposed for the given service port, read from the Service so
+        it tracks the deployed value rather than a hardcode."""
+        svc = self.core.read_namespaced_service(name=name, namespace=namespace)
+        ports = svc.spec.ports or []
+        for p in ports:
+            if p.port == target_port and p.node_port:
+                return p.node_port
+        for p in ports:
+            if p.node_port:
+                return p.node_port
+        raise RuntimeError(f"service {namespace}/{name} has no NodePort")
+
     def apply_configmap(self, namespace: str, name: str, data: dict[str, str]) -> None:
         body = client.V1ConfigMap(
             metadata=client.V1ObjectMeta(name=name, namespace=namespace),

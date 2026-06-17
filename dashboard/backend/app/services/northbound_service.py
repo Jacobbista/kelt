@@ -14,8 +14,19 @@ import json
 import re
 from typing import Any
 
+import httpx
+
 from app.models import DeployEnvVar, DeployImageRequest, FusionConfigPayload
 from app.services.k8s_service import K8sService
+
+
+class GatewayError(Exception):
+    """A non-2xx response from the CAMARA gateway, forwarded to the caller as-is."""
+
+    def __init__(self, status: int, detail: str) -> None:
+        self.status = status
+        self.detail = detail
+        super().__init__(detail)
 
 # Namespaces the console manages. Used as a strict allow-list for any create.
 NORTHBOUND_NAMESPACES = ["camara", "positioning", "mec"]
@@ -24,6 +35,9 @@ ENGINE_DEPLOYMENT = "positioning-engine"
 ENGINE_CONFIGMAP = "positioning-config"
 ENGINE_SERVICE = "positioning-engine"
 ENGINE_PORT = 8080
+CAMARA_NS = "camara"
+GATEWAY_SERVICE = "camara-gateway"
+GATEWAY_PORT = 8080
 
 # Per-service contract metadata (kind, configurable) cached by (name, image) so
 # the 5s inventory poll does not re-fetch /contract every time. Invalidated when
@@ -208,6 +222,47 @@ class NorthboundService:
             return data.get("adapters", [])
         except Exception:
             return []
+
+    # ── Asset Identity Map (the gateway is the authority: GET/PUT /assets) ─────
+    # /assets enforces a CAMARA JWT, so unlike the engine reads we cannot use the
+    # API-server service proxy (its Authorization slot authenticates to the API
+    # server). We reach the gateway NodePort and FORWARD the caller's Bearer; the
+    # asset routes are admin-only and a dashboard-admin token is composite with
+    # camara-location-read, which the gateway requires. An org-less admin token is
+    # the operator bypass, so the editor sees every org's assets.
+    def _gateway_base_url(self) -> str:
+        port = self.k8s.service_nodeport(CAMARA_NS, GATEWAY_SERVICE, GATEWAY_PORT)
+        return f"http://{self.k8s.any_node_ip()}:{port}"
+
+    @staticmethod
+    def _bearer(token: str) -> dict[str, str]:
+        return {"Authorization": f"Bearer {token}"}
+
+    def _gateway_get(self, token: str, path: str) -> dict[str, Any]:
+        try:
+            resp = httpx.get(f"{self._gateway_base_url()}{path}", headers=self._bearer(token), timeout=6.0)
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise GatewayError(exc.response.status_code, exc.response.text)
+        return resp.json()
+
+    def list_assets(self, token: str) -> dict[str, Any]:
+        """The full Asset Identity Map from the gateway (GET /assets)."""
+        return self._gateway_get(token, "/assets")
+
+    def asset_details(self, token: str, asset_id: str) -> dict[str, Any]:
+        """Per-asset detail (position/telemetry) for the UI (GET /assets/{id}/details)."""
+        return self._gateway_get(token, f"/assets/{asset_id}/details")
+
+    def put_assets(self, token: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Replace the Asset Identity Map (PUT /assets). The dashboard sends the full
+        set (load-all, edit, save-all); the gateway validates against asset.schema.json."""
+        try:
+            resp = httpx.put(f"{self._gateway_base_url()}/assets", headers=self._bearer(token), json=body, timeout=8.0)
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise GatewayError(exc.response.status_code, exc.response.text)
+        return {"status": "applied", "count": len((body or {}).get("assets", []))}
 
     def unregister_adapter(self, name: str) -> dict[str, Any]:
         """Force-remove an adapter from the engine registry (DELETE /adapters/{name}).

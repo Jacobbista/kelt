@@ -11,11 +11,12 @@ writes = admin only) at router-include time in app/main.py.
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 
 from app.config import settings
 from app.models import (
     AdapterUpgradeRequest,
+    AssetStoreRequest,
     CoreImageRequest,
     DeployImageRequest,
     FusionConfigPayload,
@@ -25,7 +26,7 @@ from app.models import (
 )
 from app.services.audit import write_audit
 from app.services.k8s_service import K8sService, get_k8s_service
-from app.services.northbound_service import NorthboundService
+from app.services.northbound_service import GatewayError, NorthboundService
 
 read_router = APIRouter(prefix="/api/v1/northbound", tags=["northbound"])
 write_router = APIRouter(prefix="/api/v1/northbound", tags=["northbound"])
@@ -92,6 +93,54 @@ def service_file(service: str, path: str, nb: NorthboundService = Depends(_get_n
 
 
 # ── Writes (admin only) ──────────────────────────────────────────────────────
+# Asset Identity Map (gateway = authority). Admin only; the caller's Bearer is
+# forwarded to the gateway, which enforces camara-location-read (a dashboard-admin
+# token is composite with it) and the org join. GETs live here too (not under the
+# viewer router) because a viewer token lacks camara-location-read.
+def _bearer_token(authorization: str | None) -> str:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Missing Bearer token")
+    return authorization.split(None, 1)[1].strip()
+
+
+def _gateway_call(fn):
+    try:
+        return fn()
+    except GatewayError as exc:
+        raise HTTPException(status_code=exc.status, detail=f"gateway /assets: {exc.detail[:300]}")
+
+
+@write_router.get("/assets")
+def list_assets(
+    authorization: str | None = Header(default=None),
+    nb: NorthboundService = Depends(_get_nb),
+) -> dict[str, Any]:
+    token = _bearer_token(authorization)
+    return _gateway_call(lambda: nb.list_assets(token))
+
+
+@write_router.get("/assets/{asset_id}/details")
+def asset_details(
+    asset_id: str,
+    authorization: str | None = Header(default=None),
+    nb: NorthboundService = Depends(_get_nb),
+) -> dict[str, Any]:
+    token = _bearer_token(authorization)
+    return _gateway_call(lambda: nb.asset_details(token, asset_id))
+
+
+@write_router.put("/assets")
+def put_assets(
+    body: AssetStoreRequest,
+    authorization: str | None = Header(default=None),
+    nb: NorthboundService = Depends(_get_nb),
+) -> dict[str, Any]:
+    token = _bearer_token(authorization)
+    result = _gateway_call(lambda: nb.put_assets(token, body.model_dump()))
+    write_audit("northbound.assets.put", {"count": result.get("count", 0)})
+    return result
+
+
 # No manual adapter register: adapters self-register with the engine (v0.6.0).
 # DELETE force-removes a stale registry entry (engine DELETE /adapters/{name}).
 @write_router.delete("/adapters/{name}")

@@ -366,6 +366,11 @@ export const getNorthboundServiceFile = (service, path) =>
   get(`/api/v1/northbound/files/${encodeURIComponent(service)}?path=${encodeURIComponent(path)}`);
 export const applyNorthboundServiceFile = (service, path, content) =>
   put(`/api/v1/northbound/files/${encodeURIComponent(service)}`, { path, content });
+// Asset Identity Map (gateway authority, admin-only; backend forwards the Bearer).
+export const getNorthboundAssets = () => get("/api/v1/northbound/assets");
+export const setNorthboundAssets = (body) => put("/api/v1/northbound/assets", body);
+export const getNorthboundAssetDetails = (id) =>
+  get(`/api/v1/northbound/assets/${encodeURIComponent(id)}/details`);
 // Adapters self-register with the engine (v0.6.0); there is no manual register.
 // DELETE force-removes a stale registry entry.
 export const unregisterNorthboundAdapter = (name) =>

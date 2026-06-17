@@ -8,6 +8,7 @@ import { useToast } from "../context/ToastContext";
 const TABS = [
   { id: "status", label: "Status" },
   { id: "adapters", label: "Adapters" },
+  { id: "assets", label: "Assets" },
   { id: "engine", label: "Engine" },
   { id: "build", label: "Build your own" },
 ];
@@ -27,6 +28,8 @@ import {
   deployNorthboundImage,
   setNorthboundFusion,
   rolloutNorthboundManaged,
+  getNorthboundAssets,
+  setNorthboundAssets,
 } from "../api";
 
 // Generic adapters published by 5g-northbound that an operator can deploy on
@@ -128,6 +131,119 @@ function publicUrl(s) {
 // external_origin var), resolved against the real deploy config. The earlier
 // hardcoded subdomain convention was removed because it guessed origins that
 // were never routed. See docs/security/external-access.md.
+
+// Asset Identity Map editor (admin). The gateway is the authority (GET/PUT /assets,
+// PVC-backed); PUT replaces the store, so we load-all, edit, save-all. Enums mirror
+// the upstream schema/asset.schema.json (v2); the gateway validates authoritatively.
+const ASSET_KINDS = ["uwb-tag", "tool", "pallet", "forklift", "asset", "ue"];
+const ASSET_SOURCES = ["wittra", "wifi", "fiveg", "gnss", "mock"];
+const EMPTY_ASSET = { asset_id: "", positioning_id: "", kind: "asset", source: "mock", org: "", label: "", simulated: false };
+const ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+const ORG_RE = /^[a-z0-9-]{1,64}$/;
+
+function AssetsTab({ toast }) {
+  const [assets, setAssets] = useState(null); // null = loading
+  const [editing, setEditing] = useState(null);
+  const [isNew, setIsNew] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const load = useCallback(() => {
+    setErr("");
+    getNorthboundAssets()
+      .then((d) => setAssets(Array.isArray(d?.assets) ? d.assets : []))
+      .catch((e) => { setErr(e.message || "could not load /assets"); setAssets([]); });
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const saveAll = async (next) => {
+    setBusy(true);
+    try {
+      await setNorthboundAssets({ version: 2, assets: next });
+      setAssets(next);
+      toast.success("Assets saved — gateway store updated");
+    } catch (e) { toast.error(`Save failed: ${e.message}`); throw e; }
+    finally { setBusy(false); }
+  };
+
+  const upsert = async (a) => {
+    const id = (a.asset_id || "").trim();
+    const pid = (a.positioning_id || "").trim();
+    const org = (a.org || "").trim();
+    if (!ID_RE.test(id)) return toast.error("asset_id: letters/digits/._:- (1-128)");
+    if (!ID_RE.test(pid)) return toast.error("positioning_id: letters/digits/._:- (1-128)");
+    if (!ORG_RE.test(org)) return toast.error("org: lowercase letters/digits/- (1-64)");
+    const clean = { ...a, asset_id: id, positioning_id: pid, org, label: (a.label || "").trim() };
+    const next = [...(assets || []).filter((x) => x.asset_id !== id), clean];
+    try { await saveAll(next); setEditing(null); } catch { /* toast shown */ }
+  };
+
+  const remove = async (id) => {
+    try { await saveAll((assets || []).filter((x) => x.asset_id !== id)); } catch { /* toast shown */ }
+  };
+
+  return (
+    <Panel title="Asset Identity Map" hint="CAMARA private-asset profile: assetId → positioning source. The gateway is the authority (GET/PUT /assets).">
+      {assets === null ? (
+        <p className="text-xs text-slate-500">Loading…</p>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {err && <div className="rounded bg-amber-500/10 px-3 py-2 text-xs text-amber-300">{err}</div>}
+          <div className="flex justify-end">
+            <button type="button" className={btn.sky} onClick={() => { setEditing({ ...EMPTY_ASSET }); setIsNew(true); }}>+ Add asset</button>
+          </div>
+          {assets.length === 0 ? (
+            <p className="text-xs text-slate-500">No assets yet. Add one to expose it through the CAMARA Location API by <span className="font-mono">assetId</span>.</p>
+          ) : (
+            <table className="w-full text-xs">
+              <thead><tr className="text-left text-slate-400">
+                <th className="py-1">assetId</th><th>kind</th><th>source</th><th>org</th><th>positioning_id</th><th></th>
+              </tr></thead>
+              <tbody>
+                {assets.map((a) => (
+                  <tr key={a.asset_id} className="border-t border-slate-800">
+                    <td className="py-1 font-mono text-slate-200">{a.asset_id}{a.simulated && <span className="ml-1 rounded bg-amber-500/20 px-1 text-[9px] text-amber-300">MOCK</span>}</td>
+                    <td>{a.kind}</td><td>{a.source}</td><td>{a.org}</td>
+                    <td className="font-mono text-slate-400">{a.positioning_id}</td>
+                    <td className="text-right">
+                      <button type="button" className="mr-3 text-sky-400 hover:underline" onClick={() => { setEditing({ ...EMPTY_ASSET, ...a }); setIsNew(false); }}>edit</button>
+                      <button type="button" className="text-rose-400 hover:underline disabled:opacity-40" disabled={busy} onClick={() => remove(a.asset_id)}>delete</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+      {editing && (
+        <Modal title={isNew ? "Add asset" : `Edit ${editing.asset_id}`} onClose={() => setEditing(null)}>
+          <div className="flex flex-col gap-2 text-xs">
+            <label className="flex flex-col gap-1"><span className="text-slate-400">assetId (CAMARA device.assetId)</span>
+              <input className={inputCls} value={editing.asset_id} disabled={!isNew} onChange={(e) => setEditing({ ...editing, asset_id: e.target.value })} /></label>
+            <label className="flex flex-col gap-1"><span className="text-slate-400">positioning_id (engine routes on this)</span>
+              <input className={inputCls} value={editing.positioning_id} onChange={(e) => setEditing({ ...editing, positioning_id: e.target.value })} /></label>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="flex flex-col gap-1"><span className="text-slate-400">kind</span>
+                <select className={inputCls} value={editing.kind} onChange={(e) => setEditing({ ...editing, kind: e.target.value })}>{ASSET_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}</select></label>
+              <label className="flex flex-col gap-1"><span className="text-slate-400">source</span>
+                <select className={inputCls} value={editing.source} onChange={(e) => setEditing({ ...editing, source: e.target.value })}>{ASSET_SOURCES.map((s) => <option key={s} value={s}>{s}</option>)}</select></label>
+            </div>
+            <label className="flex flex-col gap-1"><span className="text-slate-400">org (tenant — gateway joins token.org)</span>
+              <input className={inputCls} value={editing.org} onChange={(e) => setEditing({ ...editing, org: e.target.value })} /></label>
+            <label className="flex flex-col gap-1"><span className="text-slate-400">label (optional)</span>
+              <input className={inputCls} value={editing.label} onChange={(e) => setEditing({ ...editing, label: e.target.value })} /></label>
+            <label className="flex items-center gap-2"><input type="checkbox" checked={!!editing.simulated} onChange={(e) => setEditing({ ...editing, simulated: e.target.checked })} /><span className="text-slate-400">simulated (mock/demo source → MOCK badge)</span></label>
+            <div className="mt-1 flex justify-end gap-2">
+              <button type="button" className={btn.ghost} onClick={() => setEditing(null)}>Cancel</button>
+              <button type="button" className={btn.sky} disabled={busy} onClick={() => upsert(editing)}>{busy ? "Saving…" : "Save"}</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </Panel>
+  );
+}
 
 export default function NorthboundPage() {
   const auth = useAuth();
@@ -243,7 +359,7 @@ export default function NorthboundPage() {
         </div>
       </header>
 
-      <Tabs tabs={TABS} active={tab} onChange={setTab} />
+      <Tabs tabs={isAdmin ? TABS : TABS.filter((t) => t.id !== "assets")} active={tab} onChange={setTab} />
 
       {tab === "status" && (
         <>
@@ -512,6 +628,8 @@ export default function NorthboundPage() {
           )}
         </Panel>
       )}
+
+      {tab === "assets" && isAdmin && <AssetsTab toast={toast} />}
 
       {confirm && (
         <Modal title={confirm.title} hint={confirm.body} onClose={() => setConfirm(null)}>
