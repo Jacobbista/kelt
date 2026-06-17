@@ -29,6 +29,14 @@ suites:
     enabled: true
     timeout: 300
 
+  camara:
+    # Validates the CAMARA gateway + positioning chain deployed by phase 10
+    # (northbound). Opt-in: the suite SKIPS itself if the gateway NodePort is
+    # unreachable (northbound not deployed); token tests skip when secrets are
+    # absent. Run on demand: make camara.
+    enabled: true
+    timeout: 300
+
   performance:
     # DISABLED: Requires iperf3 installed in 5G containers
     # To enable:
@@ -83,6 +91,14 @@ iam:
     - dashboard-admin
     - dashboard-viewer
     - positioning-edit
+
+# CAMARA / northbound (phase 10) configuration for the camara suite. The gateway
+# is reached on the worker NodePort; tokens use the iam.* Keycloak block above.
+camara:
+  gateway_host: "192.168.56.11"   # worker NodePort
+  gateway_nodeport: 31920
+  request_timeout: 15
+  demo_asset_id: "demo-asset-01"
 
 # Network configuration (from ansible/group_vars/all.yml)
 network:

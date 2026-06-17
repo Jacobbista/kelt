@@ -2,7 +2,7 @@
 # Thin wrapper around run_tests.py. The interactive picker lives in the single
 # project CLI: ./testbed-config tests
 .DEFAULT_GOAL := help
-.PHONY: help test e2e protocols iam performance resilience ran verbose list clean clean-all
+.PHONY: help test e2e protocols iam camara performance resilience ran verbose list clean clean-all
 
 VENVDIR := venv
 
@@ -24,6 +24,9 @@ protocols:
 
 iam:
 	@python3 run_tests.py -s iam $(ARGS)
+
+camara:
+	@python3 run_tests.py -s camara $(ARGS)
 
 performance:
 	@python3 run_tests.py -s performance $(ARGS)
@@ -63,6 +66,7 @@ help:
 	@echo "  make e2e          - End-to-end deployment tests"
 	@echo "  make protocols    - 5G protocol tests (NGAP, PFCP, GTP-U)"
 	@echo "  make iam          - Keycloak realm + token validation (phase 08)"
+	@echo "  make camara       - CAMARA gateway + positioning + org isolation (phase 10)"
 	@echo "  make performance  - Performance benchmarks"
 	@echo "  make resilience   - Failure recovery tests"
 	@echo "  make ran          - Physical RAN integration tests"

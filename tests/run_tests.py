@@ -176,7 +176,7 @@ def main():
     parser = argparse.ArgumentParser(description="5G K3s KubeEdge Testbed Test Runner")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
     parser.add_argument("-s", "--suite",
-                       choices=["e2e", "protocols", "performance", "resilience", "ran", "iam"],
+                       choices=["e2e", "protocols", "performance", "resilience", "ran", "iam", "camara"],
                        help="Run specific test suite")
     parser.add_argument("-p", "--phases", nargs="+",
                        choices=["infrastructure", "5g-core", "ueransim", "e2e", "performance", "resilience"],
@@ -199,6 +199,7 @@ def main():
         print("  resilience  - Failure recovery tests")
         print("  ran         - Physical RAN integration tests")
         print("  iam         - Keycloak realm + token validation (phase 08)")
+        print("  camara      - CAMARA gateway + positioning + org isolation (phase 10)")
         print("\nRun with: make <suite>  or  python run_tests.py -s <suite>")
         return
     
@@ -209,7 +210,8 @@ def main():
         "performance": "performance.test_performance",
         "resilience": "resilience.test_resilience",
         "ran": "ran.test_physical_ran",
-        "iam": "iam.test_iam"
+        "iam": "iam.test_iam",
+        "camara": "camara.test_camara",
     }
     
     def run_suite(suite_name: str, force: bool = False) -> bool:
