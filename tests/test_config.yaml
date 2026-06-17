@@ -77,6 +77,7 @@ iam:
     - dashboard
     - dashboard-readonly
     - placement-editor-proxy
+    - camara-consumer-demo
   expected_realm_roles:
     - camara-location-read
     - dashboard-admin

@@ -327,6 +327,125 @@
     - (_kc_placement_proxy_client.json | default([])) | length > 0
     - (_kc_placement_proxy_client.json[0].redirectUris | default([])) != [placement_editor_external_origin ~ '/oauth2/callback']
 
+# camara-consumer-demo: reference per-consumer M2M client scoped to org 'demo' (a
+# hardcoded org claim). Create-if-missing on an already-provisioned cluster (the
+# realm imports once), then assign camara-location-read to its service account so
+# its client_credentials token carries the role + org. The org-less camara-gateway
+# client stays the operator bypass. See docs/security/iam.md.
+- name: Resolve camara-consumer-demo client id
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/clients?clientId=camara-consumer-demo"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    return_content: true
+    status_code: 200
+  register: _kc_consumer_demo_client
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: northbound_enabled | bool
+
+- name: Create camara-consumer-demo client when missing
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/clients"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    body_format: json
+    body:
+      clientId: camara-consumer-demo
+      name: "CAMARA Consumer (demo org)"
+      description: "Reference per-consumer M2M client scoped to org 'demo' via a hardcoded org claim."
+      enabled: true
+      publicClient: false
+      clientAuthenticatorType: client-secret
+      secret: "{{ camara_consumer_demo_secret }}"
+      standardFlowEnabled: false
+      implicitFlowEnabled: false
+      directAccessGrantsEnabled: false
+      serviceAccountsEnabled: true
+      protocol: openid-connect
+      attributes:
+        access.token.lifespan: "3600"
+      protocolMappers:
+        - name: org
+          protocol: openid-connect
+          protocolMapper: oidc-hardcoded-claim-mapper
+          config:
+            claim.name: org
+            claim.value: demo
+            jsonType.label: String
+            id.token.claim: "false"
+            access.token.claim: "true"
+            userinfo.token.claim: "false"
+    status_code: [201, 409]
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when:
+    - northbound_enabled | bool
+    - _kc_consumer_demo_client.json | length == 0
+
+- name: Re-resolve camara-consumer-demo client id (post-create)
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/clients?clientId=camara-consumer-demo"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    return_content: true
+    status_code: 200
+  register: _kc_consumer_demo_client2
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: northbound_enabled | bool
+
+- name: Get camara-consumer-demo service account user
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/clients/{{ _kc_consumer_demo_client2.json[0].id }}/service-account-user"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    return_content: true
+    status_code: 200
+  register: _kc_consumer_demo_sa
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when:
+    - northbound_enabled | bool
+    - (_kc_consumer_demo_client2.json | default([])) | length > 0
+
+- name: Resolve camara-location-read realm role
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/roles/camara-location-read"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    return_content: true
+    status_code: 200
+  register: _kc_camara_role
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when:
+    - northbound_enabled | bool
+    - (_kc_consumer_demo_client2.json | default([])) | length > 0
+
+- name: Assign camara-location-read to camara-consumer-demo service account
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/users/{{ _kc_consumer_demo_sa.json.id }}/role-mappings/realm"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    body_format: json
+    body:
+      - id: "{{ _kc_camara_role.json.id }}"
+        name: "{{ _kc_camara_role.json.name }}"
+    status_code: [204, 409]
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when:
+    - northbound_enabled | bool
+    - (_kc_consumer_demo_sa.json | default({})) | length > 0
+    - (_kc_camara_role.json | default({})) | length > 0
+
 - name: Resolve dashboard admin group id
   ansible.builtin.uri:
     url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/groups?search=g-dashboard-admins"

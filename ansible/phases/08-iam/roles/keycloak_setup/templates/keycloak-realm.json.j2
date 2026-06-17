@@ -180,6 +180,38 @@
           }
         }
       ]
+    },
+    {
+      "clientId": "camara-consumer-demo",
+      "name": "CAMARA Consumer (demo org)",
+      "description": "Reference per-consumer M2M client (2-legged client_credentials), scoped to org 'demo' via a hardcoded org claim. The gateway joins token.org against asset.org, so this client sees only org=demo assets; the org-less camara-gateway client stays the operator bypass (sees all). Model for adding real per-consumer/per-org clients.",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "{{ camara_consumer_demo_secret }}",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "protocol": "openid-connect",
+      "attributes": {
+        "access.token.lifespan": "3600"
+      },
+      "protocolMappers": [
+        {
+          "name": "org",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-hardcoded-claim-mapper",
+          "config": {
+            "claim.name": "org",
+            "claim.value": "demo",
+            "jsonType.label": "String",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ]
     }{% endif %}
 
   ],
@@ -194,6 +226,12 @@
       "username": "service-account-camara-gateway",
       "enabled": true,
       "serviceAccountClientId": "camara-gateway",
+      "realmRoles": ["camara-location-read"]
+    },
+    {
+      "username": "service-account-camara-consumer-demo",
+      "enabled": true,
+      "serviceAccountClientId": "camara-consumer-demo",
       "realmRoles": ["camara-location-read"]
     }{% endif %}
 

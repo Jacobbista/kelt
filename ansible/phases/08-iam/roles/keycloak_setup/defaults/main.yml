@@ -61,6 +61,10 @@ dashboard_readonly_secret: "{{ lookup('ansible.builtin.env', 'DASHBOARD_READONLY
 # Secret for the placement-editor-proxy confidential client (consumed by the
 # oauth2-proxy that gates placement-editor; see phase 10 (northbound) / docs/security/iam.md).
 placement_editor_proxy_secret: "{{ lookup('ansible.builtin.env', 'PLACEMENT_EDITOR_PROXY_SECRET') | default('changeme-placement', true) }}"
+# Secret for the reference per-consumer CAMARA client (camara-consumer-demo): a
+# 2-legged client scoped to org 'demo' via a hardcoded org claim, demonstrating
+# the multi-tenant org join in the gateway. See docs/security/iam.md.
+camara_consumer_demo_secret: "{{ lookup('ansible.builtin.env', 'CAMARA_CONSUMER_DEMO_SECRET') | default('changeme-consumer', true) }}"
 
 # ── Bootstrap end-users for dashboard login (realm 5g-testbed) ──────────────
 # Two seed accounts mirror the two-role model documented in docs/security/iam.md:
