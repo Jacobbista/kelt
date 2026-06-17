@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ registry_app_name }}
+  namespace: {{ registry_namespace }}
+  labels:
+    app: {{ registry_app_name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ registry_app_name }}
+  template:
+    metadata:
+      labels:
+        app: {{ registry_app_name }}
+    spec:
+      # Pinned to the worker so the RWO local-path PVC always binds on the same
+      # node. The registry NodePort is reachable on the worker's address.
+      nodeSelector:
+        kubernetes.io/hostname: worker
+      containers:
+        - name: {{ registry_app_name }}
+          image: "{{ apps_registry_image }}"
+          ports:
+            - containerPort: {{ registry_container_port }}
+          env:
+            - name: REGISTRY_AUTH
+              value: htpasswd
+            - name: REGISTRY_AUTH_HTPASSWD_REALM
+              value: "{{ registry_htpasswd_realm }}"
+            - name: REGISTRY_AUTH_HTPASSWD_PATH
+              value: /auth/htpasswd
+            - name: REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY
+              value: /var/lib/registry
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/registry
+            - name: auth
+              mountPath: /auth
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /
+              port: {{ registry_container_port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ registry_app_name }}-data
+        - name: auth
+          secret:
+            secretName: {{ registry_app_name }}-auth

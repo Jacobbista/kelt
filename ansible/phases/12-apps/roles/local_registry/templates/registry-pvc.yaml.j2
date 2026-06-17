@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ registry_app_name }}-data
+  namespace: {{ registry_namespace }}
+  labels:
+    app: {{ registry_app_name }}
+spec:
+  # Image blob store. RWO on the default local-path StorageClass is fine because
+  # the single mounter (the registry pod) is pinned to the worker node.
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ apps_registry_storage_size }}

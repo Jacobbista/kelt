@@ -50,6 +50,7 @@ nav:
       - 5G Interfaces: architecture/5g-interfaces.md
       - Subscriber Persistence: architecture/subscriber-persistence.md
       - Positioning Adapters: architecture/positioning-adapters.md
+      - Edge Apps Platform: architecture/edge-apps.md
       - NF Platform: architecture/nf-platform.md
   - Deployment:
       - Phases: deployment/phases.md

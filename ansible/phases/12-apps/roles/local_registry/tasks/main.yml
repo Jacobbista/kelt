@@ -1,0 +1,73 @@
+---
+# LOCAL REGISTRY
+# registry:2 in the apps namespace (insecure HTTP + basic-auth, NodePort only) plus
+# the worker's registries.yaml mirror so k3s containerd can pull pushed images. The
+# registry is never fronted by the tunnel. See docs/architecture/edge-apps.md.
+
+# ── In-cluster registry (applied once from the master) ──────────────────────
+- name: Apply registry PVC
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/registry-pvc.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+# htpasswd Secret is generated once (random bcrypt salt) and only when absent, so a
+# re-run never churns it or rotates the password. Delete it to rotate the password.
+- name: Check whether the registry auth Secret exists
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ registry_app_name }}-auth"
+    namespace: "{{ registry_namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: registry_auth_secret
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Create the registry auth Secret (htpasswd, create-if-missing)
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/registry-htpasswd-secret.yaml.j2') | from_yaml }}"
+  when: registry_auth_secret.resources | length == 0
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply registry Deployment
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/registry-deployment.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Apply registry Service
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/registry-service.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+# ── Worker containerd mirror (the only node-level change) ───────────────────
+- name: Ensure k3s config dir on worker
+  ansible.builtin.file:
+    path: "{{ registry_k3s_config_dir }}"
+    state: directory
+    mode: "0755"
+  when: inventory_hostname in groups['workers']
+
+# Restarts k3s on the worker ONLY when the rendered file changes (notify handler),
+# so a re-run with no config change does not bounce the node.
+- name: Configure k3s registry mirror on worker (registries.yaml)
+  ansible.builtin.template:
+    src: registries.yaml.j2
+    dest: "{{ registry_k3s_config_dir }}/registries.yaml"
+    mode: "0600"
+  when: inventory_hostname in groups['workers']
+  notify: restart k3s on worker

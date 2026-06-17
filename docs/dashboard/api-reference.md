@@ -136,6 +136,18 @@ See [RAN Modes](../deployment/ran-modes-dashboard.md) for the full workflow.
 
 ---
 
+## Edge apps (phase 12)
+
+Operator-deployed application pods in the `apps` namespace. See [architecture/edge-apps.md](../architecture/edge-apps.md).
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/api/v1/apps` | — | Inventory of deployed apps (name, image, replicas, ready, exposed, public URL `<name>.<base>`) |
+| POST | `/api/v1/apps` | ✅ Admin | Deploy an app. Requires `DASHBOARD_ALLOW_WORKLOAD_CREATE=true`. Body: `{name, image, port?, replicas?, env[], image_pull_secret?, expose?}`. Creates a Deployment (+ Service on port 80 when exposed) pinned to the worker |
+| DELETE | `/api/v1/apps/{name}` | ✅ Admin | Delete an app (Deployment, Service, config ConfigMap/Secret) |
+
+---
+
 ## WebSocket Endpoints
 
 WebSocket connections are made to the same host on port 31880.

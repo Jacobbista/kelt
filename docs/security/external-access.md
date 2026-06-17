@@ -72,6 +72,18 @@ maps each Host to its Service. One wildcard Access policy (`*.<base>`) covers th
 all, so adding a surface is a server block in the front-door config plus its
 subdomain default, with no new tunnel route, DNS record, or Access rule.
 
+## Dynamic edge-app routes
+
+When the edge apps platform is enabled (`apps_enabled`), the front-door also
+carries one regex server block that proxies any otherwise-unmatched single-label
+subdomain `<name>.<base>` to the same-named Service in the `apps` namespace,
+resolved at request time. An operator-deployed app is therefore reachable the
+moment its Service exists, with no template edit or front-door re-run. App
+frontends exposed this way have no application-level auth by default and sit
+behind the same optional Access perimeter as every other surface; an app needing
+login can be fronted by the `frontdoor_gate` building block. See
+[../architecture/edge-apps.md](../architecture/edge-apps.md).
+
 ## Front-door auth (services without native auth)
 
 Surfaces that already authenticate (dashboard, demo via PKCE; CAMARA via its own

@@ -138,6 +138,31 @@ the dev frontend at `https://dev.yourdomain.com`. The tunnel itself
 (Cloudflare, ngrok, ssh-based, etc.) is configured outside the
 testbed and is documented separately.
 
+### Deploy your own app (edge apps platform)
+
+Run your own container as a pod and reach its frontend at its own subdomain. Opt-in:
+
+```bash
+testbed apps on
+testbed secrets generate-missing      # registry password (or set APPS_REGISTRY_PASSWORD)
+testbed run-phase 12-apps             # local registry + apps namespace (restarts k3s on the worker once)
+testbed run-phase 11-frontdoor        # emit the dynamic <name>.<base> route
+```
+
+Then build outside the cluster, push to the local registry, and deploy from the
+dashboard (Services → Edge apps, admin):
+
+```bash
+docker login 192.168.56.11:31501      # user kelt, the generated registry password
+docker build -t 192.168.56.11:31501/face:dev .
+docker push    192.168.56.11:31501/face:dev
+# Apps page: image=192.168.56.11:31501/face:dev, port, replicas, expose -> face.<base>
+```
+
+The registry is insecure HTTP on a NodePort only (never tunneled); add it to the
+client's `insecure-registries`. Push over Tailscale/LAN. See
+[docs/architecture/edge-apps.md](docs/architecture/edge-apps.md).
+
 ---
 
 ## 5. Agent reference (non-interactive)
@@ -169,6 +194,7 @@ directly; no flags are required, all values are positional.
 | `testbed edge` | `on \| off \| true \| false` |
 | `testbed ran` | `<nic> \| disable` |
 | `testbed northbound` | `on \| off` (positioning/CAMARA feature: phases 10-12 + placement-editor, in one command) |
+| `testbed apps` | `on \| off` (edge apps platform: phase 12 local registry + deploy-from-image + dynamic `<name>.<base>` route) |
 
 ### External access
 

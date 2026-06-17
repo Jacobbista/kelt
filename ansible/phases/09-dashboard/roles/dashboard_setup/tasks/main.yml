@@ -114,6 +114,12 @@
       DASHBOARD_KEYCLOAK_PATH_PREFIX={{ dashboard_keycloak_path_prefix }}
       DASHBOARD_CORS_ORIGIN={{ dashboard_cors_origin }}
       DASHBOARD_DEV_EXTERNAL_URL={{ dashboard_dev_external_url }}
+      DASHBOARD_APPS_NAMESPACE={{ apps_namespace | default('apps') }}
+      DASHBOARD_APPS_REGISTRY_HOST={{ apps_registry_host | default('') }}
+      DASHBOARD_APPS_REGISTRY_USERNAME={{ apps_registry_username | default('') }}
+      DASHBOARD_APPS_REGISTRY_PASSWORD={{ apps_registry_password | default('') }}
+      DASHBOARD_EXTERNAL_BASE_DOMAIN={{ external_base_domain | default('') }}
+      DASHBOARD_EXTERNAL_SCHEME={{ external_scheme | default('https') }}
   register: backend_env_file
 
 - name: Create frontend environment file (used by Vite dev only)
@@ -133,6 +139,11 @@
       VITE_AUTH_ENABLED={{ dashboard_auth_enabled | bool | lower }}
       VITE_KEYCLOAK_AUTHORITY={{ dashboard_keycloak_external_url }}{{ dashboard_keycloak_path_prefix }}/realms/{{ dashboard_keycloak_realm }}
       VITE_KEYCLOAK_CLIENT_ID={{ dashboard_keycloak_client_id }}
+      # Internal MkDocs site. The dev origin does not proxy /docs, so point at the
+      # canonical dashboard origin (kelt.<base>/docs) when a base domain is set;
+      # otherwise leave same-origin /docs (prod path). Without this the dev bundle
+      # falls back to the public GitHub site for every docs link.
+      VITE_DOCS_URL={{ (external_scheme ~ '://' ~ dashboard_subdomain ~ '.' ~ external_base_domain ~ '/docs') if (external_base_domain | default('')) else '/docs' }}
   register: frontend_env_file
   when: dashboard_dev_enabled | bool
 

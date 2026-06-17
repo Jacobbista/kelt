@@ -20,6 +20,7 @@ import NorthboundPage from "./pages/NorthboundPage";
 import OverviewPage from "./pages/OverviewPage";
 import ServicesPage from "./pages/ServicesPage";
 import CustomWorkloadPage from "./pages/CustomWorkloadPage";
+import AppsPage from "./pages/AppsPage";
 import ManualPage from "./pages/ManualPage";
 import RanPage from "./pages/RanPage";
 import SubscribersPage from "./pages/SubscribersPage";
@@ -166,6 +167,7 @@ function AppInner() {
         <Route path="/services" element={<ServicesPage />} />
         <Route path="/services/northbound" element={<NorthboundPage />} />
         <Route path="/services/custom" element={<CustomWorkloadPage />} />
+        <Route path="/services/apps" element={<AppsPage />} />
         <Route path="/northbound" element={<Navigate to="/services/northbound" replace />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/iam" element={<Navigate to="/settings" replace />} />

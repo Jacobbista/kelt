@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ registry_app_name }}
+  namespace: {{ registry_namespace }}
+  labels:
+    app: {{ registry_app_name }}
+spec:
+  # NodePort so clients (laptop over LAN/Tailscale) can docker push, and so the
+  # worker's containerd can pull via the registries.yaml http endpoint. Never
+  # fronted by the tunnel.
+  type: NodePort
+  selector:
+    app: {{ registry_app_name }}
+  ports:
+    - name: registry
+      port: {{ registry_container_port }}
+      targetPort: {{ registry_container_port }}
+      nodePort: {{ apps_registry_nodeport }}

@@ -30,6 +30,20 @@ class Settings(BaseSettings):
     # default (read-only console); phase 09 sets DASHBOARD_ALLOW_WORKLOAD_CREATE=true
     # to enable it. Always admin-gated on top of this. See docs/security/iam.md.
     allow_workload_create: bool = False
+    # Edge apps platform (phase 12). The namespace the Apps console deploys into,
+    # and the external base domain/scheme used to derive each app's public URL
+    # (<name>.<base>). Empty base => no public URL is advertised (LAN-only).
+    apps_namespace: str = "apps"
+    # Registry host as it appears in image tags (<host>/<name>:<tag>); shown in the
+    # Apps page so the operator knows where to docker push. Empty if the platform
+    # is not configured. Mirrors all.yml apps_registry_host.
+    apps_registry_host: str = ""
+    # Registry basic-auth, surfaced to admins in the Apps page (show/hide) so they
+    # can docker login + push. Admin-gated endpoint only.
+    apps_registry_username: str = ""
+    apps_registry_password: str = ""
+    external_base_domain: str = ""
+    external_scheme: str = "https"
     backend_service_name: str = "dashboard-backend"
     frontend_service_name: str = "dashboard-frontend"
     # Optional external URL the dev frontend is reachable at. Used by the

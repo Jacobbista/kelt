@@ -1,0 +1,28 @@
+---
+# PHASE 12: Edge apps platform
+#
+# Opt-in platform for operator-deployed application pods (e.g. a MEC demo) with
+# their own container image, fronted dynamically at <name>.<base> by the phase 11
+# front-door. Two roles:
+#   - local_registry : an in-cluster registry:2 (insecure HTTP + basic-auth,
+#                       NodePort only) plus the worker's registries.yaml mirror so
+#                       k3s containerd can pull the pushed images.
+#   - apps_platform  : the `apps` namespace the deploy-from-image console targets.
+#
+# A no-op unless apps_enabled (all.yml / `testbed apps on`). The registry mirror
+# task restarts k3s on the worker ONLY when registries.yaml actually changes.
+# See docs/architecture/edge-apps.md.
+
+- name: "PHASE 12 | Edge apps platform (local registry + apps namespace)"
+  hosts: "masters,workers"
+  become: true
+  tags:
+    - phase12
+    - apps
+  roles:
+    - role: roles/apps_platform
+      when: apps_enabled | default(false) | bool
+      tags: [apps, apps-namespace]
+    - role: roles/local_registry
+      when: apps_enabled | default(false) | bool
+      tags: [apps, registry]

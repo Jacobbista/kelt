@@ -1,0 +1,17 @@
+{#
+  k3s containerd registry mirror for the in-cluster local registry. The mirror key
+  is the host as it appears in image tags ({{ apps_registry_host }}); the endpoint
+  is the real http NodePort on the worker. containerd matches the image ref host to
+  the key and pulls from the (insecure) http endpoint with basic-auth. This is the
+  ONLY node-level change phase 12 makes; a content change here restarts k3s.
+  See docs/architecture/edge-apps.md.
+#}
+mirrors:
+  "{{ apps_registry_host }}":
+    endpoint:
+      - "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ apps_registry_nodeport }}"
+configs:
+  "{{ apps_registry_host }}":
+    auth:
+      username: "{{ apps_registry_username }}"
+      password: "{{ apps_registry_password }}"

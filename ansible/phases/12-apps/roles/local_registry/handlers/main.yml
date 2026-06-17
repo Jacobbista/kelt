@@ -1,0 +1,10 @@
+---
+# Restart k3s on the worker so containerd reloads /etc/rancher/k3s/registries.yaml.
+# The worker's agent unit is installed as k3s.service (see phase 02 k3s_agent).
+# Fired only when the registries.yaml template task reports changed, so a re-run
+# with no config change never bounces the node.
+- name: restart k3s on worker
+  ansible.builtin.systemd:
+    name: k3s
+    state: restarted
+  when: inventory_hostname in groups['workers']

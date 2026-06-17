@@ -32,6 +32,7 @@ These documents explain how the system is designed. Read them in order; each bui
 | [5G Interfaces](architecture/5g-interfaces.md) | N1/N2/N3/N4/N6 subnets, static IPs, protocols, and verification commands |
 | [Subscriber Persistence](architecture/subscriber-persistence.md) | MongoDB PVC and `subscribers-snapshot` ConfigMap — how UE records survive restarts |
 | [Positioning Adapters](architecture/positioning-adapters.md) | Pluggable positioning engine adapter model behind the CAMARA Location API |
+| [Edge Apps Platform](architecture/edge-apps.md) | Operator-deployed app pods: local registry, deploy-from-image console, dynamic `<name>.<base>` front-door route |
 | [NF Platform](architecture/nf-platform.md) | Companion `5g-nf-platform` repo design: per-NF image builds, patches, versioning ([dev plan](architecture/nf-platform-dev-plan.md)) |
 
 ---

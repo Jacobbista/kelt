@@ -534,6 +534,15 @@
     - phase11
     - frontdoor
 
+- name: "PHASE 12: Edge apps platform"
+  import_playbook: 12-apps/playbook.yml
+  vars:
+    phase_name: "Edge apps platform"
+    phase_number: 12
+  tags:
+    - phase12
+    - apps
+
 - name: "🎉 DEPLOYMENT COMPLETED SUCCESSFULLY"
   hosts: localhost
   gather_facts: false

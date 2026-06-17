@@ -2,13 +2,14 @@ import { useEffect, useState } from "react";
 import ServiceCard from "../components/ServiceCard";
 import Loader from "../components/Loader";
 import { IconLocate, IconNetwork, IconCpu, IconBoxPlus } from "../components/icons";
-import { getNorthboundServices, getNorthboundAdapters } from "../api";
+import { getNorthboundServices, getNorthboundAdapters, getApps } from "../api";
 
-// Hub for scheduled cluster services. Northbound (positioning/CAMARA) is live
-// today; NEF-style network exposure and MEC edge apps are placeholders for the
-// roadmap. Each live card links to its own management sub-page.
+// Hub for scheduled cluster services. Northbound (positioning/CAMARA) and Edge
+// apps are live; NEF-style network exposure is a roadmap placeholder. Each live
+// card links to its own management sub-page.
 export default function ServicesPage() {
   const [nb, setNb] = useState({ services: [], adapters: [], loaded: false });
+  const [apps, setApps] = useState({ apps: [], loaded: false, ready: false });
 
   useEffect(() => {
     let alive = true;
@@ -17,6 +18,9 @@ export default function ServicesPage() {
         if (alive) setNb({ services: svc.services || [], adapters: ad || [], loaded: true });
       })
       .catch(() => alive && setNb((s) => ({ ...s, loaded: true })));
+    getApps()
+      .then((res) => alive && setApps({ apps: res.apps || [], loaded: true, ready: !!res.ready }))
+      .catch(() => alive && setApps((s) => ({ ...s, loaded: true })));
     return () => { alive = false; };
   }, []);
 
@@ -67,16 +71,23 @@ export default function ServicesPage() {
         />
 
         <ServiceCard
-          icon={IconNetwork}
-          title="NEF functions"
-          subtitle="Network exposure (event subscriptions, QoS)"
-          status="planned"
+          icon={IconCpu}
+          title="Edge apps"
+          subtitle="Deploy your own image; reachable at its own subdomain"
+          status={apps.loaded && apps.ready ? "on" : "off"}
+          cta="manage"
+          to="/services/apps"
+          stats={[
+            { label: "apps", value: apps.loaded ? apps.apps.length : "—" },
+            { label: "ready", value: apps.loaded ? apps.apps.filter((a) => a.ready).length : "—" },
+            { label: "exposed", value: apps.loaded ? apps.apps.filter((a) => a.exposed).length : "—" },
+          ]}
         />
 
         <ServiceCard
-          icon={IconCpu}
-          title="MEC apps (edge)"
-          subtitle="N6 user-plane applications on the edge node"
+          icon={IconNetwork}
+          title="NEF functions"
+          subtitle="Network exposure (event subscriptions, QoS)"
           status="planned"
         />
       </div>

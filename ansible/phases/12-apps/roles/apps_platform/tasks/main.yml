@@ -1,0 +1,20 @@
+---
+# APPS PLATFORM
+# The namespace the deploy-from-image console (dashboard Apps page) targets. Apps
+# land here as Deployment + Service, pinned to the worker via nodeSelector by the
+# backend. See docs/architecture/edge-apps.md.
+
+- name: Ensure apps namespace exists
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Namespace
+    state: present
+    definition:
+      metadata:
+        name: "{{ apps_namespace }}"
+        labels:
+          name: "{{ apps_namespace }}"
+          kelt.io/surface: apps
+    kubeconfig: "{{ kubeconfig_path }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true

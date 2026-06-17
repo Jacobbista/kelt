@@ -174,6 +174,26 @@ See [architecture/positioning-adapters.md](../architecture/positioning-adapters.
 
 ---
 
+## Edge apps
+
+**Area**: Services hub → Edge apps
+
+Console for operator-deployed application pods (phase 12). Reached from the
+Services hub. Read views are open to `dashboard-viewer`; deploy/delete require
+`dashboard-admin` plus the backend `allow_workload_create` gate.
+
+- Deployed apps: name, image, ready replicas, and the public link (`<name>.<base>`)
+  for exposed apps. Admins can delete an app
+- Deploy from image: a registry image (`<host>/name:tag`), port, replicas, env
+  vars (secret-marked go into a Secret), optional `imagePullSecret`, and an
+  **expose** toggle. The backend creates a worker-pinned Deployment and, when
+  exposed, a port-80 Service the front-door reaches at `<name>.<base>`
+
+The image must be pushed to the in-cluster local registry first. See
+[architecture/edge-apps.md](../architecture/edge-apps.md).
+
+---
+
 ## IAM
 
 **Area**: Access · admin only

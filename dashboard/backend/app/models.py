@@ -156,6 +156,21 @@ class WorkloadDeployRequest(BaseModel):
     namespace: str = "mec"
 
 
+class AppDeployRequest(BaseModel):
+    # Edge apps platform (phase 12): deploy an operator's own image as a pod in the
+    # apps namespace. When `expose` is true the Service is published on port 80
+    # (-> container `port`) so the front-door reaches it at <name>.<base> without
+    # knowing the container port. Readiness is a TCP probe (arbitrary images need
+    # not expose /health). See docs/architecture/edge-apps.md.
+    name: str
+    image: str
+    port: int = Field(default=80, ge=1, le=65535)
+    replicas: int = Field(default=1, ge=0, le=10)
+    env: list[DeployEnvVar] = Field(default_factory=list)
+    image_pull_secret: str | None = None
+    expose: bool = True
+
+
 class ServiceConfigRequest(BaseModel):
     # Guided-setup apply: a flat {VAR: value} map. The backend routes each var by
     # the service contract's `sensitive` flag (Secret vs ConfigMap) and rejects any

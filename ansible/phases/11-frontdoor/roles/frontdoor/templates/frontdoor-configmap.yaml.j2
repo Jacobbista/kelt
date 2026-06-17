@@ -115,6 +115,24 @@ data:
         }
       }
 {% endif %}
+{% if apps_enabled | default(false) | bool %}
+
+      # <app>.<base> -> operator-deployed edge app (phase 12). Dynamic: the named
+      # server blocks above win by exact match, so any OTHER single-label subdomain
+      # is treated as an app name and proxied to the same-named Service in the apps
+      # namespace, resolved at request time. A new app is reachable the moment its
+      # Service exists, with no template edit / front-door re-run. Trade-off: a
+      # mistyped known subdomain falls here and yields 502 instead of the welcome
+      # page. See docs/architecture/edge-apps.md.
+      server {
+        listen 80;
+        server_name ~^(?<app>[^.]+)\.{{ external_base_domain | regex_escape }}$;
+        location / {
+          set $up http://$app.{{ apps_namespace }}.svc.cluster.local;
+          proxy_pass $up;
+        }
+      }
+{% endif %}
     }
   # Public, branded welcome page served on the default (unknown-host) server.
   # Built from the same subdomain map + feature flags that drive the routing

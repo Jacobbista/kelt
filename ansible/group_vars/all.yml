@@ -133,6 +133,29 @@ positioning_demo_enabled: "{{ (lookup('ansible.builtin.env', 'POSITIONING_DEMO_E
 # placement-editor (room-geometry authoring UI) follows the positioning toggle.
 placement_editor_enabled: "{{ (lookup('ansible.builtin.env', 'PLACEMENT_EDITOR_ENABLED') or lookup('ansible.builtin.env', 'NORTHBOUND_ENABLED') or 'false') | bool }}"
 
+# Edge apps platform (phase 12): operator-deployed application pods (e.g. a MEC
+# demo) with their own image, fronted dynamically at <name>.<base>. Opt-in, off by
+# default. `testbed apps on` writes APPS_ENABLED=true to .testbed.env. Apps run on
+# the worker (nodeSelector) in the `apps_namespace`; images come from the in-cluster
+# local registry (insecure HTTP + basic-auth, NodePort only, never tunneled). See
+# docs/architecture/edge-apps.md.
+apps_enabled: "{{ lookup('ansible.builtin.env', 'APPS_ENABLED') | default('false', true) | bool }}"
+apps_namespace: apps
+# Local image registry (registry:2) for build-outside-push-here-deploy. Exposed on
+# this NodePort on the worker only; k3s containerd pulls from it via
+# /etc/rancher/k3s/registries.yaml (insecure mirror). Credentials live in
+# .testbed.secrets (APPS_REGISTRY_USERNAME / APPS_REGISTRY_PASSWORD).
+apps_registry_nodeport: 31501
+# Registry host as it appears in image tags (<host>/<name>:<tag>). Must match the
+# mirror key in /etc/rancher/k3s/registries.yaml on the worker, which maps it to the
+# real http endpoint. Defaults to the worker LAN address:port; override with
+# APPS_REGISTRY_HOST (e.g. a stable name) when pushing from a Tailscale client.
+apps_registry_host: "{{ lookup('ansible.builtin.env', 'APPS_REGISTRY_HOST') | default(hostvars[groups['workers'][0]]['ansible_host'] ~ ':' ~ apps_registry_nodeport, true) }}"
+apps_registry_image: "docker.io/library/registry:2"
+apps_registry_storage_size: 5Gi
+apps_registry_username: "{{ lookup('ansible.builtin.env', 'APPS_REGISTRY_USERNAME') | default('kelt', true) }}"
+apps_registry_password: "{{ lookup('ansible.builtin.env', 'APPS_REGISTRY_PASSWORD') | default('changeme-registry', true) }}"
+
 # ── External access (single base domain) ─────────────────────────────────────
 # One operator-set base domain fronts every HTTP surface as <subdomain>.<base>,
 # routed by the in-cluster front-door (phase 09) behind a single Cloudflare

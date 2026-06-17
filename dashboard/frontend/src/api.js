@@ -386,6 +386,46 @@ export const setNorthboundFusion = (body) => put("/api/v1/northbound/fusion", bo
 export const rolloutNorthboundManaged = (deployment, image) =>
   post(`/api/v1/northbound/managed/${encodeURIComponent(deployment)}/image`, { image });
 
+// Edge apps platform (phase 12). GET viewer; deploy/delete admin + workload policy.
+export const getApps = () => get("/api/v1/apps");
+export const deployApp = (body) => post("/api/v1/apps", body);
+export const deleteApp = (name) => del(`/api/v1/apps/${encodeURIComponent(name)}`);
+export const getAppRegistryCredentials = () => get("/api/v1/apps/registry-credentials");
+
+// One-click provision (phase 12 + 11) with streaming progress (NDJSON).
+export async function provisionAppsStream(onProgress) {
+  const res = await fetch(`/api/v1/apps/provision`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ..._authHeader() },
+  });
+  if (!res.ok) throw new Error(`Provision failed: ${res.status}`);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result = null;
+  let errMsg = null;
+  const handle = (line) => {
+    if (!line.trim()) return;
+    try {
+      const ev = JSON.parse(line);
+      if (ev.result) result = ev.result;
+      else if (ev.error) errMsg = ev.error;
+      else if (onProgress && ev.line !== undefined) onProgress(ev.line);
+    } catch (_) {}
+  };
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) handle(line);
+  }
+  if (buffer.trim()) handle(buffer);
+  if (errMsg) throw new Error(errMsg);
+  return result;
+}
+
 // Dashboard self-update (deployed-vs-registry for frontend/docs)
 export const getDashboardComponents = () => get("/api/v1/dashboard/components");
 export const updateDashboardComponent = (name) =>
