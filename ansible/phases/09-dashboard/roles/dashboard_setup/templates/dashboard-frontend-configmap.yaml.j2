@@ -72,6 +72,15 @@ data:
         proxy_set_header X-Forwarded-Host $host;
       }
 
+      # Runtime config file: never cache it, so a ConfigMap change (e.g. the dev
+      # external URL) takes effect on the next load instead of a stale browser
+      # copy. The hashed JS/CSS chunks stay cacheable (content-addressed).
+      location = /env-config.js {
+        add_header Cache-Control "no-store, no-cache, must-revalidate";
+        expires off;
+        try_files $uri =404;
+      }
+
       # SPA fallback so client-side routes work on direct hits.
       location / {
         try_files $uri $uri/ /index.html;
