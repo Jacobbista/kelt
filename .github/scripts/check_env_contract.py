@@ -45,6 +45,11 @@ def configmap_keys(template: Path) -> set[str]:
             in_data = True
             continue
         if in_data:
+            # Jinja control lines (e.g. {% if %} / {% endif %}) sit at column 0 in
+            # our templates but are NOT YAML key boundaries; skip them so keys after
+            # a conditional block are still counted.
+            if line.lstrip().startswith("{%"):
+                continue
             # A new top-level key (no indent) ends the data block.
             if line and not line.startswith(" "):
                 break
