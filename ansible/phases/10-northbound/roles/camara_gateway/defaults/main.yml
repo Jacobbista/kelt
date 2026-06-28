@@ -2,7 +2,7 @@
 camara_enabled: true
 camara_namespace: camara
 
-camara_gateway_image: "ghcr.io/jacobbista/5g-northbound/camara-gateway:0.8.0"
+camara_gateway_image: "ghcr.io/jacobbista/5g-northbound/camara-gateway:0.8.1"
 camara_gateway_nodeport: 31920
 
 # Must match Phase 08/09. Read from env so a single CAMARA_CLIENT_SECRET /

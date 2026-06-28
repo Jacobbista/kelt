@@ -64,7 +64,7 @@ _ADAPTER_BINDINGS = {
 
 
 def _image_basename(image: str | None) -> str:
-    """ghcr.io/jacobbista/5g-northbound/rest-adapter:0.6.0 -> rest-adapter."""
+    """ghcr.io/jacobbista/5g-northbound/rest-adapter:0.8.1 -> rest-adapter."""
     return (image or "").rsplit("/", 1)[-1].split("@")[0].split(":")[0]
 
 

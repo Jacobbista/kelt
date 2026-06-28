@@ -5,7 +5,7 @@
 # gate is mandatory, not optional). See the phase README and docs/security/external-access.md.
 placement_editor_enabled: "{{ lookup('ansible.builtin.env', 'PLACEMENT_EDITOR_ENABLED') | default(lookup('ansible.builtin.env', 'NORTHBOUND_ENABLED') or 'false', true) | bool }}"
 positioning_namespace: positioning
-placement_editor_image: "ghcr.io/jacobbista/5g-northbound/placement-editor:0.8.0"
+placement_editor_image: "ghcr.io/jacobbista/5g-northbound/placement-editor:0.8.1"
 
 # ── front-door gate parameters (passed to the frontdoor_gate role) ───────────
 # Must match the placement-editor-proxy confidential client in phase 08.

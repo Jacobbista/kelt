@@ -2,7 +2,7 @@
 positioning_enabled: true
 positioning_namespace: positioning
 
-positioning_engine_image: "ghcr.io/jacobbista/5g-northbound/positioning-engine:0.8.0"
+positioning_engine_image: "ghcr.io/jacobbista/5g-northbound/positioning-engine:0.8.1"
 positioning_engine_nodeport: 31930
 
 # Engine-owned blueprint store (v0.5.0 authority model): only the engine mounts
@@ -37,7 +37,7 @@ engine_websocket_interval_ms: 500
 # ── mock-positioning reference adapter (lean baseline) ───────────────────────
 # Synthetic random-walk adapter deployed alongside the engine so the demo shows
 # live movement out of the box. Room bounds come from the floor_* dims below.
-mock_positioning_image: "ghcr.io/jacobbista/5g-northbound/mock-positioning:0.8.0"
+mock_positioning_image: "ghcr.io/jacobbista/5g-northbound/mock-positioning:0.8.2"
 
 # Floor plan defaults (passed to the engine for mock bounds and to the demo
 # for 3D rendering). Override at deploy time for real room dimensions:
