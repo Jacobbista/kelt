@@ -33,6 +33,12 @@ spec:
               value: /auth/htpasswd
             - name: REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY
               value: /var/lib/registry
+            # Without this the registry rejects every DELETE, so a tag can never
+            # be removed and the store only grows. Deleting a manifest unlinks it
+            # but leaves the blobs on disk: space comes back only after the
+            # garbage collect below. See docs/architecture/edge-apps.md.
+            - name: REGISTRY_STORAGE_DELETE_ENABLED
+              value: "true"
           volumeMounts:
             - name: data
               mountPath: /var/lib/registry
