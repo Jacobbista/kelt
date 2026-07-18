@@ -61,10 +61,10 @@ dashboard_readonly_secret: "{{ lookup('ansible.builtin.env', 'DASHBOARD_READONLY
 # Secret for the placement-editor-proxy confidential client (consumed by the
 # oauth2-proxy that gates placement-editor; see phase 10 (northbound) / docs/security/iam.md).
 placement_editor_proxy_secret: "{{ lookup('ansible.builtin.env', 'PLACEMENT_EDITOR_PROXY_SECRET') | default('changeme-placement', true) }}"
-# Secret for the reference per-consumer CAMARA client (camara-consumer-demo): a
-# 2-legged client scoped to org 'demo' via a hardcoded org claim, demonstrating
-# the multi-tenant org join in the gateway. See docs/security/iam.md.
-camara_consumer_demo_secret: "{{ lookup('ansible.builtin.env', 'CAMARA_CONSUMER_DEMO_SECRET') | default('changeme-consumer', true) }}"
+# Secret for the reference per-consumer CAMARA client (camara-api-demo): a 2-legged
+# M2M client scoped to `camara_org` via its service-account `org` attribute (uniform
+# with browser login), demonstrating the gateway's org join. See docs/security/iam.md.
+camara_api_demo_secret: "{{ lookup('ansible.builtin.env', 'CAMARA_API_DEMO_SECRET') | default('changeme-consumer', true) }}"
 
 # ── Bootstrap end-users for dashboard login (realm 5g-testbed) ──────────────
 # Two seed accounts mirror the two-role model documented in docs/security/iam.md:
@@ -76,7 +76,20 @@ camara_consumer_demo_secret: "{{ lookup('ansible.builtin.env', 'CAMARA_CONSUMER_
 dashboard_bootstrap_admin_username: "{{ lookup('ansible.builtin.env', 'DASHBOARD_BOOTSTRAP_ADMIN_USERNAME') | default('admin', true) }}"
 dashboard_bootstrap_admin_password: "{{ lookup('ansible.builtin.env', 'DASHBOARD_BOOTSTRAP_ADMIN_PASSWORD') | default(keycloak_admin_password, true) }}"
 dashboard_bootstrap_viewer_username: "{{ lookup('ansible.builtin.env', 'DASHBOARD_BOOTSTRAP_VIEWER_USERNAME') | default('viewer', true) }}"
-dashboard_bootstrap_viewer_password: "{{ lookup('ansible.builtin.env', 'DASHBOARD_BOOTSTRAP_VIEWER_PASSWORD') | default(dashboard_bootstrap_admin_password, true) }}"
+# Deliberately NOT the admin password: these demo accounts get handed out (a
+# colleague, a demo laptop, a screen recording), and the operator password is
+# often set to something short for convenience. They are throwaway values that
+# the temporary flag forces the recipient to change at first login anyway.
+dashboard_bootstrap_viewer_password: "{{ lookup('ansible.builtin.env', 'DASHBOARD_BOOTSTRAP_VIEWER_PASSWORD') | default('kelt-viewer', true) }}"
+
+# Third seed account: a CAMARA TENANT user, created only when northbound is
+# enabled. Unlike admin/viewer it carries the `org` user attribute, so its
+# tokens include an org claim and the gateway scopes it to that tenant. It
+# makes scoped browser login observable without a manual Keycloak add; the
+# operator accounts stay org-less (god-mode) by design. See docs/security/iam.md.
+#   demo -> g-camara-users + g-dashboard-viewers, attribute org = camara_org
+dashboard_bootstrap_tenant_username: "{{ lookup('ansible.builtin.env', 'DASHBOARD_BOOTSTRAP_TENANT_USERNAME') | default(camara_tenant_username, true) }}"
+dashboard_bootstrap_tenant_password: "{{ lookup('ansible.builtin.env', 'DASHBOARD_BOOTSTRAP_TENANT_PASSWORD') | default('kelt-demo', true) }}"
 
 # ── Realm reconcile toggle ──────────────────────────────────────────────────
 # Keycloak imports the realm JSON only on first boot. To propagate later edits

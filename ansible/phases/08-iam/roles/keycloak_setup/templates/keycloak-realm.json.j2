@@ -1,3 +1,5 @@
+{# Realm definition. Roles, OIDC clients, groups and the per-route authz model are
+   owned by docs/security/iam.md — read it before adding/changing roles or clients. #}
 {
   "realm": "{{ keycloak_realm }}",
   "enabled": true,
@@ -86,7 +88,22 @@
       "attributes": {
         "pkce.code.challenge.method": "S256",
         "post.logout.redirect.uris": "{{ dashboard_external_origin }}/*{% if dashboard_dev_external_url %}##{{ dashboard_dev_external_url }}/*{% endif %}"
-      }
+      },
+      "protocolMappers": [
+        {
+          "name": "org",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "user.attribute": "org",
+            "claim.name": "org",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
     },
     {
       "clientId": "dashboard-readonly",
@@ -141,7 +158,22 @@
       "protocol": "openid-connect",
       "attributes": {
         "pkce.code.challenge.method": "S256"
-      }
+      },
+      "protocolMappers": [
+        {
+          "name": "org",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "user.attribute": "org",
+            "claim.name": "org",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
     },
     {
       "clientId": "placement-editor-proxy",
@@ -182,13 +214,13 @@
       ]
     },
     {
-      "clientId": "camara-consumer-demo",
-      "name": "CAMARA Consumer (demo org)",
-      "description": "Reference per-consumer M2M client (2-legged client_credentials), scoped to org 'demo' via a hardcoded org claim. The gateway joins token.org against asset.org, so this client sees only org=demo assets; the org-less camara-gateway client stays the operator bypass (sees all). Model for adding real per-consumer/per-org clients.",
+      "clientId": "camara-api-demo",
+      "name": "CAMARA API consumer (org demo)",
+      "description": "Reference per-consumer M2M client (2-legged client_credentials) for the CAMARA Location API. Scoped to a tenant by the `org` attribute on its SERVICE ACCOUNT (uniform with browser login), read by the shared org token mapper. The org-less camara-gateway client stays the operator bypass (sees all). To add a real consumer: new client + set its service-account `org` attribute.",
       "enabled": true,
       "publicClient": false,
       "clientAuthenticatorType": "client-secret",
-      "secret": "{{ camara_consumer_demo_secret }}",
+      "secret": "{{ camara_api_demo_secret }}",
       "standardFlowEnabled": false,
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,
@@ -201,14 +233,14 @@
         {
           "name": "org",
           "protocol": "openid-connect",
-          "protocolMapper": "oidc-hardcoded-claim-mapper",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
           "config": {
+            "user.attribute": "org",
             "claim.name": "org",
-            "claim.value": "demo",
             "jsonType.label": "String",
-            "id.token.claim": "false",
+            "id.token.claim": "true",
             "access.token.claim": "true",
-            "userinfo.token.claim": "false"
+            "userinfo.token.claim": "true"
           }
         }
       ]
@@ -229,10 +261,11 @@
       "realmRoles": ["camara-location-read"]
     },
     {
-      "username": "service-account-camara-consumer-demo",
+      "username": "service-account-camara-api-demo",
       "enabled": true,
-      "serviceAccountClientId": "camara-consumer-demo",
-      "realmRoles": ["camara-location-read"]
+      "serviceAccountClientId": "camara-api-demo",
+      "realmRoles": ["camara-location-read"],
+      "attributes": { "org": ["{{ camara_org }}"] }
     }{% endif %}
 
   ]

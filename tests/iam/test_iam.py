@@ -111,7 +111,7 @@ class IamTestSuite:
             ("Realm clients present", self.test_clients_present),
             ("Realm roles present", self.test_realm_roles_present),
             ("CAMARA client_credentials token", self.test_camara_client_credentials),
-            ("Per-consumer org claim (camara-consumer-demo)", self.test_consumer_demo_org_claim),
+            ("Per-consumer org claim (camara-api-demo)", self.test_consumer_demo_org_claim),
         ]
 
         passed = 0
@@ -288,17 +288,17 @@ class IamTestSuite:
         return True
 
     def test_consumer_demo_org_claim(self) -> bool:
-        """The reference per-consumer client (camara-consumer-demo) carries its tenant
-        org claim (org=demo) plus camara-location-read, so the gateway's 2-legged org
-        join scopes it to its tenant's assets. Falls back to the role-default secret
-        ('changeme-consumer') when no CAMARA_CONSUMER_DEMO_SECRET override is set, so
-        the test runs on a clean deploy."""
-        secret = self._get_secret("CAMARA_CONSUMER_DEMO_SECRET") or "changeme-consumer"
+        """The reference per-consumer client (camara-api-demo) carries its tenant org
+        claim (org=demo, from its service-account org attribute) plus camara-location-read,
+        so the gateway's 2-legged org join scopes it to its tenant's assets. Falls back to
+        the role-default secret ('changeme-consumer') when no CAMARA_API_DEMO_SECRET
+        override is set, so the test runs on a clean deploy."""
+        secret = self._get_secret("CAMARA_API_DEMO_SECRET") or "changeme-consumer"
         resp = requests.post(
             f"{self.base_url}/realms/{self.realm}/protocol/openid-connect/token",
             data={
                 "grant_type": "client_credentials",
-                "client_id": "camara-consumer-demo",
+                "client_id": "camara-api-demo",
                 "client_secret": secret,
             },
             timeout=self.timeout,

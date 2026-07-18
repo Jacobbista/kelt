@@ -64,6 +64,13 @@ spec:
 {% for group in gate_allowed_groups %}
             - --allowed-group={{ group }}
 {% endfor %}
+            # The gate keeps its OWN session cookie, independent of the Keycloak
+            # session: at the default 168h it kept admitting a user who had since
+            # logged out of the dashboard, or whose group membership had changed.
+            # cookie-refresh forces a re-check against Keycloak while browsing;
+            # cookie-expire bounds the session even if the browser stays open.
+            - --cookie-expire={{ gate_cookie_expire | default('8h') }}
+            - --cookie-refresh={{ gate_cookie_refresh | default('15m') }}
             - --skip-provider-button=true
             - --reverse-proxy=true
             # LAN is HTTP; set true (or front with a TLS-terminating tunnel) for prod.

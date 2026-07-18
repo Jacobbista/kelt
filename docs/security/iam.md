@@ -44,19 +44,34 @@ reach the cluster:
   (`g-camara-users`, `g-positioning-editors`).
 
 A token minted for the service plane (e.g. "view the demo") carries only its
-service role, not `dashboard-*`, so it cannot hit the dashboard backend. Tenancy
-(per-customer data isolation) is a planned graduation: model the org as a group
-or a `tenant` claim and have the service filter on it. As more dynamic services
-arrive, this generalizes to per-service resource-server clients + an authz
-contract provisioned at deploy (see docs/gaps.md).
+service role, not `dashboard-*`, so it cannot hit the dashboard backend.
+
+Tenancy (which CAMARA assets a caller sees) is enforced by the gateway on one
+rule: it matches the caller's `org` token claim against `asset.org`. A caller
+with no `org` claim is the operator (god-mode, sees every tenant). `org` is a
+user attribute on the authenticating principal, person OR service account, emitted
+by a shared `org` token mapper on the browser and consumer clients, so a single
+rule covers both access modes:
+
+- **Browser login** (`dashboard`, `positioning-demo`): `org` = the logged-in
+  user's attribute. The operator `admin` has none, so admin sees all; a user with
+  `org=demo` sees only that tenant.
+- **CAMARA API, M2M** (`camara-api-demo`): `org` = the client's service-account
+  attribute. The reference consumer is scoped to `camara_org` (default `demo`).
+
+The testbed is single-tenant by default (`camara_org` in `all.yml`, the single
+source). Multi-tenant is additive: give other principals a different `org`
+attribute, no code change. The `dashboard` and `camara-gateway` operator
+identities carry no `org` and stay god-mode by design.
 
 ## Clients
 
 | Client | Type | Flow | Use case |
 |--------|------|------|----------|
-| `camara-gateway` | confidential | `client_credentials` | The CAMARA Location gateway calls Keycloak with its client secret on boot and at refresh; tokens carry `camara-location-read`. |
-| `positioning-demo` | public | PKCE | Browser app for the 3D positioning visualization. Standard authorization-code-with-PKCE flow. |
-| `dashboard` | public | PKCE | Browser frontend of the operations dashboard. Tokens carry `dashboard-admin` or `dashboard-viewer` depending on the user's group. |
+| `camara-gateway` | confidential | `client_credentials` | The CAMARA Location gateway's own client; no `org` attribute, so it is the operator bypass (sees all tenants). Tokens carry `camara-location-read`. |
+| `camara-api-demo` | confidential | `client_credentials` | Reference per-consumer CAMARA API client. Scoped to a tenant by the `org` attribute on its service account (default `camara_org`). Model for a real integrator client. |
+| `positioning-demo` | public | PKCE | Browser app for the 3D positioning visualization. Emits the `org` claim from the user's attribute, so the demo is scoped to the logged-in user's tenant. |
+| `dashboard` | public | PKCE | Browser frontend of the operations dashboard. Tokens carry `dashboard-admin` or `dashboard-viewer` from the user's group, plus the `org` claim from the user's attribute (absent for the operator = god-mode). |
 | `dashboard-readonly` | confidential | `client_credentials` | Headless read-only consumer (monitoring agent, public demo, CI smoke check). Tokens carry `dashboard-viewer` only. |
 | `placement-editor-proxy` | confidential | authorization-code (oauth2-proxy) | Gates the no-auth `placement-editor` SPA. A `groups` protocol mapper emits group membership so oauth2-proxy admits `g-positioning-editors` (service-plane EDIT) or `g-dashboard-admins`. |
 
@@ -68,10 +83,12 @@ northbound phase is enabled (`testbed northbound on`), so an IAM-only deploy
 creates no orphan clients. Keycloak imports the realm only on first boot, so
 enabling northbound on an already-provisioned cluster does not auto-create the
 `camara-gateway` and `positioning-demo` clients; re-import the realm or add them
-via the admin console (see the realm reconcile limitation below). The
-`placement-editor-proxy` client is the exception: phase 08 creates it
-idempotently with a create-if-missing task, because the front-door gate cannot
-authenticate without it.
+via the admin console (see the realm reconcile limitation below). Exceptions
+created/patched idempotently by phase 08 on every run so a running cluster
+converges without a re-import: the `placement-editor-proxy` client (the front-door
+gate cannot authenticate without it), the `camara-api-demo` client plus its
+service-account `org` attribute and `camara-location-read` role, and the shared
+`org` user-attribute mapper on the `dashboard` and `positioning-demo` clients.
 
 ## Roles → endpoint matrix (dashboard backend)
 
@@ -80,9 +97,10 @@ against the realm JWKS and inspects `realm_access.roles` to decide.
 Enforcement lives in `dashboard/backend/app/auth.py` and is applied at
 router-include time in `dashboard/backend/app/main.py`.
 
-The matrix below documents the policy implemented today; per-route refinement
-of mixed routers (where a few methods need different roles than the bulk) is
-tracked as follow-up work.
+The matrix below documents the policy implemented today. Routers whose bulk is
+read-only but which carry a few mutating routes apply the admin dependency on
+those routes individually, listed under "Admin-only routes on viewer routers"
+below.
 
 | Endpoint type | `dashboard-admin` | `dashboard-viewer` |
 |---------------|-------------------|---------------------|
@@ -103,6 +121,24 @@ Routers assigned to the **admin-only** group:
 `subscribers` (records carry K and OPc), `nf` (image rollout via ansible),
 `ran` (mode switching reconfigures the data plane), `sniffer` (privileged
 packet capture), `exec_ws` (pod shell).
+
+Admin-only routes on viewer routers (each carries its own `require_admin`
+dependency, so a viewer gets 403 on them):
+
+| Route | Why |
+|-------|-----|
+| `POST /api/v1/deployments/{name}/restart` | restarts a workload |
+| `POST /api/v1/deployments/{name}/scale` | can scale an NF to zero |
+| `POST /api/v1/pods/amf-controllers/scale` | same, for the AMF controllers |
+| `PATCH /api/v1/nf/{deployment}/log-level` | rewrites the NF ConfigMap and restarts it |
+| `PUT /api/v1/configmaps/{name}` | direct ConfigMap write |
+| `POST /api/v1/time/force-sync` | steps the clock on every VM |
+| `PUT|DELETE /api/v1/ue/personalizations/{imsi}` | persists operator-authored data |
+
+Diagnostics that a viewer may run, even though they are POSTs, because they
+only probe and return a result: `POST /api/v1/network/health/run`,
+`POST /api/v1/ue/test/ping`, `POST /api/v1/ue/test/iperf`. The viewer role is
+meant for looking around a live testbed without breaking it, not for hiding it.
 
 Unauthenticated lanes:
 `health` (browser useBackendHealth + watchdog probes) and the legacy `admin`
@@ -163,23 +199,39 @@ REST and WebSocket endpoints.
 
 ## Provisioning users
 
-Phase 08 seeds two end users on first deploy so the two-role model is
-observable out of the box without prior Keycloak experience:
+Phase 08 seeds end users on first deploy so the role model and the tenancy
+model are observable out of the box without prior Keycloak experience:
 
-| Username | Group | Realm role |
-|----------|-------|------------|
-| `admin` | `g-dashboard-admins` | `dashboard-admin` |
-| `viewer` | `g-dashboard-viewers` | `dashboard-viewer` |
+| Username | Group | Realm role | `org` attribute |
+|----------|-------|------------|-----------------|
+| `admin` | `g-dashboard-admins` | `dashboard-admin` | none (operator, sees all tenants) |
+| `viewer` | `g-dashboard-viewers` | `dashboard-viewer` | none (operator, sees all tenants) |
+| `demo` | `g-camara-users` + `g-dashboard-viewers` | `camara-location-read` + `dashboard-viewer` | `camara_org` (tenant-scoped) |
 
-Both passwords use `dashboard_bootstrap_admin_password` by default (the same
-value resolved from `DASHBOARD_BOOTSTRAP_ADMIN_PASSWORD` or, when unset,
-`keycloak_admin_password`). Each seed account is created with
-`temporary: true`, which forces a password reset at first login. Phase 08
-reruns never overwrite a password the operator changed via the Keycloak
-console.
+The `demo` account is the browser-login counterpart of the `camara-api-demo`
+service account: same mechanism, one is a person and the other a machine. It is
+created only when a northbound phase is enabled, since `g-camara-users` exists
+only then. Its username comes from `camara_tenant_username` in `all.yml`
+(override `DASHBOARD_BOOTSTRAP_TENANT_USERNAME`), and the dashboard IAM page
+reads the same value.
 
-The `viewer` password can be overridden independently via
-`DASHBOARD_BOOTSTRAP_VIEWER_PASSWORD`.
+Keycloak 26 validates user attributes against the realm declarative user
+profile and drops undeclared ones, so phase 08 declares `org` in that profile
+(admin view and edit only) before assigning it. Service accounts are not
+subject to the profile, which is why the M2M path needed no such declaration.
+
+The `admin` password is `dashboard_bootstrap_admin_password` (resolved from
+`DASHBOARD_BOOTSTRAP_ADMIN_PASSWORD` or, when unset, `keycloak_admin_password`).
+`viewer` and `demo` do not reuse it: they default to `kelt-viewer` and
+`kelt-demo`, overridable with `DASHBOARD_BOOTSTRAP_VIEWER_PASSWORD` and
+`DASHBOARD_BOOTSTRAP_TENANT_PASSWORD`. Those two accounts are the ones handed
+out for a demo, while the operator password is often set to something short for
+convenience.
+
+Each seed account is created with `temporary: true`, which forces a password
+reset at first login. Phase 08 reruns never overwrite a password the operator
+changed via the Keycloak console, so changing a default above only affects
+accounts that do not exist yet.
 
 Additional users follow the same group-driven model:
 
@@ -191,15 +243,20 @@ Additional users follow the same group-driven model:
      g-camara-users
      g-dashboard-admins
      g-dashboard-viewers
-5. Save
+     g-positioning-editors
+5. Attributes tab -> set org = <tenant> (tenant users only; leaving it
+   unset makes the account an operator that sees every tenant)
+6. Save
 ```
 
 Group membership transitively grants the realm role; no per-user role
-assignment is required.
+assignment is required. The `org` attribute is orthogonal to the groups: the
+groups decide what the account can do, `org` decides which tenant's assets it
+sees.
 
 ## Retrieving tokens (M2M)
 
-CAMARA gateway service account:
+CAMARA gateway service account (operator, no `org` claim, sees all tenants):
 
 ```bash
 curl -s -X POST \
@@ -208,6 +265,21 @@ curl -s -X POST \
   --data-urlencode client_id=camara-gateway \
   --data-urlencode client_secret=<camara_client_secret>
 ```
+
+CAMARA API consumer (end-user path, `org` claim scopes it to its tenant):
+
+```bash
+curl -s -X POST \
+  https://<keycloak-origin>/realms/5g-testbed/protocol/openid-connect/token \
+  --data-urlencode grant_type=client_credentials \
+  --data-urlencode client_id=camara-api-demo \
+  --data-urlencode client_secret=<camara_api_demo_secret>
+```
+
+The resulting token carries `org=<camara_org>` (default `demo`), so a call to the
+CAMARA Location API returns only that tenant's assets. This is the reference for
+an integrator client: a new consumer client plus an `org` attribute on its service
+account is a new tenant, no code change.
 
 Dashboard read-only token:
 

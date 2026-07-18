@@ -89,9 +89,9 @@ class CamaraTestSuite:
         return self._token("camara-gateway", secret) if secret else ""
 
     def _consumer_token(self) -> str:
-        """org=demo per-consumer token (camara-consumer-demo)."""
-        secret = self._get_secret("CAMARA_CONSUMER_DEMO_SECRET") or "changeme-consumer"
-        return self._token("camara-consumer-demo", secret)
+        """org=demo per-consumer token (camara-api-demo)."""
+        secret = self._get_secret("CAMARA_API_DEMO_SECRET") or "changeme-consumer"
+        return self._token("camara-api-demo", secret)
 
     def _bearer(self, token: str) -> dict:
         return {"Authorization": f"Bearer {token}"}
@@ -213,7 +213,7 @@ class CamaraTestSuite:
             return True
         consumer = self._consumer_token()
         if not consumer:
-            self.logger.error("could not obtain camara-consumer-demo token")
+            self.logger.error("could not obtain camara-api-demo token")
             return False
 
         # Positive: consumer (org=demo) sees the demo asset.
