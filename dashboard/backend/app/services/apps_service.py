@@ -206,6 +206,9 @@ class AppsService:
             out.append({
                 "name": name,
                 "image": image,
+                # The tag this app was deployed from. `image` is a digest ref once
+                # pinned, so this is what the UI shows and update detection re-checks.
+                "image_tag": anns.get("kelt.io/image-tag"),
                 "namespace": self.ns,
                 "replicas": desired,
                 "ready_replicas": ready,
@@ -238,14 +241,17 @@ class AppsService:
         ports = [{"containerPort": req.port, "name": "http"}]
         for i, up in enumerate(req.udp_ports or []):
             ports.append({"containerPort": int(up), "protocol": "UDP", "name": f"udp{i}"})
+        # The tag the operator picked is resolved to a digest here and kept in an
+        # annotation (below) so the UI can still say "v3" and update detection knows
+        # which tag to re-check. See docs/architecture/edge-apps.md.
+        pinned_image, _pinned_digest = self.resolve_pinned_ref(req.image)
         container: dict[str, Any] = {
             "name": req.name,
-            "image": req.image,
-            # Always pull: operators iterate by re-pushing the SAME tag, and the node's
-            # containerd caches by tag, so IfNotPresent would keep running the stale
-            # image after a re-push (even after a delete+redeploy). The registry is
-            # in-cluster, so the pull is local and cheap. See docs/architecture/edge-apps.md.
-            "imagePullPolicy": "Always",
+            "image": pinned_image,
+            # A digest names exactly one image, so there is nothing to re-pull: the
+            # node either has it or fetches it once. Always was only ever there to
+            # compensate for the mutable tag this now pins.
+            "imagePullPolicy": "IfNotPresent",
             "ports": ports,
             "envFrom": [
                 {"configMapRef": {"name": cm_name, "optional": True}},
@@ -275,12 +281,15 @@ class AppsService:
         # app via the UPF. Same-namespace NAD reference; `ips` requests the fixed
         # reserved address (whereabouts honors it, like the NF static IPs). Return
         # routes to the UE pools are inherited from the n6m-net NAD itself.
-        pod_meta: dict[str, Any] = {"labels": labels}
+        # Remember the tag the operator deployed from: the image field now carries a
+        # digest, which is unreadable in the UI and tells update detection nothing
+        # about WHICH tag to re-check.
+        pod_meta: dict[str, Any] = {"labels": labels, "annotations": {"kelt.io/image-tag": req.image}}
         if req.attach_mec:
             net: dict[str, Any] = {"name": "n6m-net", "namespace": self.ns, "interface": "n6m"}
             if req.mec_ip:
                 net["ips"] = [req.mec_ip if "/" in req.mec_ip else f"{req.mec_ip}/24"]
-            pod_meta["annotations"] = {"k8s.v1.cni.cncf.io/networks": json.dumps([net])}
+            pod_meta["annotations"]["k8s.v1.cni.cncf.io/networks"] = json.dumps([net])
 
         self.k8s.upsert_deployment(self.ns, {
             "apiVersion": "apps/v1",
@@ -518,6 +527,32 @@ class AppsService:
             pass
         return None
 
+    def resolve_pinned_ref(self, image: str) -> tuple[str, str | None]:
+        """Turn `host/repo:tag` into `host/repo@sha256:...` by asking the registry
+        what that tag points at RIGHT NOW.
+
+        A tag in the local registry is mutable by design: an operator iterates by
+        re-pushing the same one. Deploying the tag therefore left the running image
+        undefined, decided by whatever the kubelet happened to cache and re-resolved
+        behind our back on any restart or reschedule. Pinning the digest makes the
+        deploy mean exactly one image: what the operator chose at that moment.
+        Re-resolving is then an explicit action, not a side effect of a restart.
+
+        Returns (ref_to_deploy, resolved_digest). Falls back to the original ref when
+        the image is not ours or the registry cannot answer, so a public image or an
+        unreachable registry still deploys (just unpinned, as before)."""
+        host = settings.apps_registry_host or ""
+        if not host or not image.startswith(host + "/") or "@sha256:" in image:
+            return image, None
+        ref = image[len(host) + 1:]
+        repo, sep, tag = ref.rpartition(":")
+        if not sep:
+            repo, tag = ref, "latest"
+        digest = self._registry_manifest_digest(repo, tag)
+        if not digest:
+            return image, None
+        return f"{host}/{repo}@{digest}", digest
+
     def _running_digest(self, app: str) -> str | None:
         try:
             pods = self.k8s.core.list_namespaced_pod(
@@ -544,12 +579,16 @@ class AppsService:
         for app in self.list_apps():
             name, image = app["name"], (app.get("image") or "")
             apps[name] = False
-            if not host or not image.startswith(host + "/"):
+            # The deployed image is a digest, so the tag to re-check comes from the
+            # annotation written at deploy time. Legacy apps deployed before pinning
+            # still carry a tag in the image field: fall back to parsing it.
+            source = app.get("image_tag") or image
+            if not host or not source.startswith(host + "/"):
                 continue  # public/other-registry image: nothing to compare against
-            ref = image[len(host) + 1:]
+            ref = source[len(host) + 1:]
             repo, sep, tag = ref.rpartition(":")
-            if not sep:
-                repo, tag = ref, "latest"
+            if not sep or "@sha256" in ref:
+                continue  # pinned with no recorded tag: nothing meaningful to compare
             reg = self._registry_manifest_digest(repo, tag)
             run = self._running_digest(name)
             apps[name] = bool(reg and run and reg != run)
@@ -557,19 +596,23 @@ class AppsService:
 
     def set_app_image(self, name: str, image: str) -> dict[str, Any]:
         """Retarget a deployed app to a registry image (a chosen tag), preserving its
-        port/expose/MEC/env. One patch sets the image, forces imagePullPolicy: Always
-        (legacy apps were IfNotPresent), and bumps a restart annotation so the rollout
-        fires even when the image string is unchanged (re-pull a re-pushed same tag).
-        The operator picks the version from the date-ordered registry tag list."""
+        port/expose/MEC/env. The tag is resolved to a digest and pinned, so this is
+        also the "re-pull" path: re-running it against the same tag picks up a
+        re-push, because the tag now resolves to a different digest. The restart
+        annotation covers the case where the digest is unchanged and the operator
+        still wants the pod recreated. The operator picks the version from the
+        date-ordered registry tag list."""
         _validate_name(name)
         _validate_image(image)
+        pinned_image, _ = self.resolve_pinned_ref(image)
         self.k8s.apps.patch_namespaced_deployment(
             name=name, namespace=self.ns,
             body={"spec": {"template": {
                 "metadata": {"annotations": {
-                    "kelt.io/restartedAt": datetime.now(timezone.utc).isoformat()}},
+                    "kelt.io/restartedAt": datetime.now(timezone.utc).isoformat(),
+                    "kelt.io/image-tag": image}},
                 "spec": {"containers": [
-                    {"name": name, "image": image, "imagePullPolicy": "Always"}]},
+                    {"name": name, "image": pinned_image, "imagePullPolicy": "IfNotPresent"}]},
             }}},
         )
         return {"status": "updating", "name": name, "image": image, "namespace": self.ns}

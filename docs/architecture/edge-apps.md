@@ -45,9 +45,16 @@ There is no in-cluster build: images are always built outside and pushed.
 The backend (`AppsService`) builds, in the `mec` namespace:
 
 - a `Deployment` pinned to the worker (`nodeSelector: kubernetes.io/hostname: worker`),
-  with `imagePullPolicy: Always` (operators iterate by re-pushing the SAME tag, and
-  the node's containerd caches by tag, so `IfNotPresent` would keep running the stale
-  image after a re-push; the registry is in-cluster so the pull is local and cheap),
+  with the image **pinned to a digest**: the tag the operator picks is resolved
+  against the registry at deploy time and stored as `host/repo@sha256:...`, with the
+  original tag kept in the pod annotation `kelt.io/image-tag`. A tag in the local
+  registry is mutable by design (an operator iterates by re-pushing the same one), so
+  deploying the tag left the running image decided by whatever the node had cached,
+  and re-resolved on any restart or reschedule. With a digest the deploy means one
+  exact image and `imagePullPolicy: IfNotPresent` is correct: there is nothing to
+  re-pull. Re-resolving a tag is the explicit "switch version" action, which also
+  covers a re-push of the same tag. Apps deployed before pinning keep their tag
+  reference until the next version switch,
   a **TCP readiness probe** on the container port (an arbitrary image need not expose
   `/health`), default resource limits, and env from a `<name>-config` ConfigMap +
   `<name>-secrets` Secret via `envFrom`;

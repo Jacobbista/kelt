@@ -33,6 +33,18 @@ function parseImage(image, host) {
     : { repo: rest, tag: "latest", inRegistry };
 }
 
+// A pinned image reads `host/repo@sha256:<64 hex>`, which is unreadable in a row.
+// Show the tag it was deployed from plus a short digest, full ref on hover: the
+// tag says what was intended, the digest says what is actually running.
+function shortImage(image, imageTag) {
+  if (!image) return "";
+  const at = image.indexOf("@sha256:");
+  if (at < 0) return image;
+  const short = image.slice(at + 8, at + 20);
+  const label = imageTag || image.slice(0, at);
+  return `${label} · ${short}`;
+}
+
 // Compact "pushed 2h ago" for registry tag timestamps; full date on hover via title.
 function relTime(iso) {
   if (!iso) return "";
@@ -294,7 +306,10 @@ export default function AppsPage() {
           <div className="flex flex-col gap-3">
             {state.apps.map((a) => {
               const host = a.public_url ? a.public_url.replace(/^https?:\/\//, "") : null;
-              const { repo, tag, inRegistry } = parseImage(a.image, state.registryHost);
+              // The deployed image is pinned to a digest, so repo/tag come from the
+              // tag the app was deployed from (image_tag); a.image is the exact
+              // identity and is shown separately, shortened.
+              const { repo, tag, inRegistry } = parseImage(a.image_tag || a.image, state.registryHost);
               const reg = inRegistry ? registry.images.find((im) => im.repo === repo) : null;
               const tags = reg?.tags || [];
               const sel = pickedApp[a.name] ?? tag;
@@ -339,7 +354,9 @@ export default function AppsPage() {
                     ) : (
                       <span className="text-slate-600">{a.exposed ? "exposed (no base domain)" : "not exposed"}</span>
                     )}
-                    <span className="font-mono text-slate-500">{a.image}</span>
+                    <span className="font-mono text-slate-500" title={a.image}>
+                      {shortImage(a.image, a.image_tag)}
+                    </span>
                   </div>
 
                   {/* Actions: version picker (date-ordered) + apply, delete on the right */}
