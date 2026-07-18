@@ -44,7 +44,11 @@ export function AuthProvider({ children }) {
 
     um.getUser()
       .then((u) => {
-        if (mounted) setUser(u || null);
+        // getUser() returns the stored session even when its access token has
+        // already expired. Treating that as "logged in" let the first render
+        // fire API calls with a dead token: a burst of 401s, then a reauth
+        // redirect. An expired session is no session.
+        if (mounted) setUser(u && !u.expired ? u : null);
       })
       .catch(() => {})
       .finally(() => {
@@ -109,6 +113,9 @@ export function AuthProvider({ children }) {
     user,
     accessToken: user?.access_token || null,
     username: user?.profile?.preferred_username || user?.profile?.email || null,
+    // CAMARA tenant from the `org` token claim (user/service-account attribute). Absent
+    // for an operator (god-mode, sees all orgs). Surfaced in the sidebar for clarity.
+    org: user?.profile?.org || null,
     roles,
     hasRole: (r) => !AUTH_ENABLED || roles.includes(r),
     login,
@@ -139,6 +146,10 @@ export function getCurrentAccessToken() {
     const raw = sessionStorage.getItem(key);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
+    // Same reason as the expired-session check in AuthProvider: sending a
+    // token we already know is dead only produces a 401. expires_at is in
+    // seconds (OIDC), with a small skew allowance.
+    if (parsed?.expires_at && parsed.expires_at * 1000 <= Date.now() + 5000) return null;
     return parsed?.access_token || null;
   } catch {
     return null;

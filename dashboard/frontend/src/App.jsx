@@ -4,6 +4,7 @@ import { getRuntimeInfo } from "./api";
 import { AuthProvider, useAuth } from "./auth/AuthContext";
 import { OperationsProvider } from "./context/OperationsContext";
 import { ToastProvider } from "./context/ToastContext";
+import { ConfirmProvider } from "./context/ConfirmContext";
 import { useBackendHealth } from "./hooks/useBackendHealth";
 import ErrorBoundary from "./components/ErrorBoundary";
 import Layout from "./Layout";
@@ -47,6 +48,24 @@ export default function App() {
     <AuthProvider>
       <AppInner />
     </AuthProvider>
+  );
+}
+
+// Route guard for pages whose backend routers are admin-only end to end.
+// Hiding the sidebar entry is not enough: the URL is still typeable, and the
+// page would then fire a burst of requests that all come back 403. Enforcement
+// stays in the backend; this only decides what the browser bothers to render.
+function AdminOnly({ children }) {
+  const auth = useAuth();
+  if (!auth.enabled || auth.roles.includes("dashboard-admin")) return children;
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-slate-800 bg-slate-900/60 p-6">
+      <h2 className="text-lg font-semibold text-slate-200">Not available with your role</h2>
+      <p className="text-sm text-slate-400">
+        This page needs the <span className="font-mono text-slate-300">dashboard-admin</span> role.
+        Your account is read-only.
+      </p>
+    </div>
   );
 }
 
@@ -142,6 +161,7 @@ function AppInner() {
   return (
     <ErrorBoundary>
     <ToastProvider>
+    <ConfirmProvider>
     <OperationsProvider>
     <Layout
       onNavigate={onNavigate}
@@ -159,8 +179,8 @@ function AppInner() {
           <CorePage onOpenLogs={handleOpenLogs} onOpenTerminal={handleOpenTerminal} onOpenIperf3Logs={handleOpenIperf3Logs} expandNfType={expandNfType} />
         } />
         <Route path="/topology" element={<TopologyPage />} />
-        <Route path="/ran" element={<RanPage />} />
-        <Route path="/subscribers" element={<SubscribersPage />} />
+        <Route path="/ran" element={<AdminOnly><RanPage /></AdminOnly>} />
+        <Route path="/subscribers" element={<AdminOnly><SubscribersPage /></AdminOnly>} />
         <Route path="/ue-monitor" element={<UEMonitoringPage />} />
         <Route path="/diagnostics" element={<DiagnosticsPage />} />
         <Route path="/metrics" element={<MetricsPage />} />
@@ -169,7 +189,7 @@ function AppInner() {
         <Route path="/services/custom" element={<CustomWorkloadPage />} />
         <Route path="/services/apps" element={<AppsPage />} />
         <Route path="/northbound" element={<Navigate to="/services/northbound" replace />} />
-        <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/settings" element={<AdminOnly><SettingsPage /></AdminOnly>} />
         <Route path="/iam" element={<Navigate to="/settings" replace />} />
         <Route path="/branding" element={<Navigate to="/settings" replace />} />
         <Route path="/manual" element={<ManualPage />} />
@@ -201,6 +221,7 @@ function AppInner() {
       )}
     </Layout>
     </OperationsProvider>
+    </ConfirmProvider>
     </ToastProvider>
     </ErrorBoundary>
   );

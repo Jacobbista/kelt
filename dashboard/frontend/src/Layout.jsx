@@ -25,10 +25,13 @@ export default function Layout({ onNavigate, runtime, children, backendUnreachab
   useEffect(() => {
     if (watchdogTokenRef.current) return;
     if (auth.enabled && (auth.loading || !auth.user)) return;
+    // The token endpoint is admin-only, and the restart it unlocks is an admin
+    // action, so for a viewer this was a guaranteed 403 on every page load.
+    if (auth.enabled && !auth.roles.includes("dashboard-admin")) return;
     getWatchdogToken()
       .then((t) => { watchdogTokenRef.current = t || null; })
       .catch(() => { /* viewer or unauthenticated caller: restart button fails gracefully */ });
-  }, [auth.enabled, auth.loading, auth.user]);
+  }, [auth.enabled, auth.loading, auth.user, auth.roles]);
 
   const _wdHeader = () => (
     watchdogTokenRef.current ? { "X-Watchdog-Token": watchdogTokenRef.current } : {}

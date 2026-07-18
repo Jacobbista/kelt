@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
+import { useAuth } from "../auth/AuthContext";
 import {
   getUeSummary,
   getUeEvents,
@@ -275,6 +276,8 @@ const EVENT_FILTERS = [
 /* ── main page ───────────────────────────────────────────────── */
 
 export default function UEMonitoringPage() {
+  const auth = useAuth();
+  const canWrite = !auth.enabled || auth.roles.includes("dashboard-admin");
   const [summary, setSummary] = useState(null);
   const [events, setEvents] = useState([]);
   const [activeUes, setActiveUes] = useState([]);
@@ -319,7 +322,10 @@ export default function UEMonitoringPage() {
       setUePods(p);
       if (p.length > 0 && !testPod) setTestPod(p[0].name);
       setError(null);
-      if ((s?.connected_gnbs ?? 0) === 0) {
+      // /ran/status is admin-only: for a viewer the call is a guaranteed 403,
+      // and its only use here is the "start the RAN" hint, which a viewer
+      // cannot act on anyway.
+      if ((s?.connected_gnbs ?? 0) === 0 && canWrite) {
         getRanStatus().then(setRanStatus).catch(() => setRanStatus(null));
       } else {
         setRanStatus(null);
@@ -329,7 +335,7 @@ export default function UEMonitoringPage() {
     } finally {
       setLoading(false);
     }
-  }, [testPod, windowSeconds]);
+  }, [testPod, windowSeconds, canWrite]);
 
   useEffect(() => {
     refresh();
@@ -709,6 +715,9 @@ export default function UEMonitoringPage() {
                       {relativeTime(ue.last_seen)}
                     </td>
                     <td className="py-2 text-right">
+                      {/* Nicknames are persisted server-side through an admin-only
+                          route, so a viewer gets no edit affordance. */}
+                      {canWrite && (
                       <button
                         onClick={(e) => { e.stopPropagation(); openEdit(ue); }}
                         className="rounded px-1.5 py-0.5 text-[10px] text-slate-400 hover:bg-slate-700 hover:text-slate-200"
@@ -716,6 +725,7 @@ export default function UEMonitoringPage() {
                       >
                         Edit
                       </button>
+                      )}
                     </td>
                   </tr>
                   {isExpanded && (

@@ -11,7 +11,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+
+from app.auth import require_admin
 
 from app.config import settings
 
@@ -136,7 +138,9 @@ def time_sync() -> dict[str, Any]:
     }
 
 
-@router.post("/force-sync")
+# Steps the clock on every VM, so it is admin-only even though the rest of this
+# router is read-only diagnostics. See docs/security/iam.md.
+@router.post("/force-sync", dependencies=[Depends(require_admin)])
 def force_sync() -> dict[str, Any]:
     """Force chrony makestep on all VMs, then re-check time sync."""
     # Step 1: force sync on local (ansible) node

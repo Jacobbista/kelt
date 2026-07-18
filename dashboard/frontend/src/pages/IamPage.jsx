@@ -2,6 +2,12 @@ import { useMemo, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { env } from "../runtime-env";
 import { KEYCLOAK_AUTHORITY } from "../auth/oidc";
+import { Collapsible } from "../components/ui";
+
+// Conceptual background belongs to the docs site, not to this console: the page
+// states what THIS realm currently is and how to act on it, and links out for
+// the model. See docs/security/iam.md.
+const IAM_DOCS_URL = `${env("VITE_DOCS_URL", "https://jacobbista.github.io/kelt").replace(/\/+$/, "")}/security/iam/`;
 
 // Static cheat-sheet for the Keycloak realm provisioned by phase 08.
 // Read-only: every write action redirects the operator to the Keycloak
@@ -67,14 +73,22 @@ const ROLE_MATRIX = [
 const CLIENTS = [
   { id: "dashboard",           type: "public",       flow: "PKCE (browser)",            note: "Dashboard frontend (this app)." },
   { id: "positioning-demo",    type: "public",       flow: "PKCE (browser)",            note: "Positioning demo SPA." },
-  { id: "camara-gateway",      type: "confidential", flow: "client_credentials (M2M)",  note: "CAMARA Northbound gateway service account." },
+  { id: "camara-gateway",      type: "confidential", flow: "client_credentials (M2M)",  note: "CAMARA Northbound gateway service account. No org attribute, so it sees every tenant." },
+  { id: "camara-api-demo",     type: "confidential", flow: "client_credentials (M2M)",  note: "Reference per-consumer CAMARA client. Its service account carries the org attribute, so its tokens are tenant-scoped." },
   { id: "dashboard-readonly",  type: "confidential", flow: "client_credentials (M2M)",  note: "Headless read-only consumer (CI, monitoring agents)." },
   { id: "placement-editor-proxy", type: "confidential", flow: "authorization-code (oauth2-proxy)", note: "Front-door gate for the no-auth placement-editor; admits g-positioning-editors or g-dashboard-admins." },
 ];
 
 const SEED_USERS = [
-  { username: "admin",  group: "g-dashboard-admins",  role: "dashboard-admin",  password: "set on first phase 08 run (force reset on first login)" },
-  { username: "viewer", group: "g-dashboard-viewers", role: "dashboard-viewer", password: "same source as admin (force reset on first login)" },
+  { username: "admin",  groups: "g-dashboard-admins",  role: "dashboard-admin",  org: null, note: "Operator. Full control." },
+  { username: "viewer", groups: "g-dashboard-viewers", role: "dashboard-viewer", org: null, note: "Operator. Read-only." },
+  {
+    username: env("VITE_IAM_TENANT_USER", "demo"),
+    groups: "g-camara-users + g-dashboard-viewers",
+    role: "camara-location-read + dashboard-viewer",
+    org: env("VITE_CAMARA_ORG", "demo"),
+    note: "Tenant. Sees only its own org's assets. Created when Northbound is on.",
+  },
 ];
 
 function buildKeycloakAdminUrl() {
@@ -208,6 +222,12 @@ export default function IamPage() {
             <dd className="font-mono text-slate-200">{auth.username || "(none)"}</dd>
             <dt className="text-slate-400">Current roles</dt>
             <dd className="font-mono text-slate-200">{auth.roles.join(", ") || "(none)"}</dd>
+            <dt className="text-slate-400">CAMARA tenant</dt>
+            <dd className="font-mono text-slate-200">
+              {auth.org
+                ? <>org = {auth.org} <span className="text-slate-500">(scoped to this tenant)</span></>
+                : <>none <span className="text-slate-500">(operator: sees every tenant)</span></>}
+            </dd>
           </dl>
         </div>
       </section>
@@ -240,50 +260,123 @@ export default function IamPage() {
       </section>
 
       <section>
-        <h3 className="mb-2 text-sm font-semibold text-slate-200">Granting access</h3>
-        <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-3 text-xs text-slate-300">
-          <p className="mb-2">
-            Add a user to a group in the realm console (<span className="font-mono">Open realm console ↗</span>);
-            the role follows the group. Groups are orthogonal, so combine them for a persona. You never
-            need admin to show someone the positioning demo.
-          </p>
-          <ul className="space-y-1">
-            <li>👁 <b>Positioning demo only</b> (no dashboard) → <span className="font-mono text-slate-200">g-camara-users</span></li>
-            <li>🗺 <b>Demo + read-only 5G core view</b> → <span className="font-mono text-slate-200">g-camara-users</span> + <span className="font-mono text-slate-200">g-dashboard-viewers</span></li>
-            <li>✏️ <b>Author room geometry</b> (placement-editor) → <span className="font-mono text-slate-200">g-positioning-editors</span></li>
-            <li>📊 <b>Read-only operator</b> (dashboard, no writes) → <span className="font-mono text-slate-200">g-dashboard-viewers</span></li>
-            <li>🔧 <b>Full control</b> → <span className="font-mono text-slate-200">g-dashboard-admins</span></li>
+        <h3 className="mb-2 text-sm font-semibold text-slate-200">Seed users (phase 08)</h3>
+        <div className="overflow-x-auto rounded-lg border border-slate-800 bg-slate-900/60 p-3">
+          <table className="w-full text-xs">
+            <thead className="text-left text-slate-400">
+              <tr>
+                <th className="pb-1 pr-3">Username</th>
+                <th className="pb-1 pr-3">Groups</th>
+                <th className="pb-1 pr-3">Realm role</th>
+                <th className="pb-1 pr-3">org</th>
+                <th className="pb-1">What it is for</th>
+              </tr>
+            </thead>
+            <tbody className="text-slate-200">
+              {SEED_USERS.map((u) => (
+                <tr key={u.username} className="border-t border-slate-800 align-top">
+                  <td className="py-1.5 pr-3 font-mono">{u.username}</td>
+                  <td className="py-1.5 pr-3 font-mono text-[11px]">{u.groups}</td>
+                  <td className="py-1.5 pr-3 font-mono text-[11px]">{u.role}</td>
+                  <td className="py-1.5 pr-3 font-mono text-[11px]">
+                    {u.org
+                      ? <span className="text-indigo-300">{u.org}</span>
+                      : <span className="text-slate-500">—</span>}
+                  </td>
+                  <td className="py-1.5 text-slate-400">{u.note}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="mt-2 rounded border border-slate-800 bg-slate-950/50 p-2.5 text-[11px] text-slate-400">
+          <p className="mb-1 font-medium text-slate-300">Initial password</p>
+          <ul className="space-y-0.5">
+            <li>
+              <span className="font-mono text-slate-300">admin</span> — the operator password:{" "}
+              <span className="font-mono text-slate-300">KEYCLOAK_ADMIN_PASSWORD</span> from{" "}
+              <span className="font-mono text-slate-300">.testbed.secrets</span> on the host, never shown here.
+            </li>
+            <li>
+              <span className="font-mono text-slate-300">viewer</span> — default{" "}
+              <span className="font-mono text-slate-300">kelt-viewer</span>, override{" "}
+              <span className="font-mono text-slate-300">DASHBOARD_BOOTSTRAP_VIEWER_PASSWORD</span>.
+            </li>
+            <li>
+              <span className="font-mono text-slate-300">demo</span> — default{" "}
+              <span className="font-mono text-slate-300">kelt-demo</span>, override{" "}
+              <span className="font-mono text-slate-300">DASHBOARD_BOOTSTRAP_TENANT_PASSWORD</span>.
+            </li>
           </ul>
+          <p className="mt-1">
+            The two demo accounts deliberately do not reuse the operator password, since they are the ones
+            handed out.
+          </p>
+          <p className="mt-1">
+            Each account is created with <span className="font-mono text-slate-300">temporary: true</span>, so the
+            first login forces a reset, and a phase 08 rerun never overwrites a password changed since.
+          </p>
         </div>
       </section>
 
-      <section>
-        <h3 className="mb-2 text-sm font-semibold text-slate-200">Seed users (phase 08)</h3>
-        <table className="w-full text-xs">
-          <thead className="text-left text-slate-400">
-            <tr>
-              <th className="pb-1 pr-3">Username</th>
-              <th className="pb-1 pr-3">Group</th>
-              <th className="pb-1 pr-3">Realm role</th>
-              <th className="pb-1">Password</th>
-            </tr>
-          </thead>
-          <tbody className="font-mono text-slate-200">
-            {SEED_USERS.map((u) => (
-              <tr key={u.username} className="border-t border-slate-800">
-                <td className="py-1 pr-3">{u.username}</td>
-                <td className="py-1 pr-3">{u.group}</td>
-                <td className="py-1 pr-3">{u.role}</td>
-                <td className="py-1 text-slate-400">{u.password}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <p className="mt-2 text-[11px] text-slate-500">
-          Both seed users are created with <span className="font-mono">temporary: true</span>, forcing
-          a password reset at first login. Phase 08 reruns never overwrite a password changed via the
-          admin console.
-        </p>
+      <section className="space-y-3">
+        <h3 className="text-sm font-semibold text-slate-200">Guides</h3>
+
+        <Collapsible title="Add a user" hint="Which group grants what, and where to click">
+          <div className="space-y-3 text-xs text-slate-300">
+            <ol className="list-decimal space-y-1 pl-4">
+              <li>Open the realm console (button at the top of this page) → <span className="font-mono text-slate-200">Users</span> → <span className="font-mono text-slate-200">Add user</span>.</li>
+              <li><span className="font-mono text-slate-200">Credentials</span> tab → set a password, keep <span className="font-mono text-slate-200">Temporary</span> on.</li>
+              <li><span className="font-mono text-slate-200">Groups</span> tab → join one or more groups from the table below. The realm role follows the group.</li>
+              <li>For a tenant user only: <span className="font-mono text-slate-200">Attributes</span> tab → add key <span className="font-mono text-slate-200">org</span> with the tenant value. Leaving it empty makes the user an operator that sees every tenant.</li>
+            </ol>
+            <table className="w-full">
+              <tbody>
+                {[
+                  ["g-dashboard-admins", "Full control of the dashboard, and passes the placement-editor gate."],
+                  ["g-dashboard-viewers", "Read-only dashboard: every GET page plus log streaming."],
+                  ["g-camara-users", "CAMARA Location API and the positioning demo. No dashboard access on its own."],
+                  ["g-positioning-editors", "Authoring room geometry in the placement-editor."],
+                ].map(([g, what]) => (
+                  <tr key={g} className="border-t border-slate-800 align-top">
+                    <td className="w-52 py-1 pr-3 font-mono text-slate-200">{g}</td>
+                    <td className="py-1 text-slate-400">{what}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="text-slate-400">
+              Groups combine: demo plus a read-only core view is{" "}
+              <span className="font-mono text-slate-200">g-camara-users</span> +{" "}
+              <span className="font-mono text-slate-200">g-dashboard-viewers</span>, which is exactly the seed
+              tenant user above.
+            </p>
+          </div>
+        </Collapsible>
+
+        <Collapsible title="Front-door gate" hint="How services without native auth are protected">
+          <p className="text-xs text-slate-300">
+            The <span className="font-mono">placement-editor</span> has no login of its own, so it sits behind a
+            generic <span className="font-mono">oauth2-proxy</span> gate that performs the Keycloak login and
+            admits only <span className="font-mono">g-positioning-editors</span> or{" "}
+            <span className="font-mono">g-dashboard-admins</span>. The dashboard, the demo, and the CAMARA gateway
+            authenticate on their own and are not gated.
+          </p>
+        </Collapsible>
+
+        <Collapsible title="Realm reconcile" hint="Propagating realm template edits to a running cluster">
+          <div className="space-y-2 text-xs text-slate-300">
+            <p>
+              Keycloak imports the realm JSON only on first boot. Reconcile re-applies redirect URIs, web origins,
+              roles, groups, and composites through the admin API, and leaves users, passwords, and sessions untouched.
+            </p>
+            <p className="text-slate-400">
+              <span className="font-mono text-slate-200">testbed run-phase 08-iam</span> asks before running it
+              (with an option to persist the answer). Scripted:{" "}
+              <span className="font-mono text-slate-200">KEYCLOAK_REALM_RECONCILE=true testbed run-phase 08-iam</span>.
+            </p>
+          </div>
+        </Collapsible>
       </section>
 
       <section>
@@ -304,42 +397,12 @@ export default function IamPage() {
         </div>
       </section>
 
-      <section>
-        <h3 className="mb-2 text-sm font-semibold text-slate-200">Front-door gate</h3>
-        <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-3 text-xs text-slate-300">
-          <p className="mb-2">
-            Services without native auth (today the <span className="font-mono">placement-editor</span>)
-            are fronted by a generic <span className="font-mono">oauth2-proxy</span> gate that performs the
-            Keycloak login and admits only the configured groups. The dashboard, demo, and CAMARA gateway
-            authenticate on their own and need no gate.
-          </p>
-          <p>
-            The gate sends the browser to the canonical Keycloak issuer while redeeming tokens in-cluster,
-            so it behaves the same served locally or behind a tunnel. See the External access doc for the
-            routes-versus-subdomains model.
-          </p>
-        </div>
-      </section>
-
-      <section>
-        <h3 className="mb-2 text-sm font-semibold text-slate-200">Realm reconcile</h3>
-        <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-3 text-xs text-slate-300">
-          <p className="mb-2">
-            The realm JSON is imported by Keycloak only on first boot. Phase 08 includes a
-            reconcile step that re-applies redirect URIs, web origins, post-logout URIs, realm
-            roles, groups, and composites via the Keycloak admin API.
-          </p>
-          <p className="mb-2">
-            The reconcile gate is interactive: <span className="font-mono">testbed run-phase 08-iam</span>
-            asks the operator whether to run reconcile this round (with the option to persist the
-            answer to <span className="font-mono">.testbed.env</span>). For CI or scripted runs:
-            <span className="font-mono"> KEYCLOAK_REALM_RECONCILE=true testbed run-phase 08-iam</span>.
-          </p>
-          <p>
-            Reconcile leaves users, passwords, and active sessions untouched.
-          </p>
-        </div>
-      </section>
+      <p className="text-[11px] text-slate-500">
+        Full role and endpoint matrix, and the tenancy model, in the{" "}
+        <a href={IAM_DOCS_URL} target="_blank" rel="noreferrer" className="text-sky-400 underline">
+          IAM documentation ↗
+        </a>.
+      </p>
     </div>
   );
 }

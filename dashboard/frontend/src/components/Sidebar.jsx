@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useLocation } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { useConfirm } from "../context/ConfirmContext";
 import TimeSyncPopover from "./TimeSyncPopover";
 import DevModeIndicator from "./DevModeIndicator";
 import { env } from "../runtime-env";
@@ -10,8 +11,10 @@ const NAV_ITEMS = [
   { id: "kubernetes",    label: "Kubernetes",  icon: "\u2638", path: "/kubernetes" },
   { id: "core",          label: "5G Core",     icon: "\u2B22", path: "/core"       },
   { id: "topology",      label: "Topology",    icon: "\u2B95", path: "/topology"   },
-  { id: "ran",           label: "RAN",         icon: "\u2699", path: "/ran"        },
-  { id: "subscribers",   label: "Subscribers", icon: "\u2263", path: "/subscribers"},
+  // RAN and Subscribers are backed by admin-only routers end to end (mode
+  // switching, K/OPc). Showing them to a viewer only produced 403 banners.
+  { id: "ran",           label: "RAN",         icon: "\u2699", path: "/ran",        adminOnly: true },
+  { id: "subscribers",   label: "Subscribers", icon: "\u2263", path: "/subscribers", adminOnly: true },
   { id: "ue-monitoring", label: "UE Monitor",  icon: "\u25C9", path: "/ue-monitor" },
   { id: "diagnostics",   label: "Diagnostics", icon: "\u2295", path: "/diagnostics"},
   { id: "metrics",       label: "Metrics",     icon: "\u2261", path: "/metrics"    },
@@ -59,24 +62,30 @@ function useServerClock(serverTime) {
 export default function Sidebar({ onNavigate, runtime, serverTime }) {
   const { pathname } = useLocation();
   const auth = useAuth();
+  const confirm = useConfirm();
   const [showSync, setShowSync] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const clockStr = useServerClock(serverTime);
   const toggleSync = useCallback(() => setShowSync((v) => !v), []);
   const closeSync = useCallback(() => setShowSync(false), []);
-  // Explicit role chip so a viewer immediately sees they are read-only and an
-  // admin knows they can write. Orthogonal roles (camara/positioning) are shown
-  // in full on the IAM page; here we surface the dashboard-plane role.
+  // What the account can DO, in plain words rather than the role's system name:
+  // a viewer must see at a glance that writes will be refused. Orthogonal roles
+  // (camara/positioning) are listed in full on the IAM page.
   const roleBadge = auth.roles.includes("dashboard-admin")
-    ? { label: "admin", cls: "bg-emerald-500/15 text-emerald-300" }
+    ? { label: "Full access", cls: "bg-emerald-500/15 text-emerald-300", textCls: "text-emerald-400" }
     : auth.roles.includes("dashboard-viewer")
-      ? { label: "viewer · read-only", cls: "bg-amber-500/15 text-amber-300" }
-      : { label: "no access", cls: "bg-rose-500/15 text-rose-300" };
+      ? { label: "Read-only", cls: "bg-amber-500/15 text-amber-300", textCls: "text-amber-400" }
+      : { label: "No access", cls: "bg-rose-500/15 text-rose-300", textCls: "text-rose-400" };
+  // Which tenant's CAMARA assets the account sees: its own org, or all of them
+  // when the token carries no org claim (operator).
+  const scopeLabel = auth.org ? `tenant ${auth.org}` : "all tenants";
+  const scopeTitle = auth.org
+    ? `CAMARA tenant: sees only assets of org "${auth.org}"`
+    : "No org claim: sees assets of every tenant (operator)";
 
   const handleLogout = useCallback(async () => {
     if (loggingOut) return;
-    const ok = window.confirm("Logout from dashboard session?");
-    if (!ok) return;
+    if (!(await confirm({ title: "Log out?", body: "End this dashboard session.", confirmLabel: "Log out" }))) return;
     setLoggingOut(true);
     try {
       await auth.logout();
@@ -84,7 +93,7 @@ export default function Sidebar({ onNavigate, runtime, serverTime }) {
       console.error("Logout failed:", err);
       setLoggingOut(false);
     }
-  }, [auth, loggingOut]);
+  }, [auth, loggingOut, confirm]);
 
   // Frontend mode is set at the frontend layer, not the backend. The cluster
   // nginx pod injects VITE_FRONTEND_MODE=prod via env-config.js; the Vite dev
@@ -165,13 +174,29 @@ export default function Sidebar({ onNavigate, runtime, serverTime }) {
 
         {auth.enabled && auth.user && (
           <div className="mt-2 flex items-center justify-between gap-2 border-t border-slate-800 pt-2">
-            <div className="flex flex-col">
-              <span className="truncate text-[10px] font-medium text-slate-300" title={auth.username || ""}>
-                {auth.username || "unknown-user"}
+            {/* One identity block, two lines: who you are, then what that lets
+                you do and whose data you see. A stack of bare chips ("admin",
+                "all orgs") did not read as an answer to either question. */}
+            <div className="flex min-w-0 items-center gap-2">
+              <span
+                className={`flex h-6 w-6 flex-none items-center justify-center rounded-full text-[10px] font-semibold uppercase ${roleBadge.cls}`}
+                aria-hidden="true"
+              >
+                {(auth.username || "?").charAt(0)}
               </span>
-              <span className={`mt-0.5 inline-block w-fit rounded px-1.5 py-0.5 text-[9px] font-medium ${roleBadge.cls}`} title={auth.roles.join(", ") || "no-role"}>
-                {roleBadge.label}
-              </span>
+              <div className="flex min-w-0 flex-col">
+                <span className="truncate text-[11px] font-medium text-slate-200" title={auth.username || ""}>
+                  {auth.username || "unknown-user"}
+                </span>
+                <span
+                  className="truncate text-[10px] text-slate-400"
+                  title={`Roles: ${auth.roles.join(", ") || "none"}\n${scopeTitle}`}
+                >
+                  <span className={roleBadge.textCls}>{roleBadge.label}</span>
+                  <span className="text-slate-600"> · </span>
+                  {scopeLabel}
+                </span>
+              </div>
             </div>
             <button
               type="button"

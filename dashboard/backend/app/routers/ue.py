@@ -2,6 +2,8 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+
+from app.auth import require_admin
 from pydantic import BaseModel, Field
 
 from app.services.k8s_service import K8sService, get_k8s_service
@@ -166,7 +168,9 @@ def list_ue_personalizations(
         raise HTTPException(500, detail=str(exc)) from exc
 
 
-@router.put("/personalizations/{imsi}")
+# Ping / iperf above are diagnostics and stay open to a viewer; these two persist
+# operator-authored data, so they are admin-only.
+@router.put("/personalizations/{imsi}", dependencies=[Depends(require_admin)])
 def upsert_ue_personalization(
     imsi: str,
     payload: UePersonalizationPayload,
@@ -188,7 +192,7 @@ def upsert_ue_personalization(
         raise HTTPException(500, detail=str(exc)) from exc
 
 
-@router.delete("/personalizations/{imsi}")
+@router.delete("/personalizations/{imsi}", dependencies=[Depends(require_admin)])
 def delete_ue_personalization(
     imsi: str,
     mongo: MongoService = Depends(get_mongo_service),

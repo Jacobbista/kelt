@@ -1,14 +1,20 @@
 import React, { useState } from "react";
+import { useAuth } from "../auth/AuthContext";
 import LiveSniffer from "../components/LiveSniffer";
 import NetworkHealth from "../components/NetworkHealth";
 import useTrafficStream from "../hooks/useTrafficStream";
 
+// Packet capture runs a privileged pod, so its router is admin-only: a viewer
+// is shown the health tab alone rather than a tab that answers 403.
 const TABS = [
   { id: "health", label: "Network Health" },
-  { id: "sniffer", label: "Packet Sniffer" },
+  { id: "sniffer", label: "Packet Sniffer", adminOnly: true },
 ];
 
 export default function DiagnosticsPage() {
+  const auth = useAuth();
+  const isAdmin = auth.roles.includes("dashboard-admin");
+  const tabs = TABS.filter((t) => !t.adminOnly || isAdmin);
   const [tab, setTab] = useState("health");
   const { links: trafficData, connected: trafficConnected } = useTrafficStream();
 
@@ -17,7 +23,7 @@ export default function DiagnosticsPage() {
       <div className="mb-4 flex items-center gap-4 flex-shrink-0">
         <h2 className="text-lg font-semibold">Diagnostics</h2>
         <div className="flex rounded-lg border border-slate-700 bg-slate-900 p-0.5">
-          {TABS.map((t) => (
+          {tabs.map((t) => (
             <button
               key={t.id}
               type="button"
@@ -39,7 +45,7 @@ export default function DiagnosticsPage() {
       </div>
       <div className="flex-1 min-h-0">
         {tab === "health" && <NetworkHealth trafficData={trafficData} />}
-        {tab === "sniffer" && <LiveSniffer />}
+        {tab === "sniffer" && isAdmin && <LiveSniffer />}
       </div>
     </div>
   );

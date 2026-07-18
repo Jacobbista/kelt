@@ -23,9 +23,26 @@ function _maybeReauth(status) {
   if (um) um.signinRedirect().catch(() => { _reauthing = false; });
 }
 
+// Build the Error a failed request throws. A raw "<path> failed: 403" tells an
+// operator nothing about WHY, and 403 is the single most likely failure for a
+// read-only account, so it gets a plain-language message. `status` is attached
+// so a page can branch (render a read-only placeholder instead of an error).
+function _httpError(path, status, text = "") {
+  const detail = text ? ` ${text}` : "";
+  let msg;
+  if (status === 403) msg = "Not allowed with your role. This action requires dashboard-admin.";
+  else if (status === 401) msg = "Session expired. Reload to sign in again.";
+  else if (status === 503) msg = `Service unavailable.${detail}`;
+  else msg = `Request failed (${status}).${detail}`;
+  const err = new Error(msg);
+  err.status = status;
+  err.path = path;
+  return err;
+}
+
 async function get(path) {
   const res = await fetch(`${API_BASE}${path}`, { headers: { ..._authHeader() } });
-  if (!res.ok) { _maybeReauth(res.status); throw new Error(`${path} failed: ${res.status}`); }
+  if (!res.ok) { _maybeReauth(res.status); throw _httpError(path, res.status); }
   return res.json();
 }
 
@@ -38,7 +55,7 @@ async function post(path, body) {
   if (!res.ok) {
     _maybeReauth(res.status);
     const text = await res.text();
-    throw new Error(`${path} failed: ${res.status} ${text}`);
+    throw _httpError(path, res.status, text);
   }
   return res.json();
 }
@@ -52,7 +69,7 @@ async function put(path, body) {
   if (!res.ok) {
     _maybeReauth(res.status);
     const text = await res.text();
-    throw new Error(`${path} failed: ${res.status} ${text}`);
+    throw _httpError(path, res.status, text);
   }
   return res.json();
 }
@@ -62,7 +79,7 @@ async function del(path) {
   if (!res.ok) {
     _maybeReauth(res.status);
     const text = await res.text();
-    throw new Error(`${path} failed: ${res.status} ${text}`);
+    throw _httpError(path, res.status, text);
   }
   return res.json();
 }
@@ -76,7 +93,7 @@ async function patch(path, body) {
   if (!res.ok) {
     _maybeReauth(res.status);
     const text = await res.text();
-    throw new Error(`${path} failed: ${res.status} ${text}`);
+    throw _httpError(path, res.status, text);
   }
   return res.json();
 }
@@ -140,6 +157,12 @@ export const updateSubscriber = (imsi, data) => put(`/api/v1/subscribers/${imsi}
 export const deleteSubscriber = (imsi) => del(`/api/v1/subscribers/${imsi}`);
 export const importSubscribers = (data) => post("/api/v1/subscribers/import", data);
 export const initSubscribers = () => post("/api/v1/subscribers/init", {});
+
+// gNB management console: expose the physical gNB's web UI at gnb.<base> via the
+// dynamic apps route. Operator sets the appliance IP:port; KELT assumes nothing.
+export const getGnbConsole = () => get("/api/v1/apps/gnb/console");
+export const setGnbConsole = (host, port) => put("/api/v1/apps/gnb/console", { host, port });
+export const clearGnbConsole = () => del("/api/v1/apps/gnb/console");
 
 // RAN
 export const getRanStatus = () => get("/api/v1/ran/status");
@@ -356,6 +379,41 @@ export const getNorthboundAdapters = () => get("/api/v1/northbound/adapters");
 export const getNorthboundContract = () => get("/api/v1/northbound/contract");
 export const getNorthboundBindings = () => get("/api/v1/northbound/bindings");
 export const getNorthboundReadiness = () => get("/api/v1/northbound/readiness");
+export const getNorthboundVersions = () => get("/api/v1/northbound/versions");
+// Update all companion services (re-run phase 10) with streamed progress.
+// onEvent({phase, done, total, pct, line}); resolves to the final result.
+export async function updateAllNorthboundStream(onEvent) {
+  const res = await fetch(`/api/v1/northbound/update-all`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ..._authHeader() },
+  });
+  if (!res.ok) throw new Error(`Update failed: ${res.status}`);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result = null;
+  let errMsg = null;
+  const handle = (line) => {
+    if (!line.trim()) return;
+    try {
+      const ev = JSON.parse(line);
+      if (ev.result) result = ev.result;
+      else if (ev.error) errMsg = ev.error;
+      else if (onEvent) onEvent(ev);
+    } catch (_) { /* ignore partial line */ }
+  };
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) handle(line);
+  }
+  if (buffer.trim()) handle(buffer);
+  if (errMsg) throw new Error(errMsg);
+  return result;
+}
 export const getNorthboundServiceContract = (service) =>
   get(`/api/v1/northbound/contract/${encodeURIComponent(service)}`);
 export const getNorthboundServiceConfig = (service) =>
@@ -369,6 +427,12 @@ export const applyNorthboundServiceFile = (service, path, content) =>
 // Asset Identity Map (gateway authority, admin-only; backend forwards the Bearer).
 export const getNorthboundAssets = () => get("/api/v1/northbound/assets");
 export const setNorthboundAssets = (body) => put("/api/v1/northbound/assets", body);
+// Discovered-but-not-onboarded devices across live adapters (for the Assets Discover flow).
+export const getNorthboundDiscoverable = () => get("/api/v1/northbound/assets/discoverable");
+// Raw vendor device records from an adapter's /discover?raw=1 (admin-only), for the
+// guided classify builder. Payload can carry vendor secrets — never persist client-side.
+export const getNorthboundDiscoverRaw = (service) =>
+  get(`/api/v1/northbound/services/${encodeURIComponent(service)}/discover-raw`);
 export const getNorthboundAssetDetails = (id) =>
   get(`/api/v1/northbound/assets/${encodeURIComponent(id)}/details`);
 // Adapters self-register with the engine (v0.6.0); there is no manual register.
@@ -378,6 +442,9 @@ export const unregisterNorthboundAdapter = (name) =>
 // Targeted upgrade of a catalog adapter: image-only patch (config preserved).
 export const upgradeNorthboundAdapter = (name, image) =>
   post(`/api/v1/northbound/adapters/${encodeURIComponent(name)}/upgrade`, { image });
+// Attach the PVC-backed store to a stateful adapter (wifi calibration persistence).
+export const enableNorthboundPersistence = (name) =>
+  post(`/api/v1/northbound/services/${encodeURIComponent(name)}/enable-persistence`, {});
 export const deployNorthboundImage = (body) => post("/api/v1/northbound/deploy", body);
 export const deployNorthboundWorkload = (body) => post("/api/v1/northbound/workloads", body);
 export const deleteNorthboundWorkload = (name) =>
@@ -390,7 +457,17 @@ export const rolloutNorthboundManaged = (deployment, image) =>
 export const getApps = () => get("/api/v1/apps");
 export const deployApp = (body) => post("/api/v1/apps", body);
 export const deleteApp = (name) => del(`/api/v1/apps/${encodeURIComponent(name)}`);
+// Per-app: registry-vs-running digest -> {apps: {name: update_available}}.
+export const checkAppUpdates = () => get("/api/v1/apps/updates");
+// Retarget a deployed app to a chosen registry tag (rollout pulls it; Always).
+export const setAppImage = (name, image) => put(`/api/v1/apps/${encodeURIComponent(name)}/image`, { image });
 export const getAppRegistryCredentials = () => get("/api/v1/apps/registry-credentials");
+export const getAppRegistryImages = () => get("/api/v1/apps/registry/images");
+export async function getStarterKitZip() {
+  const res = await fetch(`${API_BASE}/api/v1/apps/starter-kit`, { headers: { ..._authHeader() } });
+  if (!res.ok) throw new Error(`starter kit failed: ${res.status}`);
+  return res.blob();
+}
 
 // One-click provision (phase 12 + 11) with streaming progress (NDJSON).
 export async function provisionAppsStream(onProgress) {

@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
+import { useAuth } from "../auth/AuthContext";
 import { getNfStatus, getAmfCniAlert, restartDeployment, scaleAmfController, getNfVersions, getNfUpdateStreamUrl } from "../api";
 import Loader from "../components/Loader";
 import NfCard from "../components/NfCard";
@@ -12,6 +13,9 @@ const SECTIONS = [
 ];
 
 export default function CorePage({ onOpenLogs, onOpenTerminal, onOpenIperf3Logs, expandNfType }) {
+  const auth = useAuth();
+  // Restart, exec and image rollout all sit behind admin-only routers.
+  const canWrite = !auth.enabled || auth.roles.includes("dashboard-admin");
   const [nfStatus, setNfStatus] = useState(null);
   const [error, setError] = useState("");
   const [expandedPod, setExpandedPod] = useState(null);
@@ -73,6 +77,8 @@ export default function CorePage({ onOpenLogs, onOpenTerminal, onOpenIperf3Logs,
   }, [refreshAmfAlert]);
 
   const refreshVersions = useCallback(async () => {
+    // /nf/versions is admin-only; skip the call rather than fire a guaranteed 403.
+    if (!canWrite) { setNfVersions([]); return; }
     setVersionsLoading(true);
     try {
       const data = await getNfVersions();
@@ -83,7 +89,7 @@ export default function CorePage({ onOpenLogs, onOpenTerminal, onOpenIperf3Logs,
     } finally {
       setVersionsLoading(false);
     }
-  }, []);
+  }, [canWrite]);
 
   // Version check runs once on mount — versions.json changes rarely.
   // Manual refresh available via the button in the header.
@@ -276,6 +282,7 @@ export default function CorePage({ onOpenLogs, onOpenTerminal, onOpenIperf3Logs,
                   isRestarting={restartingDeps.has(nf.deployment)}
                   versionInfo={versionMap[nf.deployment] || null}
                   onUpdate={(tag) => { setUpdateModal({ nf: nf.deployment, tag }); setUpdateLog([]); }}
+                  canWrite={canWrite}
                 />
               ))}
             </div>

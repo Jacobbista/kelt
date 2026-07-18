@@ -40,7 +40,10 @@ function timeSince(isoString) {
   return `${days}d ${hours % 24}h`;
 }
 
-export default function NfCard({ nf, onRestart, onOpenLogs, onOpenTerminal, onOpenIperf3Logs, expanded, onToggle, isRestarting, versionInfo, onUpdate }) {
+// canWrite=false (a read-only account) hides the actions whose backend routers
+// are admin-only — restart, exec terminal, image rollout — instead of leaving
+// buttons that answer 403. Logs stay: log streaming is a viewer capability.
+export default function NfCard({ nf, onRestart, onOpenLogs, onOpenTerminal, onOpenIperf3Logs, expanded, onToggle, isRestarting, versionInfo, onUpdate, canWrite = true }) {
   const [confirmRestart, setConfirmRestart] = useState(false);
   const [details, setDetails] = useState(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
@@ -83,7 +86,7 @@ export default function NfCard({ nf, onRestart, onOpenLogs, onOpenTerminal, onOp
             >
               {versionInfo.deployed_tag}
             </span>
-          ) : versionInfo.available_tag ? (
+          ) : versionInfo.available_tag && canWrite ? (
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); onUpdate?.(versionInfo.available_tag); }}
@@ -147,7 +150,7 @@ export default function NfCard({ nf, onRestart, onOpenLogs, onOpenTerminal, onOp
               <span className="text-xs text-slate-500 italic">Pod shutting down...</span>
             ) : (
               <>
-                {nf.deployment && !confirmRestart && (
+                {canWrite && nf.deployment && !confirmRestart && (
                   <button
                     type="button"
                     disabled={isRestarting}
@@ -158,7 +161,7 @@ export default function NfCard({ nf, onRestart, onOpenLogs, onOpenTerminal, onOp
                   </button>
                 )}
 
-                {confirmRestart && (
+                {canWrite && confirmRestart && (
                   <div className="flex items-center gap-2 rounded border border-amber-600/40 bg-amber-950/30 px-3 py-1.5">
                     <span className="text-xs text-amber-300">Restart {label}?</span>
                     <button
@@ -190,6 +193,7 @@ export default function NfCard({ nf, onRestart, onOpenLogs, onOpenTerminal, onOp
                   Logs
                 </button>
 
+                {canWrite && (
                 <button
                   type="button"
                   onClick={(e) => { e.stopPropagation(); onOpenTerminal?.(nf); }}
@@ -197,6 +201,7 @@ export default function NfCard({ nf, onRestart, onOpenLogs, onOpenTerminal, onOp
                 >
                   Terminal
                 </button>
+                )}
 
                 {nf.nf_type === "upf" && (
                   <button

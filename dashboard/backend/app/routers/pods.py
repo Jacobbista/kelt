@@ -3,6 +3,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from app.auth import require_admin
 from app.config import settings
 from app.models import ConfigMapPayload, LogLevelPayload, PodSummary, RestartRequest, ScaleControllerRequest
 from app.services.audit import write_audit
@@ -10,6 +11,12 @@ from app.services.amf_cni_service import check_alert, scale_controller
 from app.services.k8s_service import K8sService, get_k8s_service
 
 router = APIRouter(prefix="/api/v1", tags=["pods"])
+
+# This router is mounted viewer-or-admin because most of it is read-only, so the
+# handful of routes that CHANGE cluster state carry their own admin dependency.
+# Without it a dashboard-viewer could restart or scale a deployment and rewrite a
+# ConfigMap, which contradicts the role matrix in docs/security/iam.md.
+_admin_only = [Depends(require_admin)]
 
 
 @router.get("/pods", response_model=list[PodSummary])
@@ -20,7 +27,7 @@ def list_pods(
     return k8s.list_pods(namespace)
 
 
-@router.post("/deployments/{deployment_name}/restart")
+@router.post("/deployments/{deployment_name}/restart", dependencies=_admin_only)
 def restart_deployment(
     deployment_name: str,
     payload: RestartRequest,
@@ -40,7 +47,7 @@ def amf_cni_alert(k8s: K8sService = Depends(get_k8s_service)) -> dict[str, Any]:
     return check_alert(k8s)
 
 
-@router.post("/pods/amf-controllers/scale")
+@router.post("/pods/amf-controllers/scale", dependencies=_admin_only)
 def scale_amf_controller(
     payload: ScaleControllerRequest,
     k8s: K8sService = Depends(get_k8s_service),
@@ -57,7 +64,7 @@ def scale_amf_controller(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/deployments/{deployment_name}/scale")
+@router.post("/deployments/{deployment_name}/scale", dependencies=_admin_only)
 def scale_deployment(
     deployment_name: str,
     payload: dict[str, Any],
@@ -225,7 +232,7 @@ def get_nf_log_level(
     return {"deployment": deployment, "level": level}
 
 
-@router.patch("/nf/{deployment}/log-level")
+@router.patch("/nf/{deployment}/log-level", dependencies=_admin_only)
 def set_nf_log_level(
     deployment: str,
     payload: LogLevelPayload,
@@ -272,7 +279,7 @@ def get_configmap(
     return k8s.get_configmap(namespace=namespace, name=name)
 
 
-@router.put("/configmaps/{name}")
+@router.put("/configmaps/{name}", dependencies=_admin_only)
 def update_configmap(
     name: str,
     payload: ConfigMapPayload,
