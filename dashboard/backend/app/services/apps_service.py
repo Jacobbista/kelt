@@ -12,10 +12,18 @@ upsert_secret/delete_*) and the DNS-1123 name + image-reference validators from
 northbound_service. See docs/architecture/edge-apps.md.
 """
 
+import io
+import ipaddress
+import json
 import os
+import socket
 import subprocess
+import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 from app.config import settings
 from app.services.k8s_service import K8sService
@@ -33,9 +41,85 @@ PHASE11_PLAYBOOK = f"{ANSIBLE_DIR}/phases/11-frontdoor/playbook.yml"
 
 MANAGED_BY = "dashboard-apps"
 _LABELS_BASE = {"app.kubernetes.io/managed-by": MANAGED_BY}
+# Selectorless Service name for the gNB management console external endpoint.
+GNB_SVC = "gnb"
 # Service port the front-door proxies to for an exposed app, so <name>.<base> works
 # regardless of the container's own port.
 PUBLISHED_PORT = 80
+
+# Starter-kit files handed to an app developer (README + .env.example + deploy.sh),
+# zipped on demand and prefilled with this cluster's registry host (__HOST__). The
+# developer only builds and pushes an image; the k8s deploy stays in the dashboard.
+_KIT_README = """# KELT edge app — build & deploy
+
+Your container must:
+- serve its UI on HTTP `:80` (reachable at `<name>.<base>` when exposed), and/or
+- listen on UDP `:5005` for the H264/RTP stream from the UE (MEC apps).
+
+## 1. Build & push (this kit)
+1. `./deploy.sh` once — it creates `.env` from `.env.example`.
+2. Fill `.env`: `APP_NAME`, `IMAGE_TAG`, `REGISTRY_PASSWORD` (ask the operator;
+   `REGISTRY_HOST`/`REGISTRY_USER` are prefilled).
+3. `./deploy.sh` again — builds and pushes to the cluster registry, prints the image ref.
+
+The registry is plain HTTP, so your Docker daemon must trust it. In
+`/etc/docker/daemon.json`: `{"insecure-registries": ["__HOST__"]}` then restart docker.
+Push over LAN/Tailscale (the registry is a NodePort, never the public tunnel).
+
+## 2. Deploy (operator, from the dashboard — no kubectl)
+Services -> Edge apps -> Deploy:
+- `image` = the ref printed by `deploy.sh`
+- `expose` on for an HTTP UI
+- MEC video app: tick "attach to MEC network (n6m)", set a fixed IP (10.208.0.200-.207)
+  and the UDP ingest port (5005).
+
+The UE then streams to that n6m IP on 5005 over the 5G tunnel.
+
+## Network constraints (MEC apps over the 5G user plane)
+UE traffic rides a GTP-U tunnel (UE -> gNB -> UPF -> n6m) that adds ~40 B of header.
+The UE-visible MTU is **1400** (advertised by the SMF). To avoid IP fragmentation of
+a UDP/RTP stream, size the packets to fit under it:
+- UDP payload <= ~1372 B (1400 - 20 IP - 8 UDP)
+- H264/RTP: set the packetizer MTU to ~1360, e.g. GStreamer `rtph264pay mtu=1360`
+  (use 1200 for extra margin). FFmpeg: `-pkt_size 1200`.
+TCP flows are already MSS-clamped to 1360 by the UPF, so they need no tuning. Keep
+the bitrate within the link and prefer UDP for real-time video. Full rationale:
+docs/architecture/network-topology.md (MTU sizing and GTP-U encapsulation).
+"""
+
+_KIT_ENV_EXAMPLE = """# Copy is automatic on first ./deploy.sh. Fill, then run ./deploy.sh again.
+APP_NAME=myapp
+IMAGE_TAG=dev
+REGISTRY_HOST=__HOST__
+REGISTRY_USER=kelt
+REGISTRY_PASSWORD=
+BUILD_CONTEXT=.
+DOCKERFILE=Dockerfile
+"""
+
+_KIT_DEPLOY_SH = """#!/usr/bin/env bash
+# KELT edge app — build & push to the cluster registry. See README.md.
+set -euo pipefail
+cd "$(dirname "$0")"
+if [ ! -f .env ]; then
+  cp .env.example .env
+  echo "Created .env from .env.example — fill it, then re-run ./deploy.sh"
+  exit 0
+fi
+set -a; . ./.env; set +a
+: "${APP_NAME:?set APP_NAME in .env}"
+: "${IMAGE_TAG:?set IMAGE_TAG in .env}"
+: "${REGISTRY_HOST:?set REGISTRY_HOST in .env}"
+: "${REGISTRY_USER:?set REGISTRY_USER in .env}"
+: "${REGISTRY_PASSWORD:?set REGISTRY_PASSWORD in .env}"
+IMG="${REGISTRY_HOST}/${APP_NAME}:${IMAGE_TAG}"
+echo "${REGISTRY_PASSWORD}" | docker login "${REGISTRY_HOST}" -u "${REGISTRY_USER}" --password-stdin
+docker build -t "${IMG}" -f "${DOCKERFILE:-Dockerfile}" "${BUILD_CONTEXT:-.}"
+docker push "${IMG}"
+echo
+echo "Pushed ${IMG}"
+echo "Deploy it from the dashboard: Services -> Edge apps -> image = ${IMG}"
+"""
 
 
 class AppDeployError(Exception):
@@ -54,7 +138,10 @@ class AppsService:
     def _public_url(self, name: str, exposed: bool) -> str | None:
         if not (exposed and settings.external_base_domain):
             return None
-        return f"{settings.external_scheme}://{name}.{settings.external_base_domain}"
+        # First-level namespaced host: <prefix>-<name>.<base> (free Cloudflare TLS).
+        # The front-door's ^<prefix>-(?<app>...) route strips the prefix back to the
+        # Service name. See docs/security/external-access.md.
+        return f"{settings.external_scheme}://{settings.kelt_prefix}-{name}.{settings.external_base_domain}"
 
     # ── Inventory ───────────────────────────────────────────────────────────--
     def inventory(self) -> dict[str, Any]:
@@ -77,6 +164,19 @@ class AppsService:
             "apps": apps,
         }
 
+    def public_apps(self) -> dict[str, Any]:
+        """Names + public URLs of exposed apps, for the pre-auth front-door welcome
+        page. Only what the catalogue already shows for core services (name + link);
+        never fails the welcome page."""
+        out = []
+        try:
+            for a in self.list_apps():
+                if a.get("public_url"):
+                    out.append({"name": a["name"], "url": a["public_url"], "ready": a["ready"]})
+        except Exception:
+            return {"apps": []}
+        return {"apps": out}
+
     def list_apps(self) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         deps = self.k8s.apps.list_namespaced_deployment(
@@ -93,6 +193,16 @@ class AppsService:
             desired = d.spec.replicas or 0
             ready = d.status.ready_replicas or 0
             exposed = name in svc_names
+            # MEC attach + requested n6m IP, read from the pod template annotation.
+            mec_attached, mec_ip = False, None
+            anns = (d.spec.template.metadata.annotations or {})
+            try:
+                for n in json.loads(anns.get("k8s.v1.cni.cncf.io/networks", "[]")):
+                    if isinstance(n, dict) and n.get("name") == "n6m-net":
+                        mec_attached = True
+                        mec_ip = (n.get("ips") or [None])[0]
+            except (ValueError, TypeError):
+                pass
             out.append({
                 "name": name,
                 "image": image,
@@ -102,6 +212,8 @@ class AppsService:
                 "ready": desired > 0 and ready >= desired,
                 "exposed": exposed,
                 "public_url": self._public_url(name, exposed),
+                "mec_attached": mec_attached,
+                "mec_ip": mec_ip,
                 "created": d.metadata.creation_timestamp.isoformat()
                 if d.metadata.creation_timestamp else None,
             })
@@ -120,11 +232,21 @@ class AppsService:
             self.k8s.upsert_secret(self.ns, secret_name, sensitive)
 
         labels = {**_LABELS_BASE, "app": req.name}
+        # Extra UDP ingest ports (e.g. RTP video on the MEC DN) alongside the HTTP
+        # port. The UDP traffic arrives on the n6m interface, not via a Service, so
+        # these are declared on the container only (informational + documentation).
+        ports = [{"containerPort": req.port, "name": "http"}]
+        for i, up in enumerate(req.udp_ports or []):
+            ports.append({"containerPort": int(up), "protocol": "UDP", "name": f"udp{i}"})
         container: dict[str, Any] = {
             "name": req.name,
             "image": req.image,
-            "imagePullPolicy": "IfNotPresent",
-            "ports": [{"containerPort": req.port, "name": "http"}],
+            # Always pull: operators iterate by re-pushing the SAME tag, and the node's
+            # containerd caches by tag, so IfNotPresent would keep running the stale
+            # image after a re-push (even after a delete+redeploy). The registry is
+            # in-cluster, so the pull is local and cheap. See docs/architecture/edge-apps.md.
+            "imagePullPolicy": "Always",
+            "ports": ports,
             "envFrom": [
                 {"configMapRef": {"name": cm_name, "optional": True}},
                 {"secretRef": {"name": secret_name, "optional": True}},
@@ -149,6 +271,17 @@ class AppsService:
         if req.image_pull_secret:
             pod_spec["imagePullSecrets"] = [{"name": req.image_pull_secret}]
 
+        # MEC attach: a Multus secondary interface on the n6m DN so UEs reach the
+        # app via the UPF. Same-namespace NAD reference; `ips` requests the fixed
+        # reserved address (whereabouts honors it, like the NF static IPs). Return
+        # routes to the UE pools are inherited from the n6m-net NAD itself.
+        pod_meta: dict[str, Any] = {"labels": labels}
+        if req.attach_mec:
+            net: dict[str, Any] = {"name": "n6m-net", "namespace": self.ns, "interface": "n6m"}
+            if req.mec_ip:
+                net["ips"] = [req.mec_ip if "/" in req.mec_ip else f"{req.mec_ip}/24"]
+            pod_meta["annotations"] = {"k8s.v1.cni.cncf.io/networks": json.dumps([net])}
+
         self.k8s.upsert_deployment(self.ns, {
             "apiVersion": "apps/v1",
             "kind": "Deployment",
@@ -156,7 +289,7 @@ class AppsService:
             "spec": {
                 "replicas": req.replicas,
                 "selector": {"matchLabels": {"app": req.name}},
-                "template": {"metadata": {"labels": labels}, "spec": pod_spec},
+                "template": {"metadata": pod_meta, "spec": pod_spec},
             },
         })
 
@@ -183,6 +316,8 @@ class AppsService:
             "namespace": self.ns,
             "exposed": req.expose,
             "public_url": self._public_url(req.name, req.expose),
+            "mec_attached": req.attach_mec,
+            "mec_ip": (req.mec_ip or "dynamic") if req.attach_mec else None,
         }
 
     def delete_app(self, name: str) -> dict[str, Any]:
@@ -197,6 +332,84 @@ class AppsService:
             pass
         return {"status": "deleted", "name": name, "namespace": self.ns}
 
+    # ── gNB management console (external endpoint via the dynamic apps route) ───
+    # The physical gNB / femtocell has a web UI on the RAN management LAN, an IP the
+    # operator's browser cannot reach directly. Instead of a per-host tunnel rule,
+    # the dashboard registers it as a selectorless Service + Endpoints named "gnb"
+    # in the apps namespace; the front-door's dynamic <app>.<base> route then
+    # proxies gnb.<base> to it via kube-proxy. No front-door / ansible / cloudflared
+    # change. Fully operator-driven: KELT assumes no management subnet exists, so an
+    # unset console means no surface. Requires the apps route to be enabled (the
+    # surface rides the same <app>.<base> regex). See docs/deployment/physical-ran.md
+    # and docs/security/external-access.md.
+    @staticmethod
+    def _tcp_reachable(host: str, port: int, timeout: float = 1.5) -> bool:
+        # Best-effort reachability probe: KELT and the worker reach the femtocell
+        # management LAN through the same host NAT path, so a TCP connect from the
+        # backend is a faithful indicator that the front-door can reach it too.
+        try:
+            with socket.create_connection((host, int(port)), timeout=timeout):
+                return True
+        except OSError:
+            return False
+
+    def gnb_console_status(self) -> dict[str, Any]:
+        origin, reachable = None, None
+        try:
+            ep = self.k8s.core.read_namespaced_endpoints(name=GNB_SVC, namespace=self.ns)
+            subsets = ep.subsets or []
+            if subsets and subsets[0].addresses and subsets[0].ports:
+                host = subsets[0].addresses[0].ip
+                port = subsets[0].ports[0].port
+                origin = f"{host}:{port}"
+                reachable = self._tcp_reachable(host, port)
+        except Exception:
+            pass
+        return {
+            "configured": origin is not None,
+            "origin": origin,
+            "reachable": reachable,
+            "url": self._public_url(GNB_SVC, True) if origin else None,
+            "namespace": self.ns,
+        }
+
+    def set_gnb_console(self, host: str, port: int) -> dict[str, Any]:
+        host = (host or "").strip()
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            raise AppDeployError(400, f"gNB host must be an IP reachable from the worker, got '{host}'")
+        port = int(port)
+        if not (1 <= port <= 65535):
+            raise AppDeployError(400, f"gNB port out of range: {port}")
+        labels = {**_LABELS_BASE, "kelt.io/surface": "gnb-console"}
+        # Selectorless Service: kube-proxy honours the manual Endpoints below, so the
+        # ClusterIP:80 the front-door proxies to is DNAT'd to the appliance IP:port.
+        self.k8s.upsert_service(self.ns, {
+            "apiVersion": "v1", "kind": "Service",
+            "metadata": {"name": GNB_SVC, "namespace": self.ns, "labels": labels},
+            "spec": {"ports": [{"name": "http", "port": PUBLISHED_PORT, "targetPort": port}]},
+        })
+        endpoints = {
+            "apiVersion": "v1", "kind": "Endpoints",
+            "metadata": {"name": GNB_SVC, "namespace": self.ns, "labels": labels},
+            "subsets": [{"addresses": [{"ip": host}], "ports": [{"name": "http", "port": port}]}],
+        }
+        try:
+            self.k8s.core.read_namespaced_endpoints(name=GNB_SVC, namespace=self.ns)
+            self.k8s.core.replace_namespaced_endpoints(name=GNB_SVC, namespace=self.ns, body=endpoints)
+        except Exception:
+            self.k8s.core.create_namespaced_endpoints(namespace=self.ns, body=endpoints)
+        return self.gnb_console_status()
+
+    def clear_gnb_console(self) -> dict[str, Any]:
+        self.k8s.delete_service(self.ns, GNB_SVC)
+        try:
+            self.k8s.core.delete_namespaced_endpoints(name=GNB_SVC, namespace=self.ns)
+        except Exception:
+            pass
+        return {"configured": False, "origin": None, "url": None, "namespace": self.ns}
+
     # ── Registry credentials (admin only) ─────────────────────────────────────
     def registry_credentials(self) -> dict[str, Any]:
         """The local-registry basic-auth, shown to admins so they can docker login
@@ -207,6 +420,159 @@ class AppsService:
             "username": settings.apps_registry_username,
             "password": settings.apps_registry_password,
         }
+
+    def starter_kit_zip(self) -> bytes:
+        """A zip (README + .env.example + deploy.sh) the operator hands to an app
+        developer, prefilled with this cluster's registry host. The developer only
+        builds and pushes; the deploy happens in the dashboard."""
+        host = settings.apps_registry_host or "<registry-host>"
+        files = {
+            "README.md": (_KIT_README.replace("__HOST__", host), 0o644),
+            ".env.example": (_KIT_ENV_EXAMPLE.replace("__HOST__", host), 0o644),
+            "deploy.sh": (_KIT_DEPLOY_SH.replace("__HOST__", host), 0o755),
+        }
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for name, (content, mode) in files.items():
+                info = zipfile.ZipInfo(name)
+                info.external_attr = mode << 16  # preserve the +x bit on deploy.sh
+                z.writestr(info, content)
+        return buf.getvalue()
+
+    # ── Registry catalog (admin only) ─────────────────────────────────────────
+    def registry_images(self) -> dict[str, Any]:
+        """List repos+tags in the local registry so the operator can deploy a
+        pushed image without retyping the tag. Queries the registry v2 API over
+        the same host/basic-auth used for push. Degrades to reachable:false when
+        the registry is down or not configured (no hard failure)."""
+        host = settings.apps_registry_host
+        if not host:
+            return {"reachable": False, "host": "", "images": []}
+        base = f"http://{host}"
+        auth = (settings.apps_registry_username, settings.apps_registry_password) \
+            if settings.apps_registry_username else None
+        manifest_accept = ("application/vnd.docker.distribution.manifest.v2+json, "
+                           "application/vnd.oci.image.manifest.v1+json")
+
+        def _created(c: httpx.Client, repo: str, tag: str) -> str | None:
+            # tag -> manifest -> config blob -> .created (image build time). Single-arch
+            # manifest only (operator builds); a multi-arch list has no .config -> None.
+            try:
+                m = c.get(f"{base}/v2/{repo}/manifests/{tag}", auth=auth,
+                          headers={"Accept": manifest_accept})
+                cfg = ((m.json() if m.status_code == 200 else {}) or {}).get("config", {}).get("digest")
+                if not cfg:
+                    return None
+                b = c.get(f"{base}/v2/{repo}/blobs/{cfg}", auth=auth)
+                return (b.json().get("created") if b.status_code == 200 else None)
+            except (httpx.HTTPError, ValueError):
+                return None
+
+        try:
+            with httpx.Client(timeout=5.0) as c:
+                cat = c.get(f"{base}/v2/_catalog", auth=auth)
+                cat.raise_for_status()
+                repos = cat.json().get("repositories", []) or []
+                images = []
+                for repo in repos:
+                    tags: list[dict[str, Any]] = []
+                    try:
+                        t = c.get(f"{base}/v2/{repo}/tags/list", auth=auth)
+                        if t.status_code == 200:
+                            for tag in (t.json().get("tags") or []):
+                                tags.append({"tag": tag, "created": _created(c, repo, tag)})
+                    except httpx.HTTPError:
+                        pass
+                    # Newest first (ISO timestamps sort chronologically); undated last.
+                    tags.sort(key=lambda x: x["created"] or "", reverse=True)
+                    images.append({"repo": repo, "tags": tags})
+            return {"reachable": True, "host": host, "images": images}
+        except httpx.HTTPError as exc:
+            return {"reachable": False, "host": host, "images": [], "error": str(exc)[:200]}
+
+    # ── Update detection + rollout (admin only) ──────────────────────────────
+    # An operator iterates by re-pushing an image (same or new tag). With
+    # imagePullPolicy: Always a redeploy/restart pulls the newest digest for the tag.
+    # check_updates() flags apps whose registry digest differs from the running pod's
+    # digest (a newer push), so the UI can suggest an update; restart_app() does the
+    # one-click rollout that pulls it. See docs/architecture/edge-apps.md.
+    def _registry_manifest_digest(self, repo: str, tag: str) -> str | None:
+        host = settings.apps_registry_host
+        if not host:
+            return None
+        auth = (settings.apps_registry_username, settings.apps_registry_password) \
+            if settings.apps_registry_username else None
+        accept = ", ".join([
+            "application/vnd.docker.distribution.manifest.v2+json",
+            "application/vnd.oci.image.manifest.v1+json",
+            "application/vnd.docker.distribution.manifest.list.v2+json",
+            "application/vnd.oci.image.index.v1+json",
+        ])
+        try:
+            with httpx.Client(timeout=4.0) as c:
+                r = c.head(f"http://{host}/v2/{repo}/manifests/{tag}", auth=auth,
+                           headers={"Accept": accept})
+                if r.status_code == 200:
+                    return r.headers.get("Docker-Content-Digest")
+        except httpx.HTTPError:
+            pass
+        return None
+
+    def _running_digest(self, app: str) -> str | None:
+        try:
+            pods = self.k8s.core.list_namespaced_pod(
+                namespace=self.ns, label_selector=f"app={app}").items
+        except Exception:
+            return None
+        # Only a Running pod that is NOT being deleted: during a rollout a lingering
+        # old replica would otherwise report the previous image's digest and produce
+        # a false "update available". If none is clean yet, return None (don't compare).
+        for p in pods:
+            if (p.status.phase or "") != "Running" or p.metadata.deletion_timestamp:
+                continue
+            for cs in (p.status.container_statuses or []):
+                iid = cs.image_id or ""
+                if "@sha256:" in iid:
+                    return "sha256:" + iid.split("@sha256:", 1)[1]
+        return None
+
+    def check_updates(self) -> dict[str, Any]:
+        """Per app: is the registry digest for its tag newer than the running pod's?
+        Best-effort (a registry/pod read failure just yields update_available=false)."""
+        host = settings.apps_registry_host or ""
+        apps: dict[str, bool] = {}
+        for app in self.list_apps():
+            name, image = app["name"], (app.get("image") or "")
+            apps[name] = False
+            if not host or not image.startswith(host + "/"):
+                continue  # public/other-registry image: nothing to compare against
+            ref = image[len(host) + 1:]
+            repo, sep, tag = ref.rpartition(":")
+            if not sep:
+                repo, tag = ref, "latest"
+            reg = self._registry_manifest_digest(repo, tag)
+            run = self._running_digest(name)
+            apps[name] = bool(reg and run and reg != run)
+        return {"checked": True, "apps": apps}
+
+    def set_app_image(self, name: str, image: str) -> dict[str, Any]:
+        """Retarget a deployed app to a registry image (a chosen tag), preserving its
+        port/expose/MEC/env. One patch sets the image, forces imagePullPolicy: Always
+        (legacy apps were IfNotPresent), and bumps a restart annotation so the rollout
+        fires even when the image string is unchanged (re-pull a re-pushed same tag).
+        The operator picks the version from the date-ordered registry tag list."""
+        _validate_name(name)
+        _validate_image(image)
+        self.k8s.apps.patch_namespaced_deployment(
+            name=name, namespace=self.ns,
+            body={"spec": {"template": {
+                "metadata": {"annotations": {
+                    "kelt.io/restartedAt": datetime.now(timezone.utc).isoformat()}},
+                "spec": {"containers": [
+                    {"name": name, "image": image, "imagePullPolicy": "Always"}]},
+            }}},
+        )
+        return {"status": "updating", "name": name, "image": image, "namespace": self.ns}
 
     # ── One-click provision (admin only) ──────────────────────────────────────
     @staticmethod

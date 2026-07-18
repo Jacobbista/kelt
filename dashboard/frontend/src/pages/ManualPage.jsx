@@ -11,7 +11,11 @@ import { getDashboardComponents, updateDashboardComponent } from "../api";
 // copy. The dashboard never depends on it to function: the in-app "Learn" notes
 // below render offline, and the external links open in a new tab (a failed tab
 // does not affect the SPA).
-const DOCS = env("VITE_DOCS_URL", "https://jacobbista.github.io/kelt");
+// Normalize to no trailing slash so page links append cleanly and the site-root
+// link can add exactly one slash (the MkDocs index lives at <DOCS>/, and a bare
+// <DOCS> with no slash would miss the nginx `location /docs/` proxy and fall to
+// the SPA).
+const DOCS = env("VITE_DOCS_URL", "https://jacobbista.github.io/kelt").replace(/\/+$/, "");
 
 const DOC_LINKS = [
   { label: "Getting started", href: `${DOCS}/getting-started/`, note: "Install, deploy, first steps" },
@@ -67,6 +71,9 @@ const LEARN = [
 ];
 
 function StateBadge({ state }) {
+  if (state === "rolling") {
+    return <span className="inline-flex items-center gap-1.5 rounded-full bg-sky-900/40 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-sky-300"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-sky-400" /> rolling out…</span>;
+  }
   if (state === "update-available") {
     return <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-900/40 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-300"><span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> update available</span>;
   }
@@ -93,8 +100,23 @@ export default function ManualPage() {
     setBusy(name);
     try {
       await updateDashboardComponent(name);
-      toast.success(`${name}: rolling out latest`);
-      setTimeout(load, 1500);
+      toast.info(`${name}: rolling out latest…`);
+      // The rollout pulls the new image and waits for the pod to become ready,
+      // which is much slower than the API call. Poll the status until it flips
+      // to up-to-date (or give up after ~2 min) so the badge tracks reality
+      // instead of looking stuck. Busy stays set, so the button shows "updating…".
+      const deadline = Date.now() + 120000;
+      let settled = false;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 4000));
+        let comps;
+        try { comps = await getDashboardComponents(); } catch { continue; }
+        setComponents(comps);
+        const c = comps.find((x) => x.name === name);
+        if (c && c.state === "up-to-date") { settled = true; break; }
+      }
+      if (settled) toast.success(`${name}: up to date`);
+      else toast.info(`${name}: still rolling out — use "check" in a moment`);
     } catch (e) {
       toast.error(`${name} update failed: ${e.message}`);
     } finally {
@@ -121,7 +143,7 @@ export default function ManualPage() {
             {components.map((c) => (
               <div key={c.name} className="flex items-center gap-3 py-2 text-xs">
                 <span className="min-w-[150px] font-medium text-slate-200">{c.display}</span>
-                <StateBadge state={c.state} />
+                <StateBadge state={busy === c.name ? "rolling" : c.state} />
                 <span className="flex-1" />
                 {isAdmin && c.state !== "not-deployed" && (
                   <button
@@ -141,7 +163,7 @@ export default function ManualPage() {
 
       <Panel title="Documentation" hint="The full docs site (always in sync with the repo).">
         <a
-          href={DOCS}
+          href={`${DOCS}/`}
           target="_blank"
           rel="noreferrer"
           className="mb-3 inline-flex items-center gap-1 rounded bg-sky-600/20 px-3 py-1.5 text-xs font-medium text-sky-300 transition-colors hover:bg-sky-600/30"

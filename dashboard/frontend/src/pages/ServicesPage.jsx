@@ -2,20 +2,22 @@ import { useEffect, useState } from "react";
 import ServiceCard from "../components/ServiceCard";
 import Loader from "../components/Loader";
 import { IconLocate, IconNetwork, IconCpu, IconBoxPlus } from "../components/icons";
-import { getNorthboundServices, getNorthboundAdapters, getApps } from "../api";
+import { getNorthboundServices, getNorthboundAdapters, getNorthboundVersions, getApps } from "../api";
 
 // Hub for scheduled cluster services. Northbound (positioning/CAMARA) and Edge
 // apps are live; NEF-style network exposure is a roadmap placeholder. Each live
 // card links to its own management sub-page.
 export default function ServicesPage() {
-  const [nb, setNb] = useState({ services: [], adapters: [], loaded: false });
+  const [nb, setNb] = useState({ services: [], adapters: [], behind: 0, loaded: false });
   const [apps, setApps] = useState({ apps: [], loaded: false, ready: false });
 
   useEffect(() => {
     let alive = true;
-    Promise.all([getNorthboundServices(), getNorthboundAdapters()])
-      .then(([svc, ad]) => {
-        if (alive) setNb({ services: svc.services || [], adapters: ad || [], loaded: true });
+    // Versions is best-effort: a failure (or no companion services) just means no
+    // update badge, never a broken hub card.
+    Promise.all([getNorthboundServices(), getNorthboundAdapters(), getNorthboundVersions().catch(() => ({}))])
+      .then(([svc, ad, ver]) => {
+        if (alive) setNb({ services: svc.services || [], adapters: ad || [], behind: ver?.behind_count || 0, loaded: true });
       })
       .catch(() => alive && setNb((s) => ({ ...s, loaded: true })));
     getApps()
@@ -53,6 +55,11 @@ export default function ServicesPage() {
           subtitle="Positioning engine + CAMARA Location API"
           status={nbStatus}
           to="/services/northbound"
+          badge={nb.behind > 0 ? (
+            <span className="rounded-full bg-amber-900/40 px-2 py-0.5 text-[10px] font-medium text-amber-300" title="container updates available (KELT-pinned)">
+              ↑ {nb.behind} update{nb.behind > 1 ? "s" : ""}
+            </span>
+          ) : null}
           statusDots={nb.services.map((s) => (s.pods && s.pods[0] ? s.pods[0].phase : "Unknown"))}
           stats={[
             { label: "services", value: nb.loaded ? nb.services.length : "—" },

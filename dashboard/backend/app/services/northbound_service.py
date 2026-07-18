@@ -11,13 +11,50 @@ stale entry (DELETE /adapters/{name}). See docs/architecture/positioning-adapter
 """
 
 import json
+import os
 import re
+import subprocess
+import time
+from pathlib import Path
 from typing import Any
 
 import httpx
 
 from app.models import DeployEnvVar, DeployImageRequest, FusionConfigPayload
 from app.services.k8s_service import K8sService
+from app.services.nf_service import ANSIBLE_CFG, ANSIBLE_DIR, ANSIBLE_PLAYBOOK_BIN
+
+# Operator-persisted config sourced into the ansible env for an update-all run, so
+# re-running phase 10 keeps every other surface's flags. Mirrors apps_service.
+TESTBED_ENV = Path("/vagrant/.testbed.env")
+TESTBED_SECRETS = Path("/vagrant/.testbed.secrets")
+PHASE10_PLAYBOOK = f"{ANSIBLE_DIR}/phases/10-northbound/playbook.yml"
+
+# Companion image versions. The filtered CI rebuilds only the images that changed, so
+# each 5g-northbound image advances INDEPENDENTLY (e.g. wifi at 0.8.9 while the engine
+# is still 0.8.8) — there is no single shared release tag. Each phase-10-managed image
+# reads its OWN release-tag env var (below) with the baked pin as the fresh-clone
+# fallback; Update all resolves each image's latest tag on ghcr and persists the ones
+# it moved to .testbed.versions, so a phase re-run keeps them instead of downgrading.
+# This file is dashboard-owned and separate from .testbed.env because testbed-config's
+# save_config rewrites .testbed.env wholesale. testbed-config sources it for `run-phase`.
+TESTBED_VERSIONS = Path("/vagrant/.testbed.versions")
+COMPANION_PREFIX = "ghcr.io/jacobbista/5g-northbound/"
+# Phase-10-managed image basename -> the env var its role default reads (lookup env).
+# The rest (wifi-positioning, rest-adapter) are catalog adapters rolled via kubectl set,
+# so they need no env var.
+COMPANION_TAG_VARS = {
+    "positioning-engine": "POSITIONING_ENGINE_TAG",
+    "mock-positioning": "MOCK_POSITIONING_TAG",
+    "camara-gateway": "CAMARA_GATEWAY_TAG",
+    "placement-editor": "PLACEMENT_EDITOR_TAG",
+    "positioning-demo": "POSITIONING_DEMO_TAG",
+}
+PHASE_MANAGED_BASENAMES = set(COMPANION_TAG_VARS)
+CATALOG_BASENAMES = {"wifi-positioning", "rest-adapter"}
+# Per-repo latest-tag cache (repo path -> (ts, tag|None)); the badge polls versions().
+_GHCR_CACHE: dict[str, tuple[float, str | None]] = {}
+_GHCR_TTL = 300.0
 
 
 class GatewayError(Exception):
@@ -64,8 +101,90 @@ _ADAPTER_BINDINGS = {
 
 
 def _image_basename(image: str | None) -> str:
-    """ghcr.io/jacobbista/5g-northbound/rest-adapter:0.8.1 -> rest-adapter."""
+    """ghcr.io/jacobbista/5g-northbound/rest-adapter:0.8.6 -> rest-adapter."""
     return (image or "").rsplit("/", 1)[-1].split("@")[0].split(":")[0]
+
+
+def _adapter_probes(port: int) -> dict[str, Any]:
+    """Readiness on /ready (config-aware: 503 + reason while degraded, e.g. a
+    rest-adapter with no schema, so the dashboard shows it NOT ready instead of falsely
+    green); liveness on /health (process up). Every 5g-northbound adapter and the SDK
+    skeleton expose both. Applied on deploy AND upgrade, so a rolled-forward adapter
+    also gets the honest probe. See docs/architecture/positioning-adapters.md."""
+    return {
+        "readinessProbe": {"httpGet": {"path": "/ready", "port": port},
+                           "initialDelaySeconds": 5, "periodSeconds": 5, "failureThreshold": 6},
+        "livenessProbe": {"httpGet": {"path": "/health", "port": port},
+                          "initialDelaySeconds": 10, "periodSeconds": 10, "failureThreshold": 6},
+    }
+
+
+def _image_tag(image: str | None) -> str:
+    """...rest-adapter:0.8.6 -> 0.8.6 (empty when digest-pinned or untagged)."""
+    tail = (image or "").rsplit("/", 1)[-1]
+    return tail.split(":", 1)[1] if ":" in tail else ""
+
+
+def _semver_key(tag: str) -> tuple[int, int, int] | None:
+    """Numeric (major, minor, patch) for ordering; None for non-semver tags (latest,
+    sha-*), which are excluded from release comparison."""
+    parts = (tag or "").split(".")
+    if len(parts) < 2:
+        return None
+    try:
+        nums = [int(p) for p in parts[:3]]
+    except ValueError:
+        return None
+    while len(nums) < 3:
+        nums.append(0)
+    return (nums[0], nums[1], nums[2])
+
+
+def _repo_path(image: str | None) -> str:
+    """ghcr.io/jacobbista/5g-northbound/x:0.8.6 -> jacobbista/5g-northbound/x."""
+    body = (image or "").split("ghcr.io/", 1)[-1]
+    return body.rsplit(":", 1)[0].split("@")[0]
+
+
+def _ghcr_latest_in_major(repo_path: str, major: int) -> str | None:
+    """Highest semver tag on ghcr for repo_path within the given major (cap: a major
+    bump is a KELT release, not a live roll). Anonymous pull token. Best-effort:
+    any failure returns None so a registry blip shows no phantom update."""
+    try:
+        with httpx.Client(timeout=6.0) as c:
+            tok = c.get("https://ghcr.io/token",
+                        params={"scope": f"repository:{repo_path}:pull",
+                                "service": "ghcr.io"}).json().get("token")
+            if not tok:
+                return None
+            tags = c.get(f"https://ghcr.io/v2/{repo_path}/tags/list",
+                         headers={"Authorization": f"Bearer {tok}"}).json().get("tags") or []
+    except Exception:
+        return None
+    best_key: tuple[int, int, int] | None = None
+    best_tag: str | None = None
+    for t in tags:
+        k = _semver_key(t)
+        if k and k[0] == major and (best_key is None or k > best_key):
+            best_key, best_tag = k, t
+    return best_tag
+
+
+# Adapters whose service WRITES a document at runtime: it must be PVC-backed or the
+# write is lost on restart/upgrade. Keyed by image basename -> {env, path}: `env` is
+# the env var by which the service is told where to read/write that document, `path`
+# is the image default (only its basename is used). The store redirects `env` to a
+# file inside STORE_DIR (see _ensure_writable_store) rather than mounting over the
+# default path, so no subPath is needed. wifi-positioning persists its calibration
+# (tx_power/path_loss_n) into WIFI_CONFIG_PATH. SCHEMA_FILE is writable upstream but
+# operator-authored here (no runtime writer), so it stays a ConfigMap.
+# See docs/architecture/positioning-adapters.md and
+# docs/known-issues/wifi-calibration-subpath-directory.md.
+_STATEFUL_DOCS = {
+    "wifi-positioning": {"env": "WIFI_CONFIG_PATH", "path": "/app/config/wifi-config.json"},
+}
+# Dedicated directory the writable PVC is mounted at (whole-dir mount, no subPath).
+STORE_DIR = "/data"
 
 
 def _is_file_field(name: str | None, path: str | None) -> bool:
@@ -158,6 +277,12 @@ class NorthboundService:
                 pass
             for dep in deps:
                 name = dep.metadata.name
+                labels = dep.metadata.labels or {}
+                # Edge apps (phase 12) share the `mec` namespace with northbound's
+                # positioning-demo; exclude them so this console lists only
+                # positioning/CAMARA services. See docs/architecture/edge-apps.md.
+                if labels.get("app.kubernetes.io/managed-by") == "dashboard-apps":
+                    continue
                 containers = dep.spec.template.spec.containers or []
                 image = containers[0].image if containers else None
                 # Pods whose name starts with the deployment name (rough but adequate).
@@ -193,6 +318,17 @@ class NorthboundService:
                         # until it serves its contract (just-deployed adapters).
                         if ready:
                             _CONTRACT_META[(name, image)] = meta
+                # Stateful adapters (wifi-positioning) write a doc at runtime that must be
+                # PVC-backed. `persistent` = the b2 store is attached (PVC mounted at
+                # STORE_DIR), so the UI can flag an ephemeral calibration and offer a
+                # one-click enable. An old subPath store reads as not-persistent → it gets
+                # migrated on enable. See _STATEFUL_DOCS / _has_writable_store.
+                stateful = _image_basename(image) in _STATEFUL_DOCS
+                persistent = (
+                    any((m.name == f"{name}-data" and m.mount_path == STORE_DIR)
+                        for m in (dep.spec.template.spec.containers[0].volume_mounts or []))
+                    if stateful else None
+                )
                 services.append({
                     "name": name,
                     "namespace": ns,
@@ -200,11 +336,13 @@ class NorthboundService:
                     "replicas": dep.spec.replicas or 0,
                     "ready_replicas": dep.status.ready_replicas or 0,
                     "managed": name in MANAGED_DEPLOYMENTS,
-                    "labels": dep.metadata.labels or {},
+                    "labels": labels,
                     "node_port": node_ports.get(name),
                     "kind": meta["kind"],
                     "configurable": meta["configurable"],
                     "subdomain": meta["subdomain"],
+                    "stateful": stateful,
+                    "persistent": persistent,
                     "pods": dep_pods,
                 })
         return {"services": services}
@@ -249,6 +387,14 @@ class NorthboundService:
     def list_assets(self, token: str) -> dict[str, Any]:
         """The full Asset Identity Map from the gateway (GET /assets)."""
         return self._gateway_get(token, "/assets")
+
+    def discoverable_assets(self, token: str) -> dict[str, Any]:
+        """Devices the engine sees across live adapters that are NOT yet onboarded
+        (gateway GET /assets/discoverable). Each candidate carries id, source, origin
+        (inventory = vendor registry | observed = seen on air) so the UI can prefill an
+        onboarding form; the gateway subtracts already-mapped positioning_ids. Onboarding
+        is never automatic: the operator commits an explicit PUT /assets."""
+        return self._gateway_get(token, "/assets/discoverable")
 
     def asset_details(self, token: str, asset_id: str) -> dict[str, Any]:
         """Per-asset detail (position/telemetry) for the UI (GET /assets/{id}/details)."""
@@ -305,8 +451,189 @@ class NorthboundService:
         # Patch the image AND ensure envFrom binds the config/secret (an adapter
         # deployed before v0.6.0 may bind neither, so the merged self-reg env would
         # never reach the pod). Inline env and volumes are left untouched.
-        self.k8s.set_workload_image(POSITIONING_NS, name, image, envfrom=[cm_name, f"{name}-secrets"])
+        self.k8s.set_workload_image(POSITIONING_NS, name, image, envfrom=[cm_name, f"{name}-secrets"],
+                                    probes=_adapter_probes(port))
+        # Stateful adapters (wifi-positioning writes its calibration) get a PVC-backed
+        # store so the writes survive this rollout and future ones. Attached
+        # unconditionally: the store must exist for a UI/imported calibration to persist,
+        # so it cannot depend on a prior Configure (the <name>-files seed is optional,
+        # an empty PVC is fine). Idempotent. See _STATEFUL_DOCS.
+        if _image_basename(image) in _STATEFUL_DOCS:
+            self._ensure_writable_store(name, POSITIONING_NS)
         return {"status": "upgrading", "name": name, "image": image}
+
+    # ── Update all (re-run phase 10 to the KELT-pinned images) ────────────────
+    @staticmethod
+    def _source_env_file(path: Path) -> dict[str, str]:
+        out: dict[str, str] = {}
+        if not path.exists():
+            return out
+        for raw in path.read_text().splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            out[k.strip()] = v.strip()
+        return out
+
+    def _ansible_env(self) -> dict[str, str]:
+        # Source the operator's persisted config so phase 10 re-renders exactly the
+        # surfaces they have enabled (rolling them to the pinned images) and does NOT
+        # turn on ones they disabled. No forced enable flag.
+        env = {**os.environ, "ANSIBLE_CONFIG": ANSIBLE_CFG}
+        env.update(self._source_env_file(TESTBED_ENV))
+        env.update(self._source_env_file(TESTBED_SECRETS))
+        # Per-image release tags the dashboard rolled forward, so the phase re-renders
+        # each image at its current tag, not the baked pin.
+        env.update(self._source_env_file(TESTBED_VERSIONS))
+        return env
+
+    @staticmethod
+    def _write_version_overrides(overrides: dict[str, str]) -> None:
+        """Persist per-image release-tag env vars (e.g. POSITIONING_ENGINE_TAG=0.8.8)
+        to .testbed.versions so a later phase re-run (dashboard or `testbed run-phase
+        10`) keeps them instead of downgrading. Merges: rewrites the given keys, leaves
+        any other lines intact."""
+        if not overrides:
+            return
+        existing = TESTBED_VERSIONS.read_text().splitlines() if TESTBED_VERSIONS.exists() else []
+        kept = [ln for ln in existing
+                if ln.strip() and not any(ln.strip().startswith(f"{k}=") for k in overrides)]
+        if not any(ln.strip().startswith("#") for ln in kept):
+            kept.insert(0, "# Generated by the dashboard — companion images rolled via Update all")
+        for k, v in overrides.items():
+            kept.append(f"{k}={v}")
+        TESTBED_VERSIONS.write_text("\n".join(kept) + "\n")
+
+    def _ghcr_latest_cached(self, repo: str, major: int) -> str | None:
+        """ghcr latest-in-major for a repo, cached _GHCR_TTL so the badge poll does not
+        hit ghcr every few seconds. Module-level cache (the service is per-request)."""
+        now = time.time()
+        hit = _GHCR_CACHE.get(repo)
+        if hit and now - hit[0] < _GHCR_TTL:
+            return hit[1]
+        val = _ghcr_latest_in_major(repo, major)
+        _GHCR_CACHE[repo] = (now, val)
+        return val
+
+    def _latest_for(self, img: str) -> str | None:
+        """The latest tag on ghcr for this image's repo within its deployed major, or
+        None (ghcr unreachable / not semver). Per image: the filtered CI advances each
+        independently."""
+        dk = _semver_key(_image_tag(img))
+        return self._ghcr_latest_cached(_repo_path(img), dk[0] if dk else 0)
+
+    def _count_tasks(self, playbook: str, env: dict[str, str]) -> int:
+        """Pre-count phase tasks via `--list-tasks` for the progress denominator.
+        Counts task lines (carry TAGS:) excluding the per-play header lines. Best-
+        effort: 0 disables the percentage (indeterminate bar) rather than failing."""
+        try:
+            out = subprocess.run(
+                [ANSIBLE_PLAYBOOK_BIN, playbook, "--list-tasks"],
+                cwd=ANSIBLE_DIR, env=env, capture_output=True, text=True, timeout=60,
+            )
+            return sum(1 for ln in out.stdout.splitlines()
+                       if "TAGS:" in ln and "play #" not in ln)
+        except Exception:
+            return 0
+
+    def update_all(self, on_event: Any = None) -> dict[str, Any]:
+        """Roll every behind companion service to ITS OWN latest tag on ghcr (filtered
+        CI advances images independently). Persists the moved phase-managed images'
+        tags to .testbed.versions and re-runs phase 10 (only when a phase-managed image
+        is behind), then patches the behind catalog adapters (wifi, vendor REST) the
+        phase does not own, and reconciles the wifi writable store. PVC-backed state and
+        ConfigMap/Secret config are preserved. Streams structured progress events."""
+        services = self.inventory().get("services", [])
+
+        def emit(ev: dict[str, Any]) -> None:
+            if on_event:
+                on_event(ev)
+
+        # Resolve each companion image's own latest and collect what is behind.
+        behind: list[tuple[str, str, str]] = []  # (name, basename, target_tag)
+        for s in services:
+            img = s.get("image") or ""
+            if not img.startswith(COMPANION_PREFIX):
+                continue
+            dk = _semver_key(_image_tag(img))
+            latest = self._latest_for(img)
+            lk = _semver_key(latest) if latest else None
+            if dk and lk and dk < lk:
+                behind.append((s.get("name"), _image_basename(img), latest))
+
+        # Phase-managed images: persist their new tags and re-run the phase.
+        overrides = {COMPANION_TAG_VARS[b]: t for (_, b, t) in behind if b in COMPANION_TAG_VARS}
+        if overrides:
+            self._write_version_overrides(overrides)
+            env = self._ansible_env()
+            total = self._count_tasks(PHASE10_PLAYBOOK, env)
+            rolled = ", ".join(f"{b}→{t}" for (_, b, t) in behind if b in COMPANION_TAG_VARS)
+            emit({"phase": "start", "done": 0, "total": total, "pct": 0 if total else None,
+                  "line": f"phase 10-northbound ({rolled}), {total or '?'} tasks"})
+            proc = subprocess.Popen(
+                [ANSIBLE_PLAYBOOK_BIN, PHASE10_PLAYBOOK],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, cwd=ANSIBLE_DIR, env=env,
+            )
+            done = 0
+            tail: list[str] = []
+            for line in proc.stdout:  # type: ignore[union-attr]
+                line = line.rstrip()
+                tail.append(line)
+                del tail[:-40]
+                if line.startswith("TASK ["):
+                    done += 1
+                    pct = min(99, int(done * 100 / total)) if total else None
+                    emit({"phase": "run", "done": done, "total": total, "pct": pct, "line": line})
+                elif line.startswith(("PLAY RECAP", "fatal:", "failed:")) or "ERROR" in line:
+                    emit({"phase": "run", "line": line})
+            proc.wait()
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"phase 10-northbound failed (rc={proc.returncode})\n" + "\n".join(tail[-25:])
+                )
+        else:
+            emit({"phase": "start", "pct": None, "line": "no phase-managed updates"})
+
+        # Catalog adapters (not phase-managed): patch each behind one to its own latest
+        # (upgrade_adapter attaches the wifi writable store, so calibration survives).
+        behind_catalog = {n: t for (n, b, t) in behind if b in CATALOG_BASENAMES}
+        for s in services:
+            name = s.get("name")
+            base = _image_basename(s.get("image") or "")
+            if name in behind_catalog:
+                emit({"phase": "adapters", "line": f"upgrading {name} → {behind_catalog[name]}"})
+                self.upgrade_adapter(name, f"{COMPANION_PREFIX}{base}:{behind_catalog[name]}")
+            elif base in _STATEFUL_DOCS and not self._has_writable_store(name):
+                # Already current but ensure its writable store (wifi calibration) exists.
+                emit({"phase": "adapters", "line": f"enabling persistence for {name}"})
+                self._ensure_writable_store(name, POSITIONING_NS)
+
+        emit({"phase": "done", "pct": 100, "line": f"complete — {len(behind)} service(s) updated"})
+        return {"status": "updated", "updated": len(behind)}
+
+    # ── Version drift (the "updates available" badge) ─────────────────────────
+    def versions(self) -> dict[str, Any]:
+        """Per companion service: deployed tag vs ITS OWN latest tag on ghcr (filtered
+        CI advances images independently) and whether it is behind. Drives the 'updates
+        available' badge. Non-companion images (custom workloads, oauth2-proxy) skipped."""
+        services = self.inventory().get("services", [])
+        out: list[dict[str, Any]] = []
+        behind = 0
+        for s in services:
+            img = s.get("image") or ""
+            if not img.startswith(COMPANION_PREFIX):
+                continue
+            dep = _image_tag(img)
+            latest = self._latest_for(img)
+            dk, lk = _semver_key(dep), (_semver_key(latest) if latest else None)
+            is_behind = bool(dk and lk and dk < lk)
+            behind += 1 if is_behind else 0
+            out.append({"name": s.get("name"), "deployed": dep, "latest": latest,
+                        "managed": _image_basename(img) in PHASE_MANAGED_BASENAMES,
+                        "behind": is_behind})
+        return {"services": out, "behind_count": behind}
 
     # ── Fusion config ─────────────────────────────────────────────────────────
     def set_fusion(self, payload: FusionConfigPayload) -> dict[str, Any]:
@@ -357,12 +684,7 @@ class NorthboundService:
                 "requests": {"cpu": "50m", "memory": "64Mi"},
                 "limits": {"cpu": "500m", "memory": "256Mi"},
             },
-            "readinessProbe": {
-                "httpGet": {"path": "/health", "port": port},
-                "initialDelaySeconds": 5,
-                "periodSeconds": 5,
-                "failureThreshold": 6,
-            },
+            **_adapter_probes(port),
         }
 
         pod_spec: dict[str, Any] = {
@@ -416,6 +738,12 @@ class NorthboundService:
         have = {e.name for e in req.env}
         env = list(req.env) + [e for e in self_reg if e.name not in have]
         self._apply_workload(POSITIONING_NS, req.name, req.image, req.port, env, req.image_pull_secret)
+        # Stateful adapters (wifi-positioning writes its calibration at runtime) get a
+        # PVC-backed store at deploy time, so a calibration set/imported in the adapter's
+        # OWN UI persists across restart/upgrade with no prior dashboard Configure. The
+        # service starts with an empty store and creates the file on first write.
+        if _image_basename(req.image) in _STATEFUL_DOCS:
+            self._ensure_writable_store(req.name, POSITIONING_NS)
         return {"status": "deployed", "name": req.name, "namespace": POSITIONING_NS, "self_registers": True}
 
     def deploy_workload(self, req) -> dict[str, Any]:
@@ -523,6 +851,61 @@ class NorthboundService:
             return {"available": True, "service": name, "namespace": ns, "contract": data}
         except Exception as e:  # 404 (no endpoint yet), unreachable, parse error
             return {"available": False, "service": name, "namespace": ns, "error": str(e)[:200]}
+
+    def discover_raw(self, name: str) -> dict[str, Any]:
+        """Raw vendor device records from an adapter's GET /discover?raw=1, for the
+        guided classify builder (operator sees the vendor's native field names to
+        author the mapping + classify predicates).
+
+        ADMIN-ONLY at the router: the raw payload is the vendor's own record and can
+        carry network secrets (Wittra `state.network.panid`, keys). It is returned to
+        the admin UI but NEVER logged and never persisted here.
+
+        Reached through the API-server service proxy like service_contract (the backend
+        is off-cluster so it cannot resolve *.svc). The `?raw=1` query cannot go through
+        connect_get_namespaced_service_proxy_with_path (it URL-encodes the `?` into the
+        path -> 404), so call_api carries it as a real query param. _preload_content=False
+        reads raw bytes: the client otherwise coerces the JSON body into a single-quoted
+        Python dict repr that json.loads rejects (same footgun as service_contract).
+        """
+        _validate_name(name)
+        svc_obj, ns = None, None
+        for cand in NORTHBOUND_NAMESPACES:
+            try:
+                for s in self.k8s.core.list_namespaced_service(namespace=cand).items:
+                    if s.metadata.name == name:
+                        svc_obj, ns = s, cand
+                        break
+            except Exception:
+                continue
+            if ns:
+                break
+        if ns is None:
+            raise GatewayError(404, f"service {name!r} not found")
+        port = next((p.port for p in (svc_obj.spec.ports or [])), None)
+        proxy_name = f"{name}:{port}" if port else name
+        try:
+            resp = self.k8s.core.api_client.call_api(
+                "/api/v1/namespaces/{namespace}/services/{name}/proxy/{path}",
+                "GET",
+                path_params={"namespace": ns, "name": proxy_name, "path": "discover"},
+                query_params=[("raw", "1")],
+                header_params={"Accept": "application/json"},
+                auth_settings=["BearerToken"],
+                _preload_content=False,
+                _return_http_data_only=True,
+            )
+            http = resp[0] if isinstance(resp, tuple) else resp
+            body = http.data
+            if isinstance(body, (bytes, bytearray)):
+                body = body.decode("utf-8")
+            return json.loads(body)
+        except GatewayError:
+            raise
+        except Exception as e:
+            # Do not echo the exception body verbatim: on a proxied vendor error it
+            # could contain the upstream payload. Keep it short and typed.
+            raise GatewayError(502, f"discover?raw=1 failed for {name!r}: {type(e).__name__}")
 
     def service_config(self, name: str) -> dict[str, Any]:
         """Contract schema + current values, for the guided setup.
@@ -766,10 +1149,70 @@ class NorthboundService:
         runtime = self._read_pod_file(name, ns, path)
         return {"name": name, "path": path, "content": runtime, "ephemeral": runtime is not None}
 
+    def _stateful_spec(self, name: str, ns: str) -> dict[str, str] | None:
+        """{env, path} for this adapter's runtime-written doc, or None. Bridge keyed by
+        image basename (_STATEFUL_DOCS) until the contract's `writable` flag reaches the
+        dashboard via a rebuilt /contract."""
+        try:
+            dep = self.k8s.apps.read_namespaced_deployment(name=name, namespace=ns)
+            return _STATEFUL_DOCS.get(_image_basename(dep.spec.template.spec.containers[0].image))
+        except Exception:
+            return None
+
+    def _writable_doc_path(self, name: str, ns: str) -> str | None:
+        spec = self._stateful_spec(name, ns)
+        return spec["path"] if spec else None
+
+    def _ensure_writable_store(self, name: str, ns: str = POSITIONING_NS) -> None:
+        """PVC-back a stateful adapter's runtime-written doc. The PVC is mounted at a
+        DEDICATED DIRECTORY (STORE_DIR) and the service's config-path env is redirected
+        to a file inside it — deliberately NOT a subPath mount over the default path: a
+        subPath into an empty PVC makes Kubernetes create a DIRECTORY there, which breaks
+        a service expecting a file. The service starts with an empty store and creates
+        the file on first write (import). Removes any prior subPath store. Idempotent.
+        See docs/known-issues/wifi-calibration-subpath-directory.md."""
+        spec = self._stateful_spec(name, ns)
+        if not spec:
+            return
+        pvc = f"{name}-data"
+        self.k8s.ensure_pvc(ns, pvc)
+        fname = spec["path"].rsplit("/", 1)[-1] or "file"
+        self.k8s.attach_dir_store(
+            ns, name, pvc, STORE_DIR, spec["env"], f"{STORE_DIR}/{fname}",
+            strip_paths=(spec["path"],), strip_init=("seed-store",), strip_volumes=("service-files",),
+        )
+
+    def _has_writable_store(self, name: str, ns: str = POSITIONING_NS) -> bool:
+        """True when the deployment mounts its `<name>-data` PVC at STORE_DIR (the b2
+        directory mount). A store present in the OLD subPath shape returns False so the
+        reconcile/enable path migrates it. Skips the pod-rolling patch when already b2."""
+        try:
+            dep = self.k8s.apps.read_namespaced_deployment(name=name, namespace=ns)
+            c = dep.spec.template.spec.containers[0]
+            return any((m.name == f"{name}-data" and m.mount_path == STORE_DIR)
+                       for m in (c.volume_mounts or []))
+        except Exception:
+            return False
+
+    def enable_persistence(self, name: str) -> dict[str, Any]:
+        """Attach the PVC-backed writable store to a stateful adapter (wifi-positioning),
+        so a calibration set in its OWN UI survives restart/upgrade. One-click bridge for
+        an instance deployed before deploy-time attach; new deploys get it automatically.
+        The rollout reuses any existing store (idempotent)."""
+        _validate_name(name)
+        ns = self._service_namespace(name)
+        spec = self._stateful_spec(name, ns)
+        if not spec:
+            raise ValueError(f"{name} has no runtime-written document to persist")
+        self._ensure_writable_store(name, ns)
+        return {"status": "persistent", "name": name, "path": f"{STORE_DIR}/{spec['path'].rsplit('/', 1)[-1]}"}
+
     def apply_service_file(self, name: str, path: str, content: str) -> dict[str, Any]:
         """Store `content` for the document at `path` in the `<name>-files`
         ConfigMap and mount it there (subPath). Idempotent strategic-merge, so
-        multiple file-fields accumulate in one ConfigMap / volume."""
+        multiple file-fields accumulate in one ConfigMap / volume. A document the
+        service WRITES at runtime (`_STATEFUL_DOCS`) is instead PVC-backed (seeded from
+        this ConfigMap) so the writes survive restart/upgrade."""
         _validate_name(name)
         if not path or not path.startswith("/"):
             raise ValueError("path must be an absolute container path")
@@ -782,6 +1225,15 @@ class NorthboundService:
         key = path.rsplit("/", 1)[-1] or "file"
         cm_name = f"{name}-files"
         self.k8s.apply_configmap(ns, cm_name, {key: content})
+
+        # Runtime-written doc (e.g. wifi calibration): back it with a PVC (dir mount +
+        # env redirect, see _ensure_writable_store) so the service's writes persist,
+        # instead of the read-only ConfigMap mount below.
+        if self._writable_doc_path(name, ns) == path:
+            self._ensure_writable_store(name, ns)
+            return {"status": "applied", "name": name, "config_map": cm_name,
+                    "mount": path, "persistent": True}
+
         # One "service-files" volume; one mount per document (merge key = mountPath).
         patch = {"spec": {"template": {"spec": {
             "volumes": [{"name": "service-files", "configMap": {"name": cm_name}}],

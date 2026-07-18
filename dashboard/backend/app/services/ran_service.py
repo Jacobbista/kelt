@@ -220,7 +220,16 @@ class RanService:
                 ips = entry.get("ips", [])
                 amf_phy_ip = ips[0].split("/")[0] if ips else None
 
-        enabled = br_exists and nad_exists and amf_has_phy
+        # Data-path attachment: the AMF's ovs-cni veth must actually be a port on
+        # br-ran. ovs-cni attaches n2phy at pod creation, so a br-ran rebuilt under
+        # a running AMF leaves the annotation present but the veth gone. br_ports is
+        # already fetched; a port that is not the NIC, a patch, or the bridge itself
+        # is the AMF veth. Without this, status reads green while NGAP is dead.
+        amf_attached = amf_has_phy and any(
+            p and p != "br-ran" and p != iface and not p.startswith("patch-")
+            for p in br_ports
+        )
+        enabled = br_exists and nad_exists and amf_has_phy and amf_attached
 
         amf_pod_ready = False
         try:
@@ -248,6 +257,7 @@ class RanService:
             "bridge_ports": br_ports,
             "nad_exists": nad_exists,
             "amf_has_physical_ran": amf_has_phy,
+            "amf_attached_to_bridge": amf_attached,
             "amf_physical_ip": amf_phy_ip,
             "ran_interface_detected": iface,
             "amf_pod_ready": amf_pod_ready,
@@ -359,6 +369,45 @@ class RanService:
         )
         self.k8s.restart_deployment(AMF_NAMESPACE, "upf-cloud")
         log.info("Removed PHYSICAL_RAN_SUBNET from UPF")
+
+    def _amf_veth_on_br_ran(self, iface: str) -> bool:
+        """True if br-ran carries the AMF's ovs-cni veth (a port that is not the
+        physical NIC, a patch, or the bridge itself). ovs-cni attaches n2phy at pod
+        sandbox creation, so if br-ran was rebuilt while the AMF was running the
+        port is orphaned and only an AMF restart re-attaches it."""
+        try:
+            out = self._ssh("sudo ovs-vsctl list-ports br-ran")
+        except RuntimeError:
+            return True  # cannot determine -> do not force a restart
+        for port in out.split():
+            p = port.strip()
+            if not p or p == "br-ran" or p == iface or p.startswith("patch-"):
+                continue
+            return True  # a veth -> AMF is attached
+        return False
+
+    def _persist_physical_ran_state(self, enabled: bool) -> None:
+        """Persist PHYSICAL_RAN_ENABLED to .testbed.env so a CLI `run-phase 04` (or
+        provision) agrees with this dashboard-managed live state and does NOT reset
+        the OVS DaemonSet to RAN_BRIDGE_MODE=disabled (which tears down br-ran).
+        Best-effort: a missing or read-only file must never fail enable/disable."""
+        try:
+            path = Path("/vagrant/.testbed.env")
+            lines = path.read_text().splitlines() if path.exists() else []
+            val = "true" if enabled else "false"
+            out, seen = [], False
+            for ln in lines:
+                if ln.startswith("PHYSICAL_RAN_ENABLED="):
+                    out.append(f"PHYSICAL_RAN_ENABLED={val}")
+                    seen = True
+                else:
+                    out.append(ln)
+            if not seen:
+                out.append(f"PHYSICAL_RAN_ENABLED={val}")
+            path.write_text("\n".join(out) + "\n")
+            log.info("Persisted PHYSICAL_RAN_ENABLED=%s to .testbed.env", val)
+        except Exception as exc:  # noqa: BLE001 - persistence is best-effort
+            log.warning("Could not persist PHYSICAL_RAN_ENABLED: %s", exc)
 
     # ── Enable / disable via Ansible + direct K8s patch ──────────
 
@@ -508,6 +557,30 @@ class RanService:
             prog("amf_annotation_patched", "ok", "Already existed")
             steps.append({"step": "amf_annotation_patched", "status": "ok (already existed)"})
 
+        # 3b. Re-attach the AMF to br-ran when its n2phy port is orphaned. ovs-cni
+        # attaches at pod creation, so if br-ran was (re)built under a running AMF
+        # (a CLI `run-phase 04` teardown, or this enable just recreated it), the
+        # annotation is present but the veth is gone from br-ran. Restart the AMF so
+        # ovs-cni re-attaches. Skipped above when the annotation was just added,
+        # because that patch already rolled the pod.
+        if amf_has_phy and (bridge_just_created or not self._amf_veth_on_br_ran(iface)):
+            prog("amf_reattach", "in_progress", "Re-attaching AMF to br-ran (restart)…")
+            self.k8s.restart_deployment(AMF_NAMESPACE, AMF_DEPLOYMENT)
+            # Wait until ovs-cni re-adds the AMF veth to br-ran, so the result this
+            # call reports (and the dashboard badge that reads it) reflects the real
+            # data path instead of the pre-restart state. Avoids the "red until manual
+            # reload" feedback gap during the ~15-40s AMF rollout.
+            attached = False
+            for i in range(20):  # ~60s
+                time.sleep(3)
+                if self._amf_veth_on_br_ran(iface):
+                    attached = True
+                    break
+                prog("amf_reattach", "in_progress", f"Waiting for AMF to re-attach to br-ran ({i + 1}/20)…")
+            steps.append({"step": "amf_reattach", "status": "ok" if attached else "warning"})
+            prog("amf_reattach", "ok" if attached else "warning",
+                 "AMF re-attached to br-ran" if attached else "AMF restart issued; re-attach not yet confirmed")
+
         # 4. UPF return route: only if missing
         if not upf_has_route:
             prog("upf_return_route", "in_progress", "Patching UPF and restarting…")
@@ -518,6 +591,8 @@ class RanService:
             prog("upf_return_route", "ok", "Already existed")
             steps.append({"step": "upf_return_route", "status": "ok (already existed)"})
 
+        # Persist so a CLI run-phase 04 / provision keeps physical RAN up (no teardown).
+        self._persist_physical_ran_state(True)
         return {"enabled": True, "steps": steps}
 
     def disable(self, on_progress: Callable[[str, str, str], None] | None = None) -> dict[str, Any]:
@@ -579,4 +654,6 @@ class RanService:
         steps.append({"step": "ovs_daemonset_reset", "status": "ok"})
         prog("ovs_daemonset_reset", "ok", "Done")
 
+        # Persist the disabled state so ansible runs agree (no surprise re-enable).
+        self._persist_physical_ran_state(False)
         return {"enabled": False, "steps": steps}

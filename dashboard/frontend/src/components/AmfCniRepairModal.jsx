@@ -43,7 +43,11 @@ export default function AmfCniRepairModal({ open, onClose, alert, onScale }) {
 
   if (!open) return null;
   const deployments = alert?.controllers?.deployments || [];
-  const replicasets = alert?.controllers?.replicasets || [];
+  const allReplicasets = alert?.controllers?.replicasets || [];
+  // Only active ReplicaSets (desired > 0) are actionable; the rest are rollout
+  // history (desired=0) and just clutter the manager.
+  const replicasets = allReplicasets.filter((r) => (r.desired ?? 0) > 0);
+  const inactiveRsCount = allReplicasets.length - replicasets.length;
   const reasons = alert?.reasons || [];
   const events = alert?.events || [];
   const stuckPods = alert?.stuck_pods || [];
@@ -122,7 +126,14 @@ export default function AmfCniRepairModal({ open, onClose, alert, onScale }) {
           </div>
 
           <div className="rounded border border-slate-800 bg-slate-950 p-2">
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">ReplicaSets</div>
+            <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+              ReplicaSets (active)
+              {inactiveRsCount > 0 && (
+                <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] font-normal normal-case tracking-normal text-slate-500">
+                  {inactiveRsCount} inactive (rollout history) hidden
+                </span>
+              )}
+            </div>
             <div className="space-y-2">
               {replicasets.map((controller) => {
                 const key = controllerKey(controller);
@@ -151,7 +162,7 @@ export default function AmfCniRepairModal({ open, onClose, alert, onScale }) {
                   </div>
                 );
               })}
-              {replicasets.length === 0 && <div className="text-xs text-slate-500">No AMF replicasets found.</div>}
+              {replicasets.length === 0 && <div className="text-xs text-slate-500">No active AMF replicasets.</div>}
             </div>
           </div>
         </div>

@@ -9,9 +9,14 @@ The split mirrors the role model in docs/security/iam.md (GET = viewer+admin,
 writes = admin only) at router-include time in app/main.py.
 """
 
+import json
+import queue
+import threading
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi.responses import StreamingResponse
+from kubernetes.client.exceptions import ApiException
 
 from app.config import settings
 from app.models import (
@@ -36,10 +41,70 @@ def _get_nb(k8s: K8sService = Depends(get_k8s_service)) -> NorthboundService:
     return NorthboundService(k8s)
 
 
+def _human_error(exc: Exception) -> str:
+    """Concise, UI-friendly message. A Kubernetes ApiException stringifies to a full
+    HTTP header + body dump; surface only its status message so the console shows a
+    readable line instead of a wall of headers."""
+    if isinstance(exc, ApiException):
+        try:
+            msg = (json.loads(exc.body) or {}).get("message") if exc.body else None
+            if msg:
+                return f"Kubernetes: {msg}"
+        except Exception:
+            pass
+        return f"Kubernetes API error {exc.status}: {exc.reason}"
+    return str(exc)
+
+
+@write_router.post("/update-all")
+def update_all(nb: NorthboundService = Depends(_get_nb)):
+    """Re-run phase 10 so every companion service rolls to its KELT-pinned image,
+    streaming progress as NDJSON ({phase, done, total, pct, line}). PVC/ConfigMap
+    state is preserved by the rollout. Catalog adapters (wifi/rest) are upgraded by
+    the caller after this completes."""
+    if not settings.allow_workload_create:
+        raise HTTPException(status_code=403, detail="Northbound update is disabled by policy")
+    write_audit("northbound.update_all", {})
+    q: queue.Queue = queue.Queue()
+    sentinel = None
+
+    def on_event(ev: dict[str, Any]) -> None:
+        q.put(ev)
+
+    def run() -> None:
+        try:
+            nb.update_all(on_event=on_event)
+            q.put({"result": {"status": "updated"}})
+        except Exception as exc:  # noqa: BLE001 - surfaced to the client as an event
+            q.put({"error": _human_error(exc)})
+        finally:
+            q.put(sentinel)
+
+    def gen():
+        t = threading.Thread(target=run)
+        t.start()
+        while True:
+            item = q.get()
+            if item is sentinel:
+                break
+            yield json.dumps(item) + "\n"
+
+    return StreamingResponse(
+        gen(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 # ── Reads (viewer or admin) ──────────────────────────────────────────────────
 @read_router.get("/services")
 def inventory(nb: NorthboundService = Depends(_get_nb)) -> dict[str, Any]:
     return nb.inventory()
+
+
+@read_router.get("/versions")
+def versions(nb: NorthboundService = Depends(_get_nb)) -> dict[str, Any]:
+    return nb.versions()
 
 
 @read_router.get("/adapters")
@@ -119,6 +184,17 @@ def list_assets(
     return _gateway_call(lambda: nb.list_assets(token))
 
 
+# Distinct literal path (not the {asset_id}/details template): discovered-but-not-yet-
+# onboarded devices, for the Assets "Discover devices" onboarding flow.
+@write_router.get("/assets/discoverable")
+def discoverable_assets(
+    authorization: str | None = Header(default=None),
+    nb: NorthboundService = Depends(_get_nb),
+) -> dict[str, Any]:
+    token = _bearer_token(authorization)
+    return _gateway_call(lambda: nb.discoverable_assets(token))
+
+
 @write_router.get("/assets/{asset_id}/details")
 def asset_details(
     asset_id: str,
@@ -127,6 +203,22 @@ def asset_details(
 ) -> dict[str, Any]:
     token = _bearer_token(authorization)
     return _gateway_call(lambda: nb.asset_details(token, asset_id))
+
+
+# Raw vendor device records from an adapter's /discover?raw=1, for the guided
+# classify builder (operator points mapping + classify at the vendor's own field
+# names). Admin-only (write_router). No gateway Bearer: this is an in-cluster
+# service-proxy call, not a CAMARA gateway call. The raw payload can carry vendor
+# network secrets, so it is returned to the admin UI but never logged.
+@write_router.get("/services/{name}/discover-raw")
+def discover_raw(
+    name: str,
+    nb: NorthboundService = Depends(_get_nb),
+) -> dict[str, Any]:
+    try:
+        return nb.discover_raw(name)
+    except GatewayError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail[:300])
 
 
 @write_router.put("/assets")
@@ -162,6 +254,17 @@ def upgrade_adapter(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     write_audit("northbound.adapter.upgrade", {"name": name, "image": req.image})
+    return result
+
+
+@write_router.post("/services/{name}/enable-persistence")
+def enable_persistence(name: str, nb: NorthboundService = Depends(_get_nb)) -> dict[str, Any]:
+    # Attach the PVC-backed store to a stateful adapter (wifi calibration). Admin only.
+    try:
+        result = nb.enable_persistence(name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    write_audit("northbound.service.enable_persistence", {"name": name})
     return result
 
 

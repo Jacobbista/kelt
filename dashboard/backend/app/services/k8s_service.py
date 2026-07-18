@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -106,13 +107,16 @@ class K8sService:
     # container name equals the deployment name in every northbound manifest.
     # Strategic-merge leaves inline env and volumes untouched.
     def set_workload_image(self, namespace: str, name: str, image: str,
-                           envfrom: list[str] | None = None) -> None:
+                           envfrom: list[str] | None = None,
+                           probes: dict[str, Any] | None = None) -> None:
         container: dict[str, Any] = {"name": name, "image": image}
         if envfrom:
             container["envFrom"] = [{"configMapRef": {"name": envfrom[0], "optional": True}}]
             if len(envfrom) > 1:
                 container["envFrom"].append({"secretRef": {"name": envfrom[1], "optional": True}})
-        patch = {"spec": {"template": {"spec": {"containers": [container]}}}}
+        if probes:
+            container.update(probes)  # e.g. readinessProbe/livenessProbe, so an upgrade
+        patch = {"spec": {"template": {"spec": {"containers": [container]}}}}  # also fixes an old probe
         self.apps.patch_namespaced_deployment(name=name, namespace=namespace, body=patch)
 
     # Delete specific keys from a ConfigMap / Secret (read-modify-replace, so the
@@ -203,6 +207,70 @@ class K8sService:
                 if ce.status != 409:
                     raise
                 self.core.patch_namespaced_config_map(name=name, namespace=namespace, body=body)
+
+    def ensure_pvc(self, namespace: str, name: str, size: str = "50Mi",
+                   access_mode: str = "ReadWriteOnce") -> None:
+        """Create a small RWO PVC if absent (idempotent). Backs a service's
+        runtime-written document (e.g. wifi calibration) so it survives pod
+        restart/upgrade."""
+        try:
+            self.core.read_namespaced_persistent_volume_claim(name=name, namespace=namespace)
+            return
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
+        body = client.V1PersistentVolumeClaim(
+            metadata=client.V1ObjectMeta(name=name, namespace=namespace),
+            spec=client.V1PersistentVolumeClaimSpec(
+                access_modes=[access_mode],
+                resources=client.V1ResourceRequirements(requests={"storage": size}),
+            ),
+        )
+        try:
+            self.core.create_namespaced_persistent_volume_claim(namespace=namespace, body=body)
+        except ApiException as ce:
+            if ce.status != 409:  # already created in a race
+                raise
+
+    def attach_dir_store(self, namespace: str, name: str, pvc: str, mount_dir: str,
+                         env_name: str, env_value: str, *, strip_paths: tuple[str, ...] = (),
+                         strip_init: tuple[str, ...] = (), strip_volumes: tuple[str, ...] = ()) -> None:
+        """Mount `pvc` at the directory `mount_dir` on the deployment's first container
+        and set env `env_name=env_value` (so the service writes its runtime doc into the
+        PVC-backed dir). A DIRECTORY mount, deliberately not a subPath: a subPath into an
+        empty PVC makes Kubernetes create the target as a directory, which breaks a
+        service expecting a file. Read-modify-REPLACE (not strategic-merge) so any prior
+        store artifacts named in strip_* are removed rather than accumulated. Idempotent.
+
+        The whole-object replace is optimistic-concurrency checked, so it returns 409
+        Conflict when it races a rollout in flight (Update all patches the image, then
+        attaches the store while the deployment controller is still bumping status).
+        Retry-on-conflict: re-read the latest object and re-apply, the standard fix.
+        See docs/known-issues/wifi-calibration-subpath-directory.md."""
+        for attempt in range(5):
+            dep = self.apps.read_namespaced_deployment(name=name, namespace=namespace)
+            ps = dep.spec.template.spec
+            c = ps.containers[0]
+            keep_vol = {pvc, *strip_volumes}
+            ps.volumes = [v for v in (ps.volumes or []) if v.name not in keep_vol]
+            ps.volumes.append(client.V1Volume(
+                name=pvc, persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(claim_name=pvc)))
+            if ps.init_containers:
+                ps.init_containers = [ic for ic in ps.init_containers if ic.name not in set(strip_init)] or None
+            strip_mp = {mount_dir, *strip_paths}
+            c.volume_mounts = [m for m in (c.volume_mounts or [])
+                               if m.name != pvc and m.mount_path not in strip_mp]
+            c.volume_mounts.append(client.V1VolumeMount(name=pvc, mount_path=mount_dir))
+            c.env = [e for e in (c.env or []) if e.name != env_name]
+            c.env.append(client.V1EnvVar(name=env_name, value=env_value))
+            try:
+                self.apps.replace_namespaced_deployment(name=name, namespace=namespace, body=dep)
+                return
+            except ApiException as exc:
+                if exc.status == 409 and attempt < 4:
+                    time.sleep(0.3 * (attempt + 1))
+                    continue
+                raise
 
     def list_deployments(self, namespace: str, label_selector: str = "") -> list[dict[str, Any]]:
         deps = self.apps.list_namespaced_deployment(

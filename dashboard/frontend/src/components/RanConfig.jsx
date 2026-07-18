@@ -8,12 +8,15 @@ import {
   deactivateUeransimUe,
   deleteUeransimGnb,
   deleteUeransimUe,
+  clearGnbConsole,
   disablePhysicalModeStream,
   disableUeransimMode,
   enablePhysicalModeStream,
   enableUeransimMode,
+  getGnbConsole,
   getRanModesStatus,
   getUeransimDefaults,
+  setGnbConsole,
 } from "../api";
 import { useOperations } from "../context/OperationsContext";
 // Loader: reusable 5G-style loader. Usage: <Loader size="sm" label="…" elapsed={sec} />
@@ -135,6 +138,138 @@ function AddCard({ onClick }) {
       onClick={onClick}
     >
       <span className="text-3xl text-slate-500">+</span>
+    </div>
+  );
+}
+
+// gNB management console: expose the physical gNB's own web UI (an IP on the RAN
+// management LAN, not browser-reachable) at gnb.<base> through the dynamic apps
+// route. The operator types the appliance IP:port; KELT assumes no management
+// subnet exists, so an empty value means no surface. Self-contained: fetches and
+// mutates its own state. Behind the same Cloudflare Access perimeter as the rest.
+function GnbConsoleCard() {
+  const [state, setState] = useState(null);
+  const [host, setHost] = useState("");
+  const [port, setPort] = useState("8400");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const load = useCallback(() => {
+    getGnbConsole()
+      .then((s) => {
+        setState(s);
+        if (s?.origin) {
+          const [h, p] = String(s.origin).split(":");
+          setHost(h || "");
+          setPort(p || "8400");
+        }
+      })
+      .catch(() => {});
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const save = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      setState(await setGnbConsole(host.trim(), parseInt(port, 10) || 0));
+    } catch (e) {
+      setErr(String(e?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const clear = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      setState(await clearGnbConsole());
+      setHost("");
+      setPort("8400");
+    } catch (e) {
+      setErr(String(e?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-slate-700 bg-slate-900/60 p-4">
+      <div className="mb-1 flex items-center justify-between">
+        <h3 className="font-semibold text-slate-200">gNB Management Console</h3>
+        {state?.configured
+          ? (state?.reachable === false
+              ? <Badge ok={false}>exposed · unreachable</Badge>
+              : <Badge ok>exposed{state?.reachable ? " · reachable" : ""}</Badge>)
+          : <Badge ok={false}>not exposed</Badge>}
+      </div>
+      <p className="mb-3 text-xs text-slate-400">
+        Publish the gNB/femtocell web UI at its own subdomain through the front-door.
+        Enter the appliance management address reachable from the worker (its
+        management LAN IP, not the RAN one). Reached only behind the front-door
+        perimeter (Cloudflare Access) plus the appliance's own login.
+      </p>
+      <div className="flex flex-wrap items-end gap-3">
+        <Field label="Management IP">
+          <Input value={host} onChange={setHost} placeholder="192.168.5.100" className="w-40" />
+        </Field>
+        <Field label="Port">
+          <Input value={port} onChange={setPort} placeholder="8400" className="w-24" />
+        </Field>
+        <Btn onClick={save} disabled={busy || !host.trim()}>{busy ? "Checking…" : "Expose"}</Btn>
+        {state?.configured && (
+          <Btn onClick={clear} disabled={busy} variant="danger">Remove</Btn>
+        )}
+      </div>
+      {/* Persistent hint: stays visible while typing (unlike the field placeholder). */}
+      <p className="mt-2 text-[11px] text-slate-500">
+        Example <span className="font-mono text-slate-400">192.168.5.100:8400</span> — find it in the
+        femtocell's own admin (its management interface), not the <span className="font-mono">.6</span>
+        {" "}RAN address. KELT probes it on Expose to confirm it is reachable.
+      </p>
+      {state?.url && (
+        <p className="mt-3 text-xs text-slate-400">
+          {state?.reachable === false ? "Set, but NOT reachable from KELT (check the IP/port and that the worker can reach it). " : "Reachable at "}
+          <a href={state.url} target="_blank" rel="noreferrer" className="font-mono text-teal-300 hover:underline">
+            {state.url.replace(/^https?:\/\//, "")}
+          </a>{" "}
+          (requires the apps route enabled).
+        </p>
+      )}
+      {err && <div className="mt-3 rounded border border-rose-700/50 bg-rose-950/30 px-3 py-2 text-xs text-rose-300">{err}</div>}
+    </div>
+  );
+}
+
+// Read-only cheat-sheet: the values the operator must set on the physical gNB's RAN
+// interface so it attaches to this core. All derived from KELT's own RAN config (the
+// subnet + AMF IP the dashboard already shows), so there is nothing to guess and no
+// need to open all.yml. The RAN transport is L2 bridge + worker L3 routing (no NAT),
+// so the gNB points NGAP straight at the AMF's real address.
+function GnbSideConfigCard({ subnet, amfIp }) {
+  const sn = subnet || "192.168.6.0/24";
+  const gw = sn.replace(/\.\d+(\/\d+)?$/, ".1");
+  const rows = [
+    ["RAN interface IP", `a free static address in ${sn}`],
+    ["Default gateway", gw],
+    ["AMF / NGAP (SCTP)", `${amfIp || "192.168.6.150"} : 38412`],
+    ["User-plane route", `10.203.0.0/24 via ${gw}`],
+  ];
+  return (
+    <div className="rounded-xl border border-slate-700 bg-slate-900/60 p-4">
+      <h3 className="mb-1 font-semibold text-slate-200">Configure on your gNB</h3>
+      <p className="mb-3 text-xs text-slate-400">
+        Set these on the physical gNB/femtocell's RAN interface so it attaches to this
+        core. They come from KELT's own config; no need to edit any file.
+      </p>
+      <div className="space-y-1.5">
+        {rows.map(([k, v]) => (
+          <div key={k} className="flex justify-between gap-3 text-xs">
+            <span className="text-slate-500">{k}</span>
+            <span className="font-mono text-slate-200 text-right">{v}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -272,7 +407,8 @@ export default function RanConfig({ activeTab = "physical" }) {
           <Badge ok={phys?.bridge_exists}>OVS br-ran</Badge>
           <Badge ok={phys?.nad_exists}>NAD n2-physical</Badge>
           <Badge ok={phys?.amf_has_physical_ran}>AMF annotation</Badge>
-          {phys?.enabled && <Badge ok={phys?.upf_has_return_route}>UPF return route</Badge>}
+          {phys?.amf_has_physical_ran && <Badge ok={phys?.amf_attached_to_bridge}>AMF ↔ br-ran (data path)</Badge>}
+          {phys?.amf_has_physical_ran && <Badge ok={phys?.upf_has_return_route}>UPF return route</Badge>}
         </div>
         <div className="rounded bg-slate-950 p-3 space-y-1.5 mb-4">
           <div className="flex justify-between text-xs"><span className="text-slate-500">AMF Physical IP</span><span className="text-slate-200 font-mono">{cfg.amf_physical_ran_ip}</span></div>
@@ -544,6 +680,10 @@ export default function RanConfig({ activeTab = "physical" }) {
           </div>
         )}
       </div>
+      <div className="grid gap-5 lg:grid-cols-2">
+        <GnbSideConfigCard subnet={cfg.physical_ran_subnet} amfIp={cfg.amf_physical_ran_ip} />
+        <GnbConsoleCard />
+      </div>
     </div>
   );
 
@@ -690,7 +830,7 @@ export default function RanConfig({ activeTab = "physical" }) {
   );
 
   return (
-    <div className="mx-auto max-w-6xl space-y-4 overflow-y-auto pb-8" style={{ maxHeight: "calc(100vh - 8rem)" }}>
+    <div className="mx-auto max-w-6xl space-y-4 pb-8">
       {error && <div className="rounded border border-rose-700 bg-rose-950/50 p-3 text-sm text-rose-300">{error}</div>}
       {warnings.includes("coexistence_active") && (
         <div className="rounded border border-amber-700 bg-amber-950/40 p-3 text-sm text-amber-200">

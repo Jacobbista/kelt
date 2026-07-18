@@ -17,22 +17,36 @@ import threading
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
+from pydantic import BaseModel
 
 from app.config import settings
 from app.models import AppDeployRequest
-from app.services.apps_service import AppsService
+from app.services.apps_service import AppDeployError, AppsService
 from app.services.audit import write_audit
 from app.services.k8s_service import K8sService, get_k8s_service
+
+
+class GnbConsoleRequest(BaseModel):
+    host: str
+    port: int = 8400
 
 log = logging.getLogger(__name__)
 
 read_router = APIRouter(prefix="/api/v1/apps", tags=["apps"])
 write_router = APIRouter(prefix="/api/v1/apps", tags=["apps"])
+# Unauthenticated: only exposed app names + public URLs, for the pre-auth
+# front-door welcome page (same data the static service catalogue already shows).
+public_router = APIRouter(prefix="/api/v1/apps", tags=["apps"])
 
 
 def _get_apps(k8s: K8sService = Depends(get_k8s_service)) -> AppsService:
     return AppsService(k8s)
+
+
+@public_router.get("/public")
+def public_apps(svc: AppsService = Depends(_get_apps)) -> dict[str, Any]:
+    return svc.public_apps()
 
 
 @read_router.get("")
@@ -64,6 +78,23 @@ def registry_credentials(svc: AppsService = Depends(_get_apps)) -> dict[str, Any
     # Admin-only (write_router): the registry basic-auth so an admin can docker push.
     write_audit("apps.registry_credentials.view", {})
     return svc.registry_credentials()
+
+
+@write_router.get("/starter-kit")
+def starter_kit(svc: AppsService = Depends(_get_apps)) -> Response:
+    # Admin-only: zip of README + .env.example + deploy.sh, prefilled with the
+    # registry host, handed to an app developer to build and push their image.
+    return Response(
+        content=svc.starter_kit_zip(),
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=kelt-edge-app.zip"},
+    )
+
+
+@write_router.get("/registry/images")
+def registry_images(svc: AppsService = Depends(_get_apps)) -> dict[str, Any]:
+    # Admin-only: lists repos/tags in the local registry (needs the basic-auth creds).
+    return svc.registry_images()
 
 
 @write_router.post("/provision")
@@ -102,6 +133,58 @@ def provision(svc: AppsService = Depends(_get_apps)):
         media_type="application/x-ndjson",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# gNB management console: register/clear the physical gNB's web UI as an external
+# endpoint reached at gnb.<base> via the dynamic apps route (no front-door change).
+# Path is two segments so it never collides with the /{name} delete route below.
+@read_router.get("/updates")
+def app_updates(svc: AppsService = Depends(_get_apps)) -> dict[str, Any]:
+    # Per app: is a newer image present in the registry for its tag (digest differs
+    # from the running pod)? Best-effort; drives the "update available" suggestion.
+    return svc.check_updates()
+
+
+class SetImageRequest(BaseModel):
+    image: str
+
+
+@write_router.put("/{name}/image")
+def set_app_image(name: str, req: SetImageRequest, svc: AppsService = Depends(_get_apps)) -> dict[str, Any]:
+    # Retarget the app to a chosen registry tag (date-ordered picker in the UI),
+    # keeping its other settings; rollout pulls it (imagePullPolicy: Always).
+    if not settings.allow_workload_create:
+        raise HTTPException(status_code=403, detail="App management is disabled by policy")
+    try:
+        result = svc.set_app_image(name, req.image)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    write_audit("apps.set_image", {"name": name, "image": req.image})
+    return result
+
+
+@read_router.get("/gnb/console")
+def gnb_console(svc: AppsService = Depends(_get_apps)) -> dict[str, Any]:
+    return svc.gnb_console_status()
+
+
+@write_router.put("/gnb/console")
+def set_gnb_console(req: GnbConsoleRequest, svc: AppsService = Depends(_get_apps)) -> dict[str, Any]:
+    if not settings.allow_workload_create:
+        raise HTTPException(status_code=403, detail="gNB console management is disabled by policy")
+    try:
+        result = svc.set_gnb_console(req.host, req.port)
+    except AppDeployError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail)
+    write_audit("apps.gnb_console.set", {"origin": f"{req.host}:{req.port}"})
+    return result
+
+
+@write_router.delete("/gnb/console")
+def clear_gnb_console(svc: AppsService = Depends(_get_apps)) -> dict[str, Any]:
+    result = svc.clear_gnb_console()
+    write_audit("apps.gnb_console.clear", {})
+    return result
 
 
 @write_router.delete("/{name}")

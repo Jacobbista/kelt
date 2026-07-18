@@ -158,7 +158,7 @@ class WorkloadDeployRequest(BaseModel):
 
 class AppDeployRequest(BaseModel):
     # Edge apps platform (phase 12): deploy an operator's own image as a pod in the
-    # apps namespace. When `expose` is true the Service is published on port 80
+    # mec namespace. When `expose` is true the Service is published on port 80
     # (-> container `port`) so the front-door reaches it at <name>.<base> without
     # knowing the container port. Readiness is a TCP probe (arbitrary images need
     # not expose /health). See docs/architecture/edge-apps.md.
@@ -169,6 +169,14 @@ class AppDeployRequest(BaseModel):
     env: list[DeployEnvVar] = Field(default_factory=list)
     image_pull_secret: str | None = None
     expose: bool = True
+    # MEC data network (n6m): attach a secondary interface so UEs reach the app over
+    # the 5G user plane (UPF -> n6m). `mec_ip` requests a fixed address from the
+    # reserved band (whereabouts honors `ips`); empty = dynamic pool IP. `udp_ports`
+    # are extra container UDP ports (e.g. an RTP video ingest) that arrive on n6m,
+    # not via the front-door. See docs/architecture/edge-apps.md and 5g-interfaces.md.
+    attach_mec: bool = False
+    mec_ip: str | None = None
+    udp_ports: list[int] = Field(default_factory=list)
 
 
 class ServiceConfigRequest(BaseModel):

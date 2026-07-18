@@ -36,7 +36,7 @@ function StatusPill({ status }) {
  * cards render dimmed and non-interactive. Plain card styling consistent with
  * NfCard, the house idiom for an ops dashboard.
  */
-export default function ServiceCard({ icon: Icon, title, subtitle, status = "planned", stats = [], statusDots = [], to, cta = "manage" }) {
+export default function ServiceCard({ icon: Icon, title, subtitle, status = "planned", stats = [], statusDots = [], to, cta = "manage", badge = null }) {
   const planned = status === "planned";
   const Wrapper = to && !planned ? Link : "div";
   const wrapperProps = to && !planned ? { to } : {};
@@ -56,6 +56,7 @@ export default function ServiceCard({ icon: Icon, title, subtitle, status = "pla
           <div className="flex items-center gap-2">
             <h3 className="truncate text-sm font-semibold text-slate-100">{title}</h3>
             <StatusPill status={status} />
+            {badge}
           </div>
           <p className="mt-0.5 text-xs text-slate-400">{subtitle}</p>
         </div>

@@ -34,6 +34,7 @@ from app.routers.northbound import read_router as northbound_read_router
 from app.routers.northbound import write_router as northbound_write_router
 from app.routers.apps import read_router as apps_read_router
 from app.routers.apps import write_router as apps_write_router
+from app.routers.apps import public_router as apps_public_router
 from app.routers.branding import read_router as branding_read_router
 from app.routers.branding import write_router as branding_write_router
 from app.routers.selfupdate import read_router as selfupdate_read_router
@@ -115,6 +116,7 @@ app.include_router(time_sync_router,   dependencies=_viewer)
 app.include_router(experiments_router, dependencies=_viewer)
 # Northbound console reads (inventory, adapter registry, contract guidance).
 app.include_router(northbound_read_router, dependencies=_viewer)
+app.include_router(apps_public_router)  # unauthenticated: welcome-page app list
 app.include_router(apps_read_router, dependencies=_viewer)
 app.include_router(branding_read_router, dependencies=_viewer)
 # Dashboard self-update status (deployed-vs-registry for frontend/docs).

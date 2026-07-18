@@ -2,15 +2,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { IconArrowLeft, IconRefresh, IconTrash } from "../components/icons";
-import { Panel, Modal, Banner, CopyBlock, Tabs, inputCls, btn } from "../components/ui";
+import { Panel, Collapsible, Modal, Banner, Tabs, Field, Toggle, inputCls, btn } from "../components/ui";
 import { useToast } from "../context/ToastContext";
+import { useConfirm } from "../context/ConfirmContext";
+import { env } from "../runtime-env";
+import LogViewer from "../components/LogViewer";
 
 const TABS = [
   { id: "status", label: "Status" },
   { id: "adapters", label: "Adapters" },
   { id: "assets", label: "Assets" },
-  { id: "engine", label: "Engine" },
-  { id: "build", label: "Build your own" },
 ];
 import {
   getNorthboundServices,
@@ -24,12 +25,17 @@ import {
   applyNorthboundServiceFile,
   unregisterNorthboundAdapter,
   upgradeNorthboundAdapter,
+  enableNorthboundPersistence,
+  updateAllNorthboundStream,
+  getNorthboundVersions,
   deleteNorthboundWorkload,
   deployNorthboundImage,
   setNorthboundFusion,
   rolloutNorthboundManaged,
   getNorthboundAssets,
   setNorthboundAssets,
+  getNorthboundDiscoverable,
+  getNorthboundDiscoverRaw,
 } from "../api";
 
 // Generic adapters published by 5g-northbound that an operator can deploy on
@@ -41,14 +47,16 @@ import {
 const CATALOG = [
   {
     name: "wifi-positioning",
-    image: "ghcr.io/jacobbista/5g-northbound/wifi-positioning:0.6.0",
+    // Deploy-time default image; injected from all.yml (northbound_image_tags) via
+    // env-config.js. Fallback tracks the same baseline for an un-injected bundle.
+    image: env("VITE_NB_WIFI_IMAGE", "ghcr.io/jacobbista/5g-northbound/wifi-positioning:0.8.15"),
     kind: "singleton",
     adapterKind: "wifi",
     blurb: "Wi-Fi RSSI positioning source. Deploy one.",
   },
   {
     name: "rest-adapter",
-    image: "ghcr.io/jacobbista/5g-northbound/rest-adapter:0.6.0",
+    image: env("VITE_NB_REST_ADAPTER_IMAGE", "ghcr.io/jacobbista/5g-northbound/rest-adapter:0.8.18"),
     kind: "template",
     adapterKind: "", // per vendor: operator sets it (e.g. uwb for Wittra)
     blurb: "Generic wrapper around a vendor REST API (e.g. Wittra). Deploy one per vendor; name it after the vendor and point it at the vendor API in the env below.",
@@ -65,22 +73,11 @@ const ADAPTER_STATE = {
   stale: { cls: "bg-amber-500/15 text-amber-300", label: "stale" },
 };
 
-// Catalog adapters (wifi-positioning, rest-adapter) are deployed at runtime, not
-// by the phase, so they drift behind the current KELT release. Compare a deployed
-// image to its catalog (KELT-pinned) tag; return the recommended image when behind.
-// Matched by image basename, so a per-vendor rest-adapter (e.g. "wittra") still
-// maps to the rest-adapter entry. Managed/phase services are not in the catalog,
-// so this never flags them (their upgrade path is Ansible). Global cross-component
-// version management is a separate, deferred feature (see docs/roadmap.md).
+// Image tag/basename helpers. Drift ("is this behind the current release?") is
+// computed by the backend against ghcr (GET /versions), not from the CATALOG pins;
+// the CATALOG below is only the deploy-time default image for a catalog adapter.
 const imgBasename = (image) => (image || "").split("/").pop().split("@")[0].split(":")[0];
 const imgTag = (image) => { const p = (image || "").split(":"); return p.length > 1 ? p[p.length - 1] : ""; };
-function catalogUpgrade(image) {
-  const cat = CATALOG.find((c) => imgBasename(c.image) === imgBasename(image));
-  if (!cat) return null;
-  const target = imgTag(cat.image);
-  const current = imgTag(image);
-  return current && target && current !== target ? { current, target, image: cat.image } : null;
-}
 
 const PHASE_DOT = {
   Running: "bg-emerald-400",
@@ -100,29 +97,31 @@ const KIND_BADGE = {
   internal: { cls: "bg-slate-700/60 text-slate-400", label: "internal" },
 };
 
-// Default subdomain inferred when a service's contract does not declare one. With
-// a wildcard tunnel (*.<base>) any of these route, so inferring is safe; the
-// contract's `subdomain` field overrides. ONE config = the base domain, derived
-// from the dashboard's own hostname (its parent domain). See external-access.md.
-const SUBDOMAIN_DEFAULT = {
-  "camara-gateway": "api",
+// Per-service label SUFFIX (not the full subdomain). KELT serves every surface at
+// <prefix>-<suffix>.<base> (e.g. kelt-camara.<base>); the contract's `subdomain`
+// field overrides the suffix when present. See docs/security/external-access.md.
+const SUBDOMAIN_SUFFIX = {
+  "camara-gateway": "camara",
   "positioning-demo": "demo",
   "placement-editor": "placement",
   "oauth2-proxy-placement": "placement",
 };
 
-// Resolve a service's public URL = <subdomain>.<base>, where base is the parent
-// domain of the dashboard's own hostname and subdomain is the contract default
-// (s.subdomain) or the inferred default. Null for internal services, or when the
-// dashboard is reached by IP/localhost (no domain to derive a subdomain from).
+// Resolve a service's public URL = <prefix>-<suffix>.<base>, matching the front-door
+// routes. base + prefix are derived from the dashboard's OWN hostname (it is served
+// at <prefix>-dashboard.<base> or <prefix>-dev.<base>), so a single config (the base
+// domain) drives every link with no hardcoded origin. Null for internal services or
+// when reached by IP/localhost. See docs/security/external-access.md.
 function publicUrl(s) {
   if (s.kind !== "ui" && s.kind !== "api") return null;  // internal / no-contract: no public link
   const { protocol, hostname } = window.location;
   if (/^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) || hostname === "localhost") return null;
-  const sub = s.subdomain || SUBDOMAIN_DEFAULT[s.name];
-  const base = hostname.split(".").slice(1).join(".");
-  if (!sub || !base) return null;
-  const host = `${sub}.${base}`;
+  const labels = hostname.split(".");
+  const base = labels.slice(1).join(".");
+  const prefix = labels[0].replace(/-(dashboard|dev)$/, "");  // kelt-dashboard -> kelt
+  const suffix = s.subdomain || SUBDOMAIN_SUFFIX[s.name];
+  if (!suffix || !base || !prefix) return null;
+  const host = `${prefix}-${suffix}.${base}`;
   return { url: `${protocol}//${host}${s.kind === "api" ? "/docs" : "/"}`, label: host };
 }
 
@@ -133,13 +132,348 @@ function publicUrl(s) {
 // were never routed. See docs/security/external-access.md.
 
 // Asset Identity Map editor (admin). The gateway is the authority (GET/PUT /assets,
-// PVC-backed); PUT replaces the store, so we load-all, edit, save-all. Enums mirror
-// the upstream schema/asset.schema.json (v2); the gateway validates authoritatively.
+// PVC-backed); PUT replaces the store, so we load-all, edit, save-all. The field
+// model + enums mirror the upstream schema/asset.schema.json (v2); the gateway
+// validates authoritatively. The gateway serves no asset-schema endpoint, so the
+// HELP copy below is a hand-kept mirror of that schema's field descriptions.
 const ASSET_KINDS = ["uwb-tag", "tool", "pallet", "forklift", "asset", "ue"];
 const ASSET_SOURCES = ["wittra", "wifi", "fiveg", "gnss", "mock"];
-const EMPTY_ASSET = { asset_id: "", positioning_id: "", kind: "asset", source: "mock", org: "", label: "", simulated: false };
+// org defaults to the testbed's CAMARA tenant (camara_org, injected as VITE_CAMARA_ORG)
+// so onboarded assets land in the one tenant instead of starting blank. See docs/security/iam.md.
+const EMPTY_ASSET = { asset_id: "", positioning_id: "", kind: "asset", source: "mock", org: env("VITE_CAMARA_ORG", "demo"), label: "", simulated: false, metadata: {} };
 const ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
 const ORG_RE = /^[a-z0-9-]{1,64}$/;
+// One-line guidance per field, condensed from the upstream asset.schema.json
+// descriptions. The assetId -> positioning_id indirection is the part operators trip on.
+const HELP = {
+  asset_id: "Public CAMARA handle the consumer queries by (device.assetId). A business id like pkg-4471, not a phone number.",
+  positioning_id: "The id the chosen adapter fetches this device by: the vendor-native device id (used verbatim in the adapter's API call), or the engine track id for a mock source.",
+  kind: "Entity class, surfaced in the CAMARA profile so a consumer knows what it is tracking.",
+  source: "Routes the asset: the engine serves it from the registered adapter whose name equals this (?source=). Pick a deployed adapter.",
+  org: "Tenant. The gateway matches it against the token org claim, so a consumer sees only its own org's assets.",
+  simulated: "Wired to a synthetic/demo source (mock). Shows a MOCK badge; does not change routing.",
+};
+
+// Guided editor for one asset. Self-contained form state (including free-form
+// metadata rows) so the parent only handles the assembled asset on save. Built from
+// the upstream asset.schema.json field descriptions (see HELP above).
+function AssetModal({ initial, isNew, busy, onSave, onClose }) {
+  const [form, setForm] = useState(() => ({ ...EMPTY_ASSET, ...initial }));
+  const [meta, setMeta] = useState(() =>
+    Object.entries(initial?.metadata || {}).map(([k, v]) => ({ k, v: String(v) })));
+  const [step, setStep] = useState(0);
+  // Live adapter registry: `source` ROUTES (v0.8.0 the engine serves the asset from
+  // the adapter whose ADAPTER_NAME == source), so the picker offers the names of
+  // registered adapters, not a free modality string. See docs/architecture/positioning-adapters.md.
+  const [adapters, setAdapters] = useState([]);
+  useEffect(() => {
+    getNorthboundAdapters().then((a) => setAdapters(Array.isArray(a) ? a : [])).catch(() => {});
+  }, []);
+  const set = (patch) => setForm((f) => ({ ...f, ...patch }));
+
+  // A mock adapter feeds synthetic data; pre-tick simulated (still editable) so the
+  // MOCK badge matches reality without a second manual step.
+  const onSource = (source) => set({ source, simulated: source.startsWith("mock") ? true : form.simulated });
+
+  // Options = live adapter names (the routing key). Keep the current value selectable
+  // even if its adapter is offline, and fall back to the known modalities when nothing
+  // is registered yet so the form stays usable in a cold stack.
+  const liveNames = adapters.map((a) => a.name).filter(Boolean);
+  const stateOf = Object.fromEntries(adapters.map((a) => [a.name, a.state]));
+  const sourceOptions = Array.from(new Set([...(liveNames.length ? liveNames : ASSET_SOURCES), form.source].filter(Boolean)));
+  const sourceRouted = liveNames.includes(form.source) && stateOf[form.source] === "live";
+  const sourceHint = liveNames.length
+    ? (liveNames.includes(form.source)
+        ? `Routes to adapter "${form.source}"${stateOf[form.source] && stateOf[form.source] !== "live" ? ` (${stateOf[form.source]})` : " · live"}.`
+        : `No registered adapter named "${form.source}". Deploy one (Build your own) or pick a live source.`)
+    : "No adapters registered yet. Deploy one in Build your own; the values below are known modalities.";
+
+  // Progressive steps: identity → routing → tenant/details. Each step gates the next
+  // (Next disabled until valid) so the operator cannot skip the assetId→positioning_id
+  // indirection or commit a malformed org; the whole thing is a guided flow, not one
+  // long field dump.
+  const idOk = ID_RE.test((form.asset_id || "").trim());
+  const pidOk = ID_RE.test((form.positioning_id || "").trim());
+  const orgOk = ORG_RE.test((form.org || "").trim());
+  const STEPS = [
+    { id: "identity", label: "Identity", valid: idOk && pidOk },
+    { id: "routing", label: "Routing", valid: true },
+    { id: "details", label: "Details", valid: orgOk },
+  ];
+  const last = STEPS.length - 1;
+  const canNext = STEPS[step].valid;
+  const allValid = STEPS.every((s) => s.valid);
+
+  const submit = () => {
+    const metadata = {};
+    for (const { k, v } of meta) { const key = k.trim(); if (key) metadata[key] = v; }
+    onSave({ ...form, metadata });
+  };
+
+  return (
+    <Modal
+      title={isNew ? "Add asset" : `Edit ${initial.asset_id}`}
+      hint="device.assetId → positioning_id (vendor device id) → source = adapter that serves it · org (tenant)"
+      onClose={onClose}
+    >
+      <div className="flex flex-col gap-4 text-xs">
+        {/* Stepper: current highlighted, done steps checked and clickable to go back;
+            forward is only reachable through a validated Next. */}
+        <div className="flex items-center gap-1">
+          {STEPS.map((s, i) => {
+            const done = i < step;
+            const active = i === step;
+            const reachable = i <= step;
+            return (
+              <button
+                key={s.id}
+                type="button"
+                disabled={!reachable}
+                onClick={() => reachable && setStep(i)}
+                className={`flex items-center gap-1.5 rounded px-2 py-1 transition-colors ${
+                  active ? "bg-sky-600/20 text-sky-300" : done ? "text-emerald-400 hover:bg-slate-800" : "text-slate-500"
+                }`}
+              >
+                <span className={`flex h-4 w-4 items-center justify-center rounded-full text-[9px] ${
+                  active ? "bg-sky-500 text-white" : done ? "bg-emerald-500 text-white" : "bg-slate-700 text-slate-300"
+                }`}>
+                  {done ? "✓" : i + 1}
+                </span>
+                {s.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {step === 0 && (
+          <div className="flex flex-col gap-3">
+            <p className="text-[11px] text-slate-500">Who this device is publicly, and the id its source fetches it by.</p>
+            <Field label="assetId" hint={HELP.asset_id}>
+              <input className={inputCls} placeholder="pkg-4471" value={form.asset_id}
+                disabled={!isNew} onChange={(e) => set({ asset_id: e.target.value })} />
+              {form.asset_id && !idOk && <span className="text-[10px] text-rose-400">letters / digits / . _ : - (1-128)</span>}
+            </Field>
+            <Field label="positioning_id" hint={HELP.positioning_id}>
+              <div className="flex items-center gap-2">
+                <input className={`${inputCls} flex-1`} placeholder="vendor device id (mock: engine track id)"
+                  value={form.positioning_id} onChange={(e) => set({ positioning_id: e.target.value })} />
+                <button type="button" className={btn.ghost} disabled={!form.asset_id}
+                  onClick={() => set({ positioning_id: form.asset_id })}>= assetId</button>
+              </div>
+              {form.positioning_id && !pidOk && <span className="text-[10px] text-rose-400">letters / digits / . _ : - (1-128)</span>}
+            </Field>
+          </div>
+        )}
+
+        {step === 1 && (
+          <div className="flex flex-col gap-3">
+            <p className="text-[11px] text-slate-500">Which deployed adapter serves this asset, and what it is.</p>
+            <Field label="source" hint={HELP.source}>
+              <select className={inputCls} value={form.source} onChange={(e) => onSource(e.target.value)}>
+                {sourceOptions.map((s) => (
+                  <option key={s} value={s}>{s}{stateOf[s] && stateOf[s] !== "live" ? ` (${stateOf[s]})` : ""}</option>
+                ))}
+              </select>
+              <span className={`text-[10px] ${sourceRouted ? "text-emerald-500" : "text-amber-500"}`}>{sourceHint}</span>
+            </Field>
+            <Field label="kind" hint={HELP.kind}>
+              <select className={inputCls} value={form.kind} onChange={(e) => set({ kind: e.target.value })}>
+                {ASSET_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
+              </select>
+            </Field>
+          </div>
+        )}
+
+        {step === 2 && (
+          <div className="flex flex-col gap-3">
+            <p className="text-[11px] text-slate-500">Tenant, and optional presentation details.</p>
+            <Field label="org" hint={HELP.org}>
+              <input className={inputCls} placeholder="acme" value={form.org} onChange={(e) => set({ org: e.target.value })} />
+              {form.org && !orgOk && <span className="text-[10px] text-rose-400">lowercase letters / digits / - (1-64)</span>}
+            </Field>
+            <Field label="label (optional)" hint="Human-readable name shown in UIs.">
+              <input className={inputCls} placeholder="Forklift 7 (bay A)" value={form.label} onChange={(e) => set({ label: e.target.value })} />
+            </Field>
+            <Toggle checked={!!form.simulated} onChange={(v) => set({ simulated: v })}
+              label="simulated" hint={HELP.simulated} />
+            {/* Advanced: free-form metadata (schema additionalProperties), e.g. floor, bay. */}
+            <div className="rounded border border-slate-800 bg-slate-950/40 p-2">
+              <div className="mb-1 flex items-center justify-between">
+                <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500">metadata (optional)</span>
+                <button type="button" className={btn.ghost} onClick={() => setMeta((m) => [...m, { k: "", v: "" }])}>+ field</button>
+              </div>
+              {meta.length === 0 ? (
+                <p className="text-[10px] text-slate-600">Free-form per-asset fields (e.g. floor, bay).</p>
+              ) : (
+                <div className="flex flex-col gap-1.5">
+                  {meta.map((row, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <input className={`${inputCls} w-32`} placeholder="floor" value={row.k}
+                        onChange={(e) => setMeta((m) => m.map((r, j) => (j === i ? { ...r, k: e.target.value } : r)))} />
+                      <input className={`${inputCls} flex-1`} placeholder="3" value={row.v}
+                        onChange={(e) => setMeta((m) => m.map((r, j) => (j === i ? { ...r, v: e.target.value } : r)))} />
+                      <button type="button" className="px-1 text-rose-400 hover:text-rose-300"
+                        onClick={() => setMeta((m) => m.filter((_, j) => j !== i))} aria-label="Remove field">✕</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div className="mt-1 flex items-center justify-between gap-2 border-t border-slate-800 pt-3">
+          <button type="button" className={btn.ghost} onClick={onClose}>Cancel</button>
+          <div className="flex items-center gap-2">
+            {step > 0 && <button type="button" className={btn.ghost} onClick={() => setStep((s) => s - 1)}>Back</button>}
+            {step < last ? (
+              <button type="button" className={btn.sky} disabled={!canNext} onClick={() => canNext && setStep((s) => s + 1)}>Next</button>
+            ) : (
+              <button type="button" className={btn.sky} disabled={busy || !allValid} onClick={submit}>{busy ? "Saving…" : "Save asset"}</button>
+            )}
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// Validate a parsed asset array before a replace-all import: mirrors the per-asset
+// rules (assetId/positioning_id/org patterns) plus duplicate detection, and normalises
+// optional fields to defaults so a terse hand-written file still imports. The gateway
+// validates authoritatively on PUT; this just catches obvious errors before we replace
+// the whole store.
+function validateImportedAssets(arr) {
+  const errors = [];
+  const seen = new Set();
+  const clean = arr.map((a, i) => {
+    const id = (a?.asset_id || "").trim();
+    const pid = (a?.positioning_id || "").trim();
+    const org = (a?.org || "").trim();
+    const where = id || `#${i + 1}`;
+    if (!ID_RE.test(id)) errors.push(`${where}: bad asset_id`);
+    else if (seen.has(id)) errors.push(`${where}: duplicate asset_id`);
+    if (!ID_RE.test(pid)) errors.push(`${where}: bad positioning_id`);
+    if (!ORG_RE.test(org)) errors.push(`${where}: bad org`);
+    if (id) seen.add(id);
+    return {
+      ...a, asset_id: id, positioning_id: pid, org,
+      kind: a?.kind || "asset",
+      source: a?.source || "mock",
+      label: (a?.label || "").trim(),
+      simulated: !!a?.simulated,
+      metadata: (a && typeof a.metadata === "object" && a.metadata) || {},
+    };
+  });
+  return { errors, clean };
+}
+
+// Onboarding: devices the engine sees across live adapters that are not yet mapped
+// (GET /assets/discoverable). `origin` distinguishes a vendor inventory entry (stable
+// registry, bulk) from an on-air observation (wifi, per-activity). Onboarding is never
+// automatic — picking one opens the Add-asset wizard prefilled; the operator confirms
+// and commits an explicit PUT /assets.
+const ORIGIN_BADGE = {
+  inventory: { cls: "bg-sky-500/15 text-sky-300", label: "inventory", title: "vendor registry entry (stable)" },
+  observed: { cls: "bg-emerald-500/15 text-emerald-300", label: "observed", title: "seen on air (per-activity)" },
+};
+
+// Device role (schema-driven, from the adapter's classify block): "infrastructure" = a
+// fixed node (e.g. a UWB anchor) that is never onboarded as an asset; "asset" or absent =
+// onboardable. Absent until the adapter's schema declares a classify rule, in which case
+// every candidate is treated as onboardable.
+const ROLE_BADGE = {
+  asset: { cls: "bg-emerald-500/15 text-emerald-300", label: "asset" },
+  infrastructure: { cls: "bg-slate-700/60 text-slate-400", label: "infrastructure" },
+};
+
+// One discoverable candidate. onOnboard=null renders it read-only (used for the anchors
+// group). Shows origin, the vendor-native device_type, and role badges when present.
+function CandidateRow({ c, onOnboard }) {
+  const ob = ORIGIN_BADGE[c.origin] || { cls: "bg-slate-700/60 text-slate-400", label: c.origin || "?", title: "" };
+  const rb = c.role ? ROLE_BADGE[c.role] : null;
+  const sub = (c.label && c.label !== c.id) ? c.label : "";
+  return (
+    <div className="flex items-center gap-3 py-2 text-xs">
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-mono font-semibold text-slate-200">{c.id}</span>
+          {c.source && <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[9px] text-slate-400">{c.source}</span>}
+          <span className={`rounded px-1.5 py-0.5 text-[9px] ${ob.cls}`} title={ob.title}>{ob.label}</span>
+          {c.source_class && <span className="rounded bg-indigo-500/15 px-1.5 py-0.5 text-[9px] text-indigo-300" title="normalized source class">{c.source_class}</span>}
+          {c.device_type && <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[9px] text-slate-400" title="vendor-native device type">{c.device_type}</span>}
+          {rb && <span className={`rounded px-1.5 py-0.5 text-[9px] ${rb.cls}`}>{rb.label}</span>}
+        </div>
+        {(sub || c.last_seen) && (
+          <div className="mt-0.5 flex items-center gap-2 text-[10px] text-slate-600">
+            {sub && <span>{sub}</span>}
+            {c.last_seen && <span>· seen {c.last_seen}</span>}
+          </div>
+        )}
+      </div>
+      {onOnboard && <button type="button" className={btn.sky} onClick={() => onOnboard(c)}>onboard →</button>}
+    </div>
+  );
+}
+
+function DiscoverModal({ onOnboard, onClose }) {
+  const [rows, setRows] = useState(null); // null = loading
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    getNorthboundDiscoverable()
+      // The gateway returns { candidates: [{ id, source, origin, role?, source_class?,
+      // device_type?, label?, last_seen? }] }. Fall back to devices / a bare array so a
+      // contract tweak does not blank the list.
+      .then((d) => setRows(
+        Array.isArray(d?.candidates) ? d.candidates
+          : Array.isArray(d?.devices) ? d.devices
+          : Array.isArray(d) ? d : []
+      ))
+      .catch((e) => { setErr(e.message || "could not load discoverable devices"); setRows([]); });
+  }, []);
+
+  // The gateway MARKS infrastructure (role) rather than excluding it, so KELT separates it:
+  // onboardable = asset or unclassified; infrastructure is shown muted and cannot be onboarded.
+  const infra = (rows || []).filter((c) => c.role === "infrastructure");
+  const onboardable = (rows || []).filter((c) => c.role !== "infrastructure");
+
+  return (
+    <Modal
+      title="Discover devices"
+      hint="Devices live adapters report but that are not yet onboarded. Pick one to prefill an asset; onboarding stays an explicit save."
+      wide
+      onClose={onClose}
+    >
+      {rows === null ? (
+        <p className="text-xs text-slate-500">Scanning adapters…</p>
+      ) : err ? (
+        <div className="rounded bg-amber-500/10 px-3 py-2 text-xs text-amber-300">{err}</div>
+      ) : rows.length === 0 ? (
+        <p className="text-xs text-slate-500">No new devices. Every device a live adapter reports is already onboarded, or no adapter advertises a device inventory yet.</p>
+      ) : (
+        <div className="flex flex-col gap-4">
+          {onboardable.length === 0 ? (
+            <p className="text-xs text-slate-500">Every reported device is fixed infrastructure; nothing to onboard.</p>
+          ) : (
+            <div className="flex flex-col divide-y divide-slate-800/60">
+              {onboardable.map((c) => <CandidateRow key={`${c.source}/${c.id}`} c={c} onOnboard={onOnboard} />)}
+            </div>
+          )}
+          {infra.length > 0 && (
+            <div className="rounded border border-slate-800 bg-slate-950/40 p-2">
+              <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-slate-500">
+                {infra.length} infrastructure device{infra.length > 1 ? "s" : ""} · fixed, not onboardable
+              </div>
+              <div className="flex flex-col divide-y divide-slate-800/40 opacity-70">
+                {infra.map((c) => <CandidateRow key={`${c.source}/${c.id}`} c={c} onOnboard={null} />)}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </Modal>
+  );
+}
 
 function AssetsTab({ toast }) {
   const [assets, setAssets] = useState(null); // null = loading
@@ -147,6 +481,32 @@ function AssetsTab({ toast }) {
   const [isNew, setIsNew] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [importConfirm, setImportConfirm] = useState(null); // { count, next }
+  const [discoverOpen, setDiscoverOpen] = useState(false);
+  const fileRef = useRef(null);
+
+  // Onboard a discovered device: open the Add-asset wizard PREFILLED from the candidate
+  // (asset_id defaults to the device id but stays editable, positioning_id = the id the
+  // adapter fetches by, source from the candidate). The operator confirms org/kind and
+  // saves — onboarding is never silent.
+  const onboardCandidate = (c) => {
+    setDiscoverOpen(false);
+    setEditing({
+      ...EMPTY_ASSET,
+      asset_id: c.id || "",
+      positioning_id: c.id || "",
+      source: c.source || "mock",
+      simulated: (c.source || "").startsWith("mock"),
+      label: c.label || "",
+      // Carry the classification as provenance (no hardcoded source_class/device_type →
+      // asset-kind mapping; the operator picks kind in the wizard). No-op until present.
+      metadata: {
+        ...(c.source_class ? { source_class: c.source_class } : {}),
+        ...(c.device_type ? { device_type: c.device_type } : {}),
+      },
+    });
+    setIsNew(true);
+  };
 
   const load = useCallback(() => {
     setErr("");
@@ -182,6 +542,42 @@ function AssetsTab({ toast }) {
     try { await saveAll((assets || []).filter((x) => x.asset_id !== id)); } catch { /* toast shown */ }
   };
 
+  // Export the current map as assets.json (same shape as the companion seed file, so
+  // it doubles as a backup and a seed template). Client-side blob, no round-trip.
+  const doExport = () => {
+    const body = JSON.stringify({ version: 2, assets: assets || [] }, null, 2);
+    const url = URL.createObjectURL(new Blob([body], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = "assets.json";
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  // Import a JSON file and REPLACE the whole map (PUT /assets is replace-all). Accept a
+  // bare array or { assets: [...] }; validate before offering the confirm so a bad file
+  // never silently wipes the store.
+  const onImportFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // let the same file be re-picked after a fix
+    if (!file) return;
+    let parsed;
+    try { parsed = JSON.parse(await file.text()); }
+    catch { return toast.error("Import failed: not valid JSON"); }
+    const arr = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.assets) ? parsed.assets : null;
+    if (!arr) return toast.error("Import failed: expected an array or { assets: [...] }");
+    if (arr.length === 0) return toast.error("Import failed: file has no assets");
+    const { errors, clean } = validateImportedAssets(arr);
+    if (errors.length) {
+      return toast.error(`Import rejected: ${errors.slice(0, 3).join("; ")}${errors.length > 3 ? ` (+${errors.length - 3} more)` : ""}`);
+    }
+    setImportConfirm({ count: clean.length, next: clean });
+  };
+
+  const confirmImport = async () => {
+    const c = importConfirm; setImportConfirm(null);
+    try { await saveAll(c.next); } catch { /* toast shown */ }
+  };
+
   return (
     <Panel title="Asset Identity Map" hint="CAMARA private-asset profile: assetId → positioning source. The gateway is the authority (GET/PUT /assets).">
       {assets === null ? (
@@ -189,8 +585,18 @@ function AssetsTab({ toast }) {
       ) : (
         <div className="flex flex-col gap-3">
           {err && <div className="rounded bg-amber-500/10 px-3 py-2 text-xs text-amber-300">{err}</div>}
-          <div className="flex justify-end">
-            <button type="button" className={btn.sky} onClick={() => { setEditing({ ...EMPTY_ASSET }); setIsNew(true); }}>+ Add asset</button>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <button type="button" className={btn.ghost} disabled={busy || (assets || []).length === 0}
+                title="download the current map as assets.json" onClick={doExport}>⇩ export</button>
+              <button type="button" className={btn.ghost} disabled={busy}
+                title="replace the whole map from an assets.json file" onClick={() => fileRef.current?.click()}>⇪ import</button>
+              <input ref={fileRef} type="file" accept="application/json,.json" className="hidden" onChange={onImportFile} />
+            </div>
+            <div className="flex items-center gap-2">
+              <button type="button" className={btn.ghost} title="devices seen by live adapters, not yet onboarded" onClick={() => setDiscoverOpen(true)}>⌕ Discover devices</button>
+              <button type="button" className={btn.sky} onClick={() => { setEditing({ ...EMPTY_ASSET }); setIsNew(true); }}>+ Add asset</button>
+            </div>
           </div>
           {assets.length === 0 ? (
             <p className="text-xs text-slate-500">No assets yet. Add one to expose it through the CAMARA Location API by <span className="font-mono">assetId</span>.</p>
@@ -216,32 +622,118 @@ function AssetsTab({ toast }) {
           )}
         </div>
       )}
+      {discoverOpen && (
+        <DiscoverModal onOnboard={onboardCandidate} onClose={() => setDiscoverOpen(false)} />
+      )}
       {editing && (
-        <Modal title={isNew ? "Add asset" : `Edit ${editing.asset_id}`} onClose={() => setEditing(null)}>
-          <div className="flex flex-col gap-2 text-xs">
-            <label className="flex flex-col gap-1"><span className="text-slate-400">assetId (CAMARA device.assetId)</span>
-              <input className={inputCls} value={editing.asset_id} disabled={!isNew} onChange={(e) => setEditing({ ...editing, asset_id: e.target.value })} /></label>
-            <label className="flex flex-col gap-1"><span className="text-slate-400">positioning_id (engine routes on this)</span>
-              <input className={inputCls} value={editing.positioning_id} onChange={(e) => setEditing({ ...editing, positioning_id: e.target.value })} /></label>
-            <div className="grid grid-cols-2 gap-2">
-              <label className="flex flex-col gap-1"><span className="text-slate-400">kind</span>
-                <select className={inputCls} value={editing.kind} onChange={(e) => setEditing({ ...editing, kind: e.target.value })}>{ASSET_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}</select></label>
-              <label className="flex flex-col gap-1"><span className="text-slate-400">source</span>
-                <select className={inputCls} value={editing.source} onChange={(e) => setEditing({ ...editing, source: e.target.value })}>{ASSET_SOURCES.map((s) => <option key={s} value={s}>{s}</option>)}</select></label>
-            </div>
-            <label className="flex flex-col gap-1"><span className="text-slate-400">org (tenant — gateway joins token.org)</span>
-              <input className={inputCls} value={editing.org} onChange={(e) => setEditing({ ...editing, org: e.target.value })} /></label>
-            <label className="flex flex-col gap-1"><span className="text-slate-400">label (optional)</span>
-              <input className={inputCls} value={editing.label} onChange={(e) => setEditing({ ...editing, label: e.target.value })} /></label>
-            <label className="flex items-center gap-2"><input type="checkbox" checked={!!editing.simulated} onChange={(e) => setEditing({ ...editing, simulated: e.target.checked })} /><span className="text-slate-400">simulated (mock/demo source → MOCK badge)</span></label>
-            <div className="mt-1 flex justify-end gap-2">
-              <button type="button" className={btn.ghost} onClick={() => setEditing(null)}>Cancel</button>
-              <button type="button" className={btn.sky} disabled={busy} onClick={() => upsert(editing)}>{busy ? "Saving…" : "Save"}</button>
-            </div>
+        <AssetModal initial={editing} isNew={isNew} busy={busy} onSave={upsert} onClose={() => setEditing(null)} />
+      )}
+      {importConfirm && (
+        <Modal
+          title="Replace all assets?"
+          hint={`Imports ${importConfirm.count} asset${importConfirm.count > 1 ? "s" : ""} and replaces the current ${(assets || []).length} in the gateway store. This cannot be undone.`}
+          onClose={() => setImportConfirm(null)}
+        >
+          <div className="flex justify-end gap-2">
+            <button type="button" className={btn.ghost} onClick={() => setImportConfirm(null)}>Cancel</button>
+            <button type="button" className={btn.sky} disabled={busy} onClick={confirmImport}>{busy ? "Importing…" : `Replace with ${importConfirm.count}`}</button>
           </div>
         </Modal>
       )}
     </Panel>
+  );
+}
+
+// Update-all: roll every companion service to the current 5g-northbound release
+// (latest on ghcr). The backend persists the release tag, re-runs phase 10, then
+// patches the catalog adapters (wifi/vendor REST) it does not own — all in one
+// streamed % + ETA. Opens with a persistence panel: the rollout reuses PVCs
+// (blueprint/registry/asset map/wifi calibration) and keeps ConfigMap/Secret
+// config, so nothing is lost.
+function UpdateAllModal({ count, onClose, onDone, toast }) {
+  const [phase, setPhase] = useState("ready"); // ready|running|done|error
+  const [pct, setPct] = useState(null);
+  const [line, setLine] = useState("");
+  const [eta, setEta] = useState("");
+  const [err, setErr] = useState("");
+  const startRef = useRef(0);
+  const busy = phase === "running";
+
+  const run = async () => {
+    setPhase("running"); setErr(""); setLine(""); setPct(null); startRef.current = Date.now();
+    try {
+      await updateAllNorthboundStream((ev) => {
+        if (ev.line) setLine(ev.line);
+        if (typeof ev.pct === "number") {
+          setPct(ev.pct);
+          const el = (Date.now() - startRef.current) / 1000;
+          setEta(ev.pct > 3 && ev.pct < 100 ? `~${Math.max(1, Math.round(el * (100 - ev.pct) / ev.pct))}s left` : "");
+        }
+      });
+      setPhase("done"); setEta("");
+      toast.success("Northbound update complete");
+      onDone?.();
+    } catch (e) {
+      setPhase("error"); setErr(String(e?.message || e));
+    }
+  };
+
+  return (
+    <Modal
+      title="Update all northbound services"
+      hint={count ? `Roll ${count} behind service${count > 1 ? "s" : ""} to its latest release` : "Roll behind companion services to their latest release"}
+      onClose={busy ? () => {} : onClose}
+    >
+      <div className="flex flex-col gap-3 text-xs">
+        {phase === "ready" && (
+          <>
+            <div className="rounded border border-slate-800 bg-slate-950/40 p-3">
+              <p className="mb-1.5 font-medium text-slate-300">Your data is preserved</p>
+              <ul className="space-y-1 text-slate-400">
+                <li>Blueprint, adapter registry, asset map: on PVCs, reused by the rollout</li>
+                <li>Adapter schema / config / secrets: kept (image patch, not recreate)</li>
+                <li>WiFi calibration: persisted (PVC-backed)</li>
+                <li>Custom adapters keep their config</li>
+              </ul>
+            </div>
+            <p className="text-slate-500">
+              Re-runs phase 10-northbound for the behind managed services, then patches the
+              behind catalog adapters (wifi, vendor REST). Each image moves to its own latest
+              tag on ghcr. Takes a couple of minutes.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button type="button" className={btn.ghost} onClick={onClose}>Cancel</button>
+              <button type="button" className={btn.sky} onClick={run}>Start update</button>
+            </div>
+          </>
+        )}
+        {(busy || phase === "done") && (
+          <>
+            <div className="h-2 w-full overflow-hidden rounded bg-slate-800">
+              <div className="h-full bg-sky-500 transition-all duration-300"
+                style={{ width: `${pct ?? (phase === "done" ? 100 : 8)}%` }} />
+            </div>
+            <div className="flex justify-between text-[11px] text-slate-500">
+              <span>{phase === "done" ? "complete" : (pct != null ? `${pct}%` : "working…")}</span>
+              <span>{eta}</span>
+            </div>
+            {line && <p className="truncate font-mono text-[10px] text-slate-600">{line}</p>}
+            {phase === "done" && (
+              <div className="flex justify-end"><button type="button" className={btn.sky} onClick={onClose}>Close</button></div>
+            )}
+          </>
+        )}
+        {phase === "error" && (
+          <>
+            <div className="whitespace-pre-wrap rounded border border-rose-700/50 bg-rose-950/30 px-3 py-2 text-rose-300">{err}</div>
+            <div className="flex justify-end gap-2">
+              <button type="button" className={btn.ghost} onClick={onClose}>Close</button>
+              <button type="button" className={btn.sky} onClick={run}>Retry</button>
+            </div>
+          </>
+        )}
+      </div>
+    </Modal>
   );
 }
 
@@ -257,9 +749,12 @@ export default function NorthboundPage() {
   const [configuring, setConfiguring] = useState(null);
   const [deployOpen, setDeployOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [showUpdateAll, setShowUpdateAll] = useState(false);
   const [confirm, setConfirm] = useState(null); // { title, body, label, runLabel, action }
+  const [logTarget, setLogTarget] = useState(null); // { namespace, pod, deployment } for the log overlay
   const [bindings, setBindings] = useState([]);
   const [readiness, setReadiness] = useState({}); // { service: { needs_config, missing[] } }
+  const [versions, setVersions] = useState({ services: [], behind_count: 0 }); // per-image deployed-vs-ghcr drift
   const autoBound = useRef(new Set()); // (consumer:field) already auto-bound this session
   const toast = useToast();
 
@@ -271,6 +766,11 @@ export default function NorthboundPage() {
       .map((s) => s.name)
   );
 
+  // Deployed-vs-pinned drift from the backend (covers phase-managed + catalog).
+  // Keyed by service name; drives the per-row ↑ chip and the Update all count.
+  const verMap = Object.fromEntries((versions.services || []).map((v) => [v.name, v]));
+  const behindCount = versions.behind_count || 0;
+
   // Silent loader, used by the 5s auto-poll and after every action so the
   // button does not flicker every poll.
   // Throws on failure; the 5s auto-poll swallows it (a transient 500 must not
@@ -279,6 +779,12 @@ export default function NorthboundPage() {
     const [svc, ad] = await Promise.all([getNorthboundServices(), getNorthboundAdapters()]);
     setServices(svc.services || []);
     setAdapters(ad || []);
+    // Version drift (chip + "updates available" banner) polls on the same 5s tick so
+    // it always reflects live deployed-vs-ghcr, self-healing after ANY change (an
+    // Update-all error path, a phase re-run, an external rollout) rather than only on
+    // mount/action/onDone. Best-effort: its own catch, so a ghcr blip never blanks the
+    // service list. The backend caches ghcr per-repo (300s), so the poll is cheap.
+    getNorthboundVersions().then((r) => setVersions(r || { services: [], behind_count: 0 })).catch(() => {});
   }, []);
 
   // Adapter bindings are heavier (per-consumer config read), so load them on
@@ -353,6 +859,8 @@ export default function NorthboundPage() {
               {isAdmin ? "" : " Read-only (dashboard-admin required for changes)."}
             </p>
           </div>
+          {/* Update all lives in the in-content banner (only when behind); the header
+              keeps just refresh to avoid a redundant second CTA. */}
           <button type="button" onClick={manualRefresh} disabled={refreshing} className={`inline-flex items-center gap-1 ${btn.ghost} disabled:opacity-60`}>
             <IconRefresh size={14} className={refreshing ? "animate-spin" : ""} /> {refreshing ? "refreshing…" : "refresh"}
           </button>
@@ -361,125 +869,152 @@ export default function NorthboundPage() {
 
       <Tabs tabs={isAdmin ? TABS : TABS.filter((t) => t.id !== "assets")} active={tab} onChange={setTab} />
 
+      {/* key=tab remounts the pane on switch so it fades/rises in (see .tab-pane). */}
+      <div key={tab} className="tab-pane">
       {tab === "status" && (
-        <>
-        <Panel title="Services">
+        <div className="flex flex-col gap-4">
+        {isAdmin && behindCount > 0 && (
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-sky-800/50 bg-sky-950/30 px-4 py-2.5">
+            <span className="text-xs text-sky-200">
+              <span className="font-semibold">{behindCount} update{behindCount > 1 ? "s" : ""} available</span>
+              {" "}— newer 5g-northbound image{behindCount > 1 ? "s are" : " is"} on ghcr.
+            </span>
+            <button type="button" onClick={() => setShowUpdateAll(true)} className={btn.sky}>↑ Update all</button>
+          </div>
+        )}
+        <Panel title="Services" hint="Positioning and CAMARA services. “managed” roll via Update all; catalog adapters (wifi, vendor REST) upgrade individually.">
           {services.length === 0 ? (
             <p className="text-xs text-slate-500">No northbound services found. Enable the feature with <span className="font-mono">testbed northbound on</span>.</p>
           ) : (
             <div className="flex flex-col divide-y divide-slate-800/60">
               {services.map((s) => {
                 const phase = s.pods && s.pods[0] ? s.pods[0].phase : "Unknown";
+                const kind = KIND_BADGE[s.kind] || KIND_BADGE.internal;
+                const ver = verMap[s.name];                    // backend drift vs ghcr release
+                const latestTag = ver?.latest;                 // shown on the ↑ chip when behind
+                const behind = !!ver?.behind;
+                const tag = imgTag(s.image);
+                // Catalog adapters (not phase-managed) are patchable individually; managed
+                // ones roll only via Update all.
+                const upImage = (behind && ver && !ver.managed && latestTag)
+                  ? `ghcr.io/jacobbista/5g-northbound/${imgBasename(s.image)}:${latestTag}` : null;
+                const ep = publicUrl(s);
+                const starting = (s.ready_replicas || 0) < (s.replicas || 0);
                 return (
-                  <div key={`${s.namespace}/${s.name}`} className="flex items-center gap-3 py-2 text-xs">
-                    <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${phaseDot(phase)}`} />
-                    <span className="min-w-[150px] font-semibold text-slate-100">{s.name}{s.managed ? <span className="ml-1 text-slate-500" title="managed by Ansible">*</span> : ""}</span>
-                    <span className="w-20 text-slate-500">{s.namespace}</span>
-                    {s.kind && (
-                      <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] ${(KIND_BADGE[s.kind] || KIND_BADGE.internal).cls}`} title="how this surface is served">
-                        {(KIND_BADGE[s.kind] || KIND_BADGE.internal).label}
-                      </span>
-                    )}
-                    {readiness[s.name]?.needs_config && (
-                      <span
-                        className="shrink-0 rounded bg-rose-950/40 px-1.5 py-0.5 text-[10px] text-rose-300"
-                        title={`needs config: ${(readiness[s.name].missing || []).join(", ")}`}
-                      >
-                        ⚠ needs config
-                      </span>
-                    )}
-                    {(readiness[s.name]?.ephemeral || []).length > 0 && (
-                      <span
-                        className="shrink-0 rounded bg-amber-950/40 px-1.5 py-0.5 text-[10px] text-amber-300"
-                        title={`loaded but not persisted (lost on restart): ${readiness[s.name].ephemeral.join(", ")} — persist via Configure`}
-                      >
-                        ⟳ ephemeral
-                      </span>
-                    )}
-                    <span className="flex-1 truncate font-mono text-[11px] text-slate-400">{s.image || "?"}</span>
-                    {(() => {
-                      const up = catalogUpgrade(s.image);
-                      if (!up) return null;
-                      return (
-                        <span className="inline-flex shrink-0 items-center gap-1">
-                          <span className="rounded bg-amber-950/40 px-1.5 py-0.5 text-[10px] text-amber-300" title={`on ${up.current}; current release is ${up.target}`}>↑ {up.target}</span>
-                          {isAdmin && (
+                  <div key={`${s.namespace}/${s.name}`} className="flex items-center gap-3 py-2.5">
+                    <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${phaseDot(phase)}`} title={phase} />
+                    {/* Primary: name + classifying/state chips on line 1, the de-emphasized
+                        image + public link on line 2. Keeps rows aligned regardless of which
+                        optional chips a service has. */}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-semibold text-slate-100">{s.name}</span>
+                        {s.kind && <span className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${kind.cls}`} title="how this surface is served">{kind.label}</span>}
+                        {tag && <span className="font-mono text-[10px] text-slate-400" title={s.image || ""}>{tag}</span>}
+                        {/* Version-drift chip. On a catalog adapter (not phase-managed) it IS the
+                            upgrade affordance: click to patch just this one to its latest tag. On a
+                            managed service it is a read-only indicator (those roll via Update all). */}
+                        {behind && latestTag && (
+                          upImage && isAdmin ? (
                             <button
                               type="button"
                               disabled={busy}
-                              className={btn.ghost}
+                              title={`upgrade ${s.name} to ${latestTag}`}
                               onClick={() => setConfirm({
-                                title: `Upgrade ${s.name} to ${up.target}?`,
-                                body: `Patches the image to ${up.image} (its config is preserved). The pod restarts and the adapter re-registers with the engine.`,
+                                title: `Upgrade ${s.name} to ${latestTag}?`,
+                                body: `Patches the image to ${upImage} (its config is preserved). The pod restarts and the adapter re-registers with the engine.`,
                                 label: "Upgrade",
                                 runLabel: `upgrade ${s.name}`,
-                                action: () => upgradeNorthboundAdapter(s.name, up.image),
+                                action: () => upgradeNorthboundAdapter(s.name, upImage),
                               })}
+                              className="rounded bg-amber-950/40 px-1.5 py-0.5 text-[10px] text-amber-300 transition-colors hover:bg-amber-900/60 hover:text-amber-200 disabled:opacity-40"
                             >
-                              upgrade
+                              ↑ {latestTag}
                             </button>
-                          )}
-                        </span>
-                      );
-                    })()}
-                    {(() => {
-                      const ep = publicUrl(s);
-                      return (
-                        <span className="w-44 shrink-0 truncate text-right">
-                          {ep ? (
-                            <a
-                              href={ep.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              title={`open ${ep.url}`}
-                              className="inline-flex items-center gap-1 font-mono text-[11px] text-sky-400 hover:text-sky-300"
+                          ) : (
+                            <span
+                              className="rounded bg-amber-950/40 px-1.5 py-0.5 text-[10px] text-amber-300"
+                              title={ver?.managed
+                                ? `deployed ${tag}; latest ${latestTag} — rolls via Update all`
+                                : `deployed ${tag}; latest release is ${latestTag}`}
                             >
-                              {ep.label} <span aria-hidden="true">↗</span>
-                            </a>
-                          ) : s.node_port ? (
-                            <span className="font-mono text-[10px] text-slate-500" title="LAN NodePort">:{s.node_port}</span>
-                          ) : null}
-                        </span>
-                      );
-                    })()}
-                    {(() => {
-                      const starting = (s.ready_replicas || 0) < (s.replicas || 0);
-                      return (
-                        <span
-                          className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[10px] ${starting ? "bg-amber-950/40 text-amber-300" : "bg-slate-800 text-slate-300"}`}
-                          title={starting ? "pods starting" : "ready"}
+                              ↑ {latestTag}
+                            </span>
+                          )
+                        )}
+                        {readiness[s.name]?.needs_config && (
+                          <span className="rounded bg-rose-950/40 px-1.5 py-0.5 text-[10px] text-rose-300" title={`needs config: ${(readiness[s.name].missing || []).join(", ")}`}>⚠ needs config</span>
+                        )}
+                        {(readiness[s.name]?.ephemeral || []).length > 0 && (
+                          <span className="rounded bg-amber-950/40 px-1.5 py-0.5 text-[10px] text-amber-300" title={`loaded but not persisted (lost on restart): ${readiness[s.name].ephemeral.join(", ")} — persist via Configure`}>⟳ ephemeral</span>
+                        )}
+                        {s.stateful && s.persistent === false && (
+                          <span className="rounded bg-amber-950/40 px-1.5 py-0.5 text-[10px] text-amber-300" title="calibration is written in this service's own UI but is NOT PVC-backed yet — it would be lost on restart. Click “enable persistence”.">⟳ not persisted</span>
+                        )}
+                      </div>
+                      <div className="mt-0.5 flex items-center gap-2 text-[11px] text-slate-500">
+                        <span className="uppercase tracking-wide">{s.namespace}</span>
+                        {s.managed && <span title="managed by Ansible — rolls via Update all / phase 10">· managed</span>}
+                        {ep ? (
+                          <a href={ep.url} target="_blank" rel="noreferrer" title={`open ${ep.url}`} className="inline-flex shrink-0 items-center gap-1 font-mono text-sky-400 hover:text-sky-300">{ep.label} <span aria-hidden="true">↗</span></a>
+                        ) : s.node_port ? (
+                          <span className="shrink-0 font-mono text-[10px]" title="LAN NodePort">:{s.node_port}</span>
+                        ) : null}
+                      </div>
+                    </div>
+                    {/* Right cluster: status + actions, aligned across every row. */}
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[10px] ${starting ? "bg-amber-950/40 text-amber-300" : "bg-slate-800 text-slate-300"}`} title={starting ? "pods starting" : "ready"}>
+                        {starting && <IconRefresh size={10} className="animate-spin" />}
+                        {s.ready_replicas}/{s.replicas}
+                      </span>
+                      {s.pods && s.pods[0] && (
+                        <button
+                          type="button"
+                          title={`stream logs (${s.pods[0].name})`}
+                          onClick={() => setLogTarget({ namespace: s.namespace, pod: s.pods[0].name, deployment: s.name })}
+                          className="rounded bg-indigo-600/20 px-2 py-1 text-[11px] font-medium text-indigo-300 transition-colors hover:bg-indigo-600/30"
                         >
-                          {starting && <IconRefresh size={10} className="animate-spin" />}
-                          {s.ready_replicas}/{s.replicas}
-                        </span>
-                      );
-                    })()}
-                    {isAdmin && s.configurable && (
-                      <button
-                        type="button"
-                        onClick={() => setConfiguring(s.name)}
-                        className={`shrink-0 ${btn.ghost}`}
-                      >
-                        configure
-                      </button>
-                    )}
-                    {isAdmin && deployedNames.has(s.name) && (
-                      <button
-                        type="button"
-                        disabled={busy}
-                        title="delete workload"
-                        onClick={() => setConfirm({
-                          title: `Delete ${s.name}?`,
-                          body: "Removes the Deployment and Service and unregisters it from the engine.",
-                          label: "Delete",
-                          runLabel: `delete ${s.name}`,
-                          action: () => deleteNorthboundWorkload(s.name),
-                        })}
-                        className="shrink-0 text-rose-400 hover:text-rose-300 disabled:opacity-40"
-                      >
-                        <IconTrash size={13} />
-                      </button>
-                    )}
+                          logs
+                        </button>
+                      )}
+                      {isAdmin && s.stateful && s.persistent === false && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          className={btn.amber}
+                          onClick={() => setConfirm({
+                            title: `Enable persistence for ${s.name}?`,
+                            body: "Attaches a PVC mounted at the calibration file, so a calibration set in this service's own UI survives restart and upgrade. The pod restarts once.",
+                            label: "Enable",
+                            runLabel: `enable persistence ${s.name}`,
+                            action: () => enableNorthboundPersistence(s.name),
+                          })}
+                        >
+                          enable persistence
+                        </button>
+                      )}
+                      {isAdmin && s.configurable && (
+                        <button type="button" onClick={() => setConfiguring(s.name)} className={btn.ghost}>configure</button>
+                      )}
+                      {isAdmin && deployedNames.has(s.name) && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          title="delete workload"
+                          onClick={() => setConfirm({
+                            title: `Delete ${s.name}?`,
+                            body: "Removes the Deployment and Service and unregisters it from the engine.",
+                            label: "Delete",
+                            runLabel: `delete ${s.name}`,
+                            action: () => deleteNorthboundWorkload(s.name),
+                          })}
+                          className="text-rose-400 hover:text-rose-300 disabled:opacity-40"
+                        >
+                          <IconTrash size={13} />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 );
               })}
@@ -530,15 +1065,15 @@ export default function NorthboundPage() {
             onApplied={() => { refresh(); loadBindings(); }}
           />
         )}
-        </>
+        </div>
       )}
 
       {tab === "adapters" && (
-        <>
+        <div className="flex flex-col gap-4">
           <Panel
             title="Adapter registry"
             hint="Live registry from the engine. Adapters self-register and heartbeat; the engine evicts dead ones. Deploy an adapter and it announces itself, no manual step."
-            right={isAdmin && <button type="button" onClick={() => setDeployOpen(true)} className={btn.sky}>Deploy from image</button>}
+            right={isAdmin && <button type="button" onClick={() => setDeployOpen(true)} className={btn.sky}>Deploy adapter</button>}
           >
             {adapters.length === 0 && <p className="text-xs text-slate-500">No adapters registered; the engine uses its embedded mock fallback until one self-registers.</p>}
             <div className="flex flex-col gap-1.5">
@@ -550,14 +1085,20 @@ export default function NorthboundPage() {
                 // adapter would just re-announce, so removing it is meaningless).
                 const canForce = !dep && a.state !== "live";
                 return (
-                  <div key={a.name} className="flex flex-wrap items-center gap-2 rounded border border-slate-800 bg-slate-950 px-2.5 py-1.5 text-xs">
-                    <span className="font-mono text-slate-200">{a.name}</span>
-                    {a.kind && <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[9px] text-slate-400">{a.kind}</span>}
-                    <span className={`rounded px-1.5 py-0.5 text-[9px] ${st.cls}`}>{st.label}</span>
-                    {a.registered_via && <span className="text-[9px] text-slate-600">via {a.registered_via}</span>}
-                    {typeof a.last_seen_s_ago === "number" && <span className="text-[9px] text-slate-600">seen {Math.round(a.last_seen_s_ago)}s ago</span>}
-                    {a.in_cooldown && <span className="text-[9px] text-rose-400">cooldown {Math.round(a.cooldown_seconds_remaining || 0)}s</span>}
-                    <span className="font-mono text-[10px] text-slate-600">{a.base_url}</span>
+                  <div key={a.name} className="flex items-center gap-3 rounded border border-slate-800 bg-slate-950 px-3 py-2 text-xs">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-mono font-semibold text-slate-200">{a.name}</span>
+                        {a.kind && <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[9px] text-slate-400">{a.kind}</span>}
+                        <span className={`rounded px-1.5 py-0.5 text-[9px] ${st.cls}`}>{st.label}</span>
+                        {a.in_cooldown && <span className="text-[9px] text-rose-400">cooldown {Math.round(a.cooldown_seconds_remaining || 0)}s</span>}
+                      </div>
+                      <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[10px] text-slate-600">
+                        {a.registered_via && <span>via {a.registered_via}</span>}
+                        {typeof a.last_seen_s_ago === "number" && <span>· seen {Math.round(a.last_seen_s_ago)}s ago</span>}
+                        <span className="truncate font-mono">{a.base_url}</span>
+                      </div>
+                    </div>
                     {isAdmin && (dep || canForce) && (
                       <button
                         type="button"
@@ -572,7 +1113,7 @@ export default function NorthboundPage() {
                           runLabel: dep ? `delete ${a.name}` : `force-remove ${a.name}`,
                           action: () => (dep ? deleteNorthboundWorkload(a.name) : unregisterNorthboundAdapter(a.name)),
                         })}
-                        className="ml-auto text-rose-400 hover:text-rose-300 disabled:opacity-40"
+                        className="shrink-0 text-rose-400 hover:text-rose-300 disabled:opacity-40"
                       >
                         <IconTrash size={13} />
                       </button>
@@ -581,55 +1122,67 @@ export default function NorthboundPage() {
                 );
               })}
             </div>
+            {contract?.docs && (
+              <p className="mt-3 border-t border-slate-800 pt-3 text-[11px] text-slate-500">
+                Build your own positioning source:{" "}
+                <a className="text-sky-400 hover:underline" href={contract.docs.adapter_contract} target="_blank" rel="noreferrer">adapter contract</a>
+                {" · "}
+                <a className="text-sky-400 hover:underline" href={contract.docs.rest_adapter} target="_blank" rel="noreferrer">vendor REST</a>
+                {" · "}
+                <a className="text-sky-400 hover:underline" href={contract.docs.env_contract} target="_blank" rel="noreferrer">env contract</a>
+              </p>
+            )}
           </Panel>
+          {/* Expert controls, rarely touched: folded away so the registry stays the focus. */}
+          {isAdmin && (
+            <Collapsible title="Advanced tuning" hint="Fusion strategy and manual image rollout. Not needed for normal operation.">
+              <div className="flex flex-col gap-4">
+                <div>
+                  <div className="mb-1.5 text-xs font-medium text-slate-300">Fusion</div>
+                  <p className="mb-2 text-[11px] text-slate-500">Classical estimators (no ML). Applies to positioning-engine and restarts it.</p>
+                  <FusionForm busy={busy} onSubmit={(body) => run("fusion update", () => setNorthboundFusion(body))} />
+                </div>
+                <div className="border-t border-slate-800 pt-4">
+                  <div className="mb-1.5 text-xs font-medium text-slate-300">Managed image rollout</div>
+                  <p className="mb-2 text-[11px] text-slate-500">Retargets a running deployment. The durable image lives in all.yml; re-run the phase to reconcile.</p>
+                  <ManagedForm busy={busy} onSubmit={(dep, image) => run(`rollout ${dep}`, () => rolloutNorthboundManaged(dep, image))} />
+                </div>
+              </div>
+            </Collapsible>
+          )}
           {deployOpen && (
             <Modal
-              title="Deploy adapter from image"
-              hint="Creates a Deployment + Service in the positioning namespace; the adapter self-registers with the engine (no manual step)."
+              title="Deploy adapter"
+              hint="Pick a catalog adapter (wifi, vendor REST) or any image. Creates a Deployment + Service in the positioning namespace; the adapter self-registers with the engine (no manual step)."
               wide
               onClose={() => setDeployOpen(false)}
             >
               <DeployForm busy={busy} onSubmit={async (body) => { await run(`deploy ${body.name}`, () => deployNorthboundImage(body)); setDeployOpen(false); }} />
             </Modal>
           )}
-        </>
-      )}
-
-      {tab === "engine" && (isAdmin ? (
-        <>
-          <Panel title="Fusion config" hint="Classical estimators (no ML). Applies to positioning-engine and restarts it.">
-            <FusionForm busy={busy} onSubmit={(body) => run("fusion update", () => setNorthboundFusion(body))} />
-          </Panel>
-          <Panel title="Managed image rollout" hint="Retargets a running deployment. The durable image lives in all.yml; re-run the phase to reconcile.">
-            <ManagedForm busy={busy} onSubmit={(dep, image) => run(`rollout ${dep}`, () => rolloutNorthboundManaged(dep, image))} />
-          </Panel>
-        </>
-      ) : (
-        <Panel title="Engine"><p className="text-xs text-slate-500">Engine configuration requires the dashboard-admin role.</p></Panel>
-      ))}
-
-      {tab === "build" && (
-        <Panel title="Adapter contract" hint="Build your own positioning source.">
-          {!contract ? (
-            <p className="text-xs text-slate-500">Loading…</p>
-          ) : (
-            <div className="flex flex-col gap-2 text-xs text-slate-300">
-              <p>Every adapter implements <span className="font-mono text-slate-200">{contract.endpoints.join(" and ")}</span>; the engine fuses the responses.</p>
-              <CopyBlock label="Measurement (GET /measurement/{id} response)" text={JSON.stringify(contract.measurement_schema, null, 2)} />
-              <CopyBlock label="Python adapter skeleton" text={contract.python_skeleton} />
-              <CopyBlock label="env.contract.yaml template" text={contract.env_contract_template} />
-              <div className="text-[11px] text-slate-400">
-                Docs:{" "}
-                <a className="text-sky-400 underline" href={contract.docs.adapter_contract} target="_blank" rel="noreferrer">adapter contract</a>{" · "}
-                <a className="text-sky-400 underline" href={contract.docs.rest_adapter} target="_blank" rel="noreferrer">vendor REST adapter</a>{" · "}
-                <a className="text-sky-400 underline" href={contract.docs.env_contract} target="_blank" rel="noreferrer">env contract</a>
-              </div>
-            </div>
-          )}
-        </Panel>
+        </div>
       )}
 
       {tab === "assets" && isAdmin && <AssetsTab toast={toast} />}
+      </div>
+
+      {showUpdateAll && (
+        <UpdateAllModal
+          count={behindCount}
+          toast={toast}
+          onClose={() => setShowUpdateAll(false)}
+          onDone={() => { refresh().catch(() => {}); loadBindings(); }}
+        />
+      )}
+
+      {logTarget && (
+        <LogViewer
+          namespace={logTarget.namespace}
+          pod={logTarget.pod}
+          deployment={logTarget.deployment}
+          onClose={() => setLogTarget(null)}
+        />
+      )}
 
       {confirm && (
         <Modal title={confirm.title} hint={confirm.body} onClose={() => setConfirm(null)}>
@@ -819,12 +1372,149 @@ function JsonView({ value, depth = 0 }) {
   return <span className="text-emerald-300">{String(value)}</span>;
 }
 
+// Guided builder for a discover.classify block. Fetches raw vendor records
+// (admin-only GET /discover?raw=1 through the backend proxy) so the operator points
+// the ROLE rule at the vendor's OWN field names instead of hand-writing the predicate
+// JSON, and shows its live effect on the real sample. Authors role only: source_class
+// (the radio) is deliberately NOT set here, because the vendor device list does not
+// report the per-device radio, so guessing it from a device TYPE would be wrong (see
+// the note in the body). Apply merges discover.mapping.device_type + discover.classify
+// back into the schema and preserves any existing source_class config; the existing
+// Save & restart persists it (ConfigMap + rollout). Structural, not vendor-specific:
+// it only assumes a `discover` block exists.
+function ClassifyBuilder({ service, schema, onApply }) {
+  const [raw, setRaw] = useState(null);
+  const [vendor, setVendor] = useState("");
+  const [err, setErr] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const cls = schema?.discover?.classify || {};
+  const [typeField, setTypeField] = useState(schema?.discover?.mapping?.device_type?.path || "deviceType");
+  const [assetValue, setAssetValue] = useState(cls?.asset_when?.equals ?? "");
+  const hasSourceClass = !!cls.source_class_default || (Array.isArray(cls.source_class_rules) && cls.source_class_rules.length > 0);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true); setErr(null);
+    getNorthboundDiscoverRaw(service)
+      .then((d) => { if (!alive) return; setRaw(Array.isArray(d?.raw) ? d.raw : []); setVendor(d?.vendor || ""); })
+      .catch((e) => { if (alive) setErr(e.message); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [service]);
+
+  // Candidate fields: top-level keys that are scalar in at least one record.
+  const candidateFields = (() => {
+    const set = new Set();
+    for (const r of raw || []) {
+      if (r && typeof r === "object") {
+        for (const [k, v] of Object.entries(r)) if (v === null || typeof v !== "object") set.add(k);
+      }
+    }
+    return [...set].sort();
+  })();
+  // Distinct values the chosen field takes across the sample (asset-value picker).
+  const distinctValues = (() => {
+    const set = new Set();
+    for (const r of raw || []) {
+      const v = r?.[typeField];
+      if (v !== undefined && v !== null && typeof v !== "object") set.add(String(v));
+    }
+    return [...set].sort();
+  })();
+  // Live effect of the rule on the real sample.
+  const counts = (() => {
+    let asset = 0, infra = 0;
+    for (const r of raw || []) {
+      if (assetValue !== "" && String(r?.[typeField]) === String(assetValue)) asset++;
+      else infra++;
+    }
+    return { asset, infra };
+  })();
+
+  const apply = () => {
+    const next = JSON.parse(JSON.stringify(schema));
+    next.discover = next.discover || {};
+    next.discover.mapping = next.discover.mapping || {};
+    next.discover.mapping.device_type = { path: typeField };
+    // Author role only. Preserve any operator-authored source_class config, never add one.
+    const keepSC = {};
+    if (cls.source_class_default) keepSC.source_class_default = cls.source_class_default;
+    if (Array.isArray(cls.source_class_rules) && cls.source_class_rules.length) keepSC.source_class_rules = cls.source_class_rules;
+    next.discover.classify = { asset_when: { path: typeField, equals: assetValue }, ...keepSC };
+    onApply(next);
+  };
+
+  if (loading) return <div className="py-6 text-center text-[11px] text-slate-500">Loading vendor sample…</div>;
+  if (err) return (
+    <div className="rounded border border-rose-800/50 bg-rose-950/30 p-3 text-[11px] text-rose-300">
+      Could not load raw devices from {service}: {err}
+      <div className="mt-1 text-slate-500">Edit the classify block by hand in the JSON instead.</div>
+    </div>
+  );
+  if (!raw || raw.length === 0) return (
+    <div className="rounded border border-slate-800 bg-slate-950 p-3 text-[11px] text-slate-400">
+      The adapter returned no devices — nothing to sample. Check the vendor connection, or edit the JSON by hand.
+    </div>
+  );
+
+  const sample = raw[0];
+  const canApply = !!typeField && assetValue !== "";
+  return (
+    <div className="flex flex-col gap-3 text-xs">
+      <p className="text-[11px] text-slate-500">
+        {vendor ? <><span className="text-slate-300">{vendor}</span> · </> : null}
+        {raw.length} device{raw.length === 1 ? "" : "s"} sampled from the live vendor API. Nothing is saved until you Apply, then Save &amp; restart.
+      </p>
+      <Field label="Device-type field" hint="The vendor field that names the kind of device.">
+        <select className={inputCls} value={typeField} onChange={(e) => setTypeField(e.target.value)}>
+          {candidateFields.map((f) => (
+            <option key={f} value={f}>{f}{sample?.[f] !== undefined && typeof sample[f] !== "object" ? `  (e.g. ${String(sample[f])})` : ""}</option>
+          ))}
+        </select>
+      </Field>
+      <Field label="Mark as ASSET when" hint="Every other device is treated as fixed infrastructure (not onboarded).">
+        <div className="flex items-center gap-2">
+          <span className="rounded bg-slate-800 px-2 py-1 font-mono text-[11px] text-slate-300">{typeField}</span>
+          <span className="text-slate-500">equals</span>
+          <select className={inputCls} value={assetValue} onChange={(e) => setAssetValue(e.target.value)}>
+            <option value="">— pick a value —</option>
+            {distinctValues.map((v) => <option key={v} value={v}>{v}</option>)}
+          </select>
+        </div>
+      </Field>
+      {assetValue !== "" && (
+        <div className="rounded border border-slate-800 bg-slate-950 px-3 py-2 text-[11px]">
+          On this sample: <span className="text-emerald-300">{counts.asset} asset{counts.asset === 1 ? "" : "s"}</span>
+          {" · "}<span className="text-slate-300">{counts.infra} infrastructure</span>
+          {counts.asset === 0 && <span className="ml-2 text-amber-400">no device matches — check the value</span>}
+        </div>
+      )}
+      <div className="rounded border border-slate-800 bg-slate-950/60 px-3 py-2 text-[11px] text-slate-400">
+        <span className="text-slate-300">Source class (radio)</span> is not set here. The vendor list does not report the per-device radio, so KELT does not guess it from the device type. Add <span className="font-mono text-slate-300">source_class_rules</span> by hand in the JSON only from a real signal (a positioning join, or site knowledge).
+        {hasSourceClass && <span className="text-emerald-400"> Existing source_class config is preserved.</span>}
+      </div>
+      <details className="rounded border border-slate-800 bg-slate-950">
+        <summary className="cursor-pointer px-3 py-2 text-[11px] text-slate-400 hover:text-slate-200">Show a raw vendor record</summary>
+        <div className="max-h-56 overflow-auto border-t border-slate-800 px-3 py-2 font-mono text-[11px]">
+          <JsonView value={sample} />
+        </div>
+      </details>
+      <div className="flex items-center justify-between gap-2 border-t border-slate-800 pt-3">
+        <p className="text-[10px] text-slate-500">Apply merges <span className="font-mono">device_type</span> + <span className="font-mono">classify</span> into the schema below.</p>
+        <button type="button" onClick={apply} disabled={!canApply} className={btn.sky}>Apply to schema</button>
+      </div>
+    </div>
+  );
+}
+
 // Focused viewer/editor for a file-backed document (a *_FILE the dashboard owns).
 // Default Preview parses the JSON and renders its entries (no raw text); Edit is
 // the textarea. Replace-from-file (with confirm), validate-on-save, then store it
 // in the service's files ConfigMap and roll the pod. Rendered above the config
 // modal (z-60 + capture-phase Escape so Escape closes only this one).
 function FileDocModal({ service, entry, path, initial, onClose, onSaved }) {
+  const confirm = useConfirm();
   const isJson = path.endsWith(".json");
   const [draft, setDraft] = useState(initial ?? "");
   const [view, setView] = useState(isJson ? "preview" : "edit");
@@ -844,10 +1534,13 @@ function FileDocModal({ service, entry, path, initial, onClose, onSaved }) {
     catch (e) { return { ok: false, value: null, error: e.message }; }
   })();
   const jsonError = isJson && draft.trim() && !parsed.ok ? parsed.error : null;
+  // Offer the guided Classify builder only for a schema that declares a discover
+  // block (structural gate, not vendor-specific).
+  const hasDiscover = isJson && parsed.ok && parsed.value && typeof parsed.value === "object" && !!parsed.value.discover;
 
-  const pickFile = (f) => {
+  const pickFile = async (f) => {
     if (!f) return;
-    if ((dirty || draft.trim()) && !window.confirm(`Replace the current document with “${f.name}”?`)) return;
+    if ((dirty || draft.trim()) && !(await confirm({ title: "Replace document?", body: `Load “${f.name}” over the current content.`, confirmLabel: "Replace" }))) return;
     f.text().then((t) => { setDraft(t); setErr(null); });
   };
 
@@ -872,7 +1565,7 @@ function FileDocModal({ service, entry, path, initial, onClose, onSaved }) {
       className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="flex max-h-[88vh] w-full max-w-3xl flex-col rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
+      <div className="flex max-h-[90vh] w-full max-w-5xl flex-col rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
         <div className="flex items-start justify-between gap-3 border-b border-slate-800 px-5 py-3">
           <div>
             <h3 className="text-sm font-semibold text-slate-100">{entry.name}</h3>
@@ -886,6 +1579,9 @@ function FileDocModal({ service, entry, path, initial, onClose, onSaved }) {
               <div className="inline-flex overflow-hidden rounded border border-slate-700">
                 <button type="button" onClick={() => setView("preview")} className={`px-2 py-1 ${view === "preview" ? "bg-slate-700 text-slate-100" : "bg-slate-800/60 text-slate-400"}`}>Preview</button>
                 <button type="button" onClick={editView} className={`px-2 py-1 ${view === "edit" ? "bg-slate-700 text-slate-100" : "bg-slate-800/60 text-slate-400"}`}>Edit</button>
+                {hasDiscover && (
+                  <button type="button" onClick={() => setView("classify")} className={`px-2 py-1 ${view === "classify" ? "bg-slate-700 text-slate-100" : "bg-slate-800/60 text-slate-400"}`}>Classify</button>
+                )}
               </div>
             )}
             <label className="inline-flex cursor-pointer items-center gap-1 rounded bg-slate-700/60 px-2 py-1 text-slate-300 hover:bg-slate-700">
@@ -899,15 +1595,23 @@ function FileDocModal({ service, entry, path, initial, onClose, onSaved }) {
               : draft.trim() && <span className="rounded bg-emerald-950/50 px-1.5 py-0.5 text-emerald-300">valid JSON</span>)}
             {dirty && <span className="text-amber-300">● unsaved</span>}
           </div>
-          {isJson && view === "preview" ? (
-            <div className="max-h-80 overflow-auto rounded border border-slate-800 bg-slate-950 px-3 py-2 font-mono text-[12px]">
+          {isJson && view === "classify" && parsed.ok ? (
+            <div className="h-[60vh] overflow-auto rounded border border-slate-800 bg-slate-900/40 px-4 py-3">
+              <ClassifyBuilder
+                service={service}
+                schema={parsed.value}
+                onApply={(obj) => { setDraft(JSON.stringify(obj, null, 2)); setView("preview"); }}
+              />
+            </div>
+          ) : isJson && view === "preview" ? (
+            <div className="h-[60vh] overflow-auto rounded border border-slate-800 bg-slate-950 px-3 py-2 font-mono text-[12px]">
               {parsed.ok
                 ? <JsonView value={parsed.value} />
                 : <span className="text-rose-300">{draft.trim() ? "Invalid JSON — switch to Edit to fix it." : "Empty document."}</span>}
             </div>
           ) : (
             <textarea
-              className={`${inputCls} h-80 font-mono text-[12px]`}
+              className={`${inputCls} h-[60vh] font-mono text-[12px]`}
               value={draft}
               spellCheck={false}
               placeholder="document content"
@@ -1153,8 +1857,12 @@ function ConfigureService({ service, services, toast, onClose, onApplied }) {
   // ("absent") or only runtime-loaded ("ephemeral", persist it). "managed"/"external"
   // are not needs. Non-file: required-or-sensitive and unset.
   const isNeed = (f) => isFile(f) ? (f.file_state === "absent" || f.file_state === "ephemeral") : (!f.set && (f._req || f.sensitive));
-  const needs = all.filter(isNeed);
-  const configured = all.filter((f) => !isNeed(f));
+  // Three groups instead of one flat "configured/optional" dump: human-only scalars
+  // (tokens/keys) up top, the file-backed documents (the vendor schema) in their own
+  // prominent section, and everything else (deploy-set, plain optional) folded away.
+  const fileFields = all.filter(isFile);
+  const needScalars = all.filter((f) => !isFile(f) && isNeed(f));
+  const restScalars = all.filter((f) => !isFile(f) && !isNeed(f));
   // A *_FILE document is silently ignored when its inline twin (same name without
   // _FILE, e.g. DEVICE_REGISTRY for DEVICE_REGISTRY_FILE) carries a value: many
   // services prefer the inline scalar over the file. Surface the twin so editing
@@ -1171,7 +1879,7 @@ function ConfigureService({ service, services, toast, onClose, onApplied }) {
   };
   // Only an unfilled REQUIRED scalar blocks Apply; optional secrets and *_FILE
   // documents (saved via their own editor button) do not.
-  const unfilled = needs.filter((f) => f._req && !isFile(f) && !((vals[f.name] ?? "").toString().trim()));
+  const unfilled = needScalars.filter((f) => f._req && !((vals[f.name] ?? "").toString().trim()));
 
   const submit = async () => {
     // Build the apply payload: a non-empty value sets the var; emptying a var that
@@ -1206,27 +1914,48 @@ function ConfigureService({ service, services, toast, onClose, onApplied }) {
         <Banner msg={{ text: `This service cannot be configured through the guided setup: ${err}.` }} />
       )}
       {cfg?.available && (
-        <div className="flex flex-col gap-3 text-xs">
-          {cfg.description && <p className="text-slate-400">{cfg.description}</p>}
+        <div className="flex flex-col gap-4 text-xs">
+          {cfg.description && <p className="text-[11px] leading-snug text-slate-500">{cfg.description}</p>}
+
+          {/* Human-only scalars: tokens/keys and required values the deployment can't fill. */}
           <div>
-            <p className="mb-1 text-[10px] uppercase tracking-wide text-rose-400">Needs your input</p>
-            {needs.length === 0 ? (
-              <p className="text-[11px] text-emerald-400/80">Fully configured by the deployment, nothing required.</p>
+            <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wide text-rose-400">Needs your input</p>
+            {needScalars.length === 0 ? (
+              <p className="text-[11px] text-emerald-400/80">No tokens or keys required, the deployment fills the rest.</p>
             ) : (
-              needs.map((f) => <ConfigField key={f.name} entry={f} required={f._req} value={vals[f.name]} onChange={setVal} upstreams={upstreams} service={service} toast={toast} onApplied={onApplied} shadowedBy={fileShadowedBy(f)} />)
+              <div className="flex flex-col divide-y divide-slate-800/60">
+                {needScalars.map((f) => <ConfigField key={f.name} entry={f} required={f._req} value={vals[f.name]} onChange={setVal} upstreams={upstreams} service={service} toast={toast} onApplied={onApplied} shadowedBy={fileShadowedBy(f)} />)}
+              </div>
             )}
           </div>
-          {configured.length > 0 && (
+
+          {/* Documents: file-backed config (the vendor schema). Prominent, not buried. */}
+          {fileFields.length > 0 && (
             <div>
-              <button type="button" onClick={() => setShowAll((v) => !v)} className="mb-1 text-[10px] uppercase tracking-wide text-slate-500 hover:text-slate-300">
-                {showAll ? "▾" : "▸"} Configured / optional ({configured.length})
-              </button>
-              {showAll && configured.map((f) => <ConfigField key={f.name} entry={f} value={vals[f.name]} onChange={setVal} upstreams={upstreams} service={service} toast={toast} onApplied={onApplied} shadowedBy={fileShadowedBy(f)} />)}
+              <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wide text-sky-400">Documents</p>
+              <div className="flex flex-col divide-y divide-slate-800/60">
+                {fileFields.map((f) => <ConfigField key={f.name} entry={f} required={f._req} value={vals[f.name]} onChange={setVal} upstreams={upstreams} service={service} toast={toast} onApplied={onApplied} shadowedBy={fileShadowedBy(f)} />)}
+              </div>
             </div>
           )}
-          <div className="flex items-center gap-3">
+
+          {/* Everything else (deploy-set, plain optional): folded away. */}
+          {restScalars.length > 0 && (
+            <div>
+              <button type="button" onClick={() => setShowAll((v) => !v)} className="text-[10px] font-medium uppercase tracking-wide text-slate-500 transition-colors hover:text-slate-300">
+                {showAll ? "▾" : "▸"} Optional settings ({restScalars.length})
+              </button>
+              {showAll && (
+                <div className="mt-1 flex flex-col divide-y divide-slate-800/60">
+                  {restScalars.map((f) => <ConfigField key={f.name} entry={f} value={vals[f.name]} onChange={setVal} upstreams={upstreams} service={service} toast={toast} onApplied={onApplied} shadowedBy={fileShadowedBy(f)} />)}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="flex items-center gap-3 border-t border-slate-800 pt-3">
             <button type="button" disabled={busy || unfilled.length > 0} onClick={submit} className={btn.sky}>
-              Apply &amp; restart
+              {busy ? "Applying…" : "Apply & restart"}
             </button>
             {unfilled.length > 0 && (
               <span className="text-[11px] text-rose-400">fill: {unfilled.map((f) => f.name).join(", ")}</span>

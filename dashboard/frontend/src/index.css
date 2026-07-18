@@ -144,6 +144,15 @@ body {
 }
 .svc-fade { animation: svc-fade 0.25s ease-out both; }
 
+/* Tab-pane switch: a short fade + slight rise so changing section (and layout)
+   does not snap. Used on a container keyed by the active tab so it re-animates. */
+@keyframes tab-pane {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+.tab-pane { animation: tab-pane 0.2s ease-out both; }
+
 @media (prefers-reduced-motion: reduce) {
-  .svc-fade { animation: none; }
+  .svc-fade,
+  .tab-pane { animation: none; }
 }
