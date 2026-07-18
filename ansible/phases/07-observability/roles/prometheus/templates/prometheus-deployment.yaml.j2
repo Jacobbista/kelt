@@ -33,22 +33,38 @@ spec:
           ports:
             - containerPort: {{ prometheus.port }}
           resources:
+            # TSDB WAL replay is the memory peak, not steady-state scraping: the
+            # head is rebuilt in RAM before /-/healthy answers. At 512Mi the
+            # replay OOM-killed the container every start once the head grew,
+            # which is what turned a slow replay into a permanent crash loop.
             limits:
-              cpu: 500m
-              memory: 512Mi
+              cpu: {{ prometheus.cpu_limit | default('500m') }}
+              memory: {{ prometheus.memory_limit | default('1536Mi') }}
             requests:
               cpu: 200m
-              memory: 256Mi
+              memory: {{ prometheus.memory_request | default('512Mi') }}
           volumeMounts:
             - name: config
               mountPath: /etc/prometheus
             - name: data
               mountPath: /prometheus
+          # Prometheus does not serve /-/healthy until the TSDB WAL replay is
+          # done, and replay time grows with the WAL. Without a startupProbe the
+          # liveness probe killed the pod mid-replay (~60s budget), and every
+          # failed start appended another WAL segment, so each retry replayed
+          # more: a self-amplifying crash loop that ended with ~5000 empty
+          # segments. The startupProbe gives replay up to
+          # startup_failure_threshold * 10s before liveness starts watching.
+          startupProbe:
+            httpGet:
+              path: /-/healthy
+              port: 9090
+            periodSeconds: 10
+            failureThreshold: {{ prometheus.startup_failure_threshold | default(90) }}
           livenessProbe:
             httpGet:
               path: /-/healthy
               port: 9090
-            initialDelaySeconds: 30
             periodSeconds: 10
           readinessProbe:
             httpGet:

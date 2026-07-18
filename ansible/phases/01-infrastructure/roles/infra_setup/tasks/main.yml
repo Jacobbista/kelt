@@ -102,6 +102,20 @@
   changed_when: true
   when: enable_node_nat
 
+# ==== Journald retention =====================================================
+# Unbounded by default, journald grows to 10% of the filesystem: on the worker
+# it had reached 3.8G of a 39G disk, competing with container images and PVCs
+# on a VM that is never inspected for old logs. Cap it and let systemd vacuum.
+- name: Cap journald disk usage
+  ansible.builtin.blockinfile:
+    path: /etc/systemd/journald.conf
+    marker: "# {mark} KELT journald retention"
+    block: |
+      SystemMaxUse={{ journald_max_use }}
+      SystemMaxFileSize={{ journald_max_file_size }}
+    create: false
+  notify: Restart journald
+
 - name: Manage /etc/hosts from inventory
   when: configure_hosts_from_inventory
   ansible.builtin.template:
@@ -113,7 +127,9 @@
 - name: Ping peers
   when: validate_connectivity
   ansible.builtin.command: "ping -c 1 -W 2 {{ hostvars[item]['ansible_host'] }}"
-  loop: "{{ groups['all'] | difference([inventory_hostname]) }}"
+  # The inventory always lists the edge host; it only exists when edge_enabled,
+  # so pinging it unconditionally failed the whole phase on a 2-VM deploy.
+  loop: "{{ groups['all'] | difference([inventory_hostname]) | difference([] if (edge_enabled | default(false) | bool) else (groups['edges'] | default([]))) }}"
   register: connectivity_test
   changed_when: false
   failed_when: false

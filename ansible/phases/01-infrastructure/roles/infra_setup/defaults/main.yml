@@ -29,3 +29,9 @@ validate_connectivity: true
 # OVS on data-plane nodes
 enable_ovs_on_workers_edges: true
 openvswitch_pkg: openvswitch-switch
+
+# Journald retention. Unbounded journald defaults to 10% of the filesystem,
+# which on a long-lived testbed VM silently eats the space container images
+# and PVCs need. See the task in tasks/main.yml.
+journald_max_use: "500M"
+journald_max_file_size: "50M"

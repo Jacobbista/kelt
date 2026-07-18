@@ -10,3 +10,8 @@
     name: openvswitch-switch
     state: restarted
     enabled: true
+
+- name: Restart journald
+  ansible.builtin.systemd:
+    name: systemd-journald
+    state: restarted

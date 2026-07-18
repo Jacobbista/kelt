@@ -9,3 +9,12 @@ prometheus:
   retention: 15d
   retention_size: 4GB
   storage_size: 10Gi
+  # Startup grace for the TSDB WAL replay, in units of 10s (90 -> 15 minutes).
+  # Liveness only starts probing once this succeeds. See the comment in
+  # templates/prometheus-deployment.yaml.j2.
+  startup_failure_threshold: 90
+  # Peak memory is the WAL replay, not scraping. See the resources comment in
+  # templates/prometheus-deployment.yaml.j2.
+  memory_limit: 1536Mi
+  memory_request: 512Mi
+  cpu_limit: 500m
