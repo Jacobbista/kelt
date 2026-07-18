@@ -43,6 +43,15 @@ Phase class (whether it runs by default) is independent of maturity tier (how va
 
 All shared variables belong in `ansible/group_vars/all.yml`. Do not hardcode IPs, versions, or image names in roles; reference variables defined in `all.yml`.
 
+### Component image versions
+
+Every container image tag is defined once in `all.yml` and referenced from roles, templates, and the frontend; never hardcode a tag in a role default, a `.j2`, or a source file. The 5g-northbound companion images (phase 10 plus the dashboard catalog) use a two-layer model:
+
+- **Baseline (committed):** `northbound_image_registry` plus the `northbound_image_tags` map in `all.yml`. Phase-10 role defaults compose their image from these; the dashboard catalog (`wifi-positioning`, `rest-adapter`) receives them at deploy time through `env-config.js` (`VITE_NB_*_IMAGE`, read via `runtime-env`), so the frontend does not pin a tag either.
+- **Live override (gitignored):** `.testbed.versions`, written by the dashboard "Update all" so a phase re-run keeps an operator-rolled image instead of downgrading. Each phase-managed role default reads its own `*_TAG` env var and falls back to the `all.yml` baseline. The override layers on top of the baseline, it is not a second source, and an entry must never pin below the baseline (that reintroduces the downgrade this model removes).
+
+Filtered CI advances each companion image independently, so each carries its own tag, there is no shared release tag. To bump a version, edit `northbound_image_tags` in `all.yml` only.
+
 ### Edge vs Worker
 
 The testbed runs in two modes: with and without the edge VM. All code that touches the edge node must be gated:
@@ -221,6 +230,10 @@ Every topic has ONE canonical document that owns it. Other documents link to the
 | Operator quick-reference (consolidated IPs, ports, commands) | `docs/operations/handbook.md` (cheat-sheet only; links the owners above for detail) |
 
 When documenting a fact, write it at its owner and link from elsewhere. Concrete values are referenced, never copy-pasted. `docs/README.md` must list every doc.
+
+### Using the docs (agents)
+
+Before answering or reasoning about any topic in the Documentation Map above, open its owner document first and treat it as authoritative. Do not reconstruct a fact a canonical doc owns (subnets, static IPs, VXLAN VNIs, IPAM and static-IP conventions, roles, ports, phase behavior) from code or memory; read the owner, then check the code only to confirm the doc is not stale. When editing code that implements a charter topic, keep a `see docs/...` backlink to its owner so the next agent in that code is pointed at the canonical document.
 
 ### Known Issues Format
 

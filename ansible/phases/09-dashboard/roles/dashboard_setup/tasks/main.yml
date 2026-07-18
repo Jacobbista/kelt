@@ -144,6 +144,13 @@
       # otherwise leave same-origin /docs (prod path). Without this the dev bundle
       # falls back to the public GitHub site for every docs link.
       VITE_DOCS_URL={{ (external_scheme ~ '://' ~ dashboard_subdomain ~ '.' ~ external_base_domain ~ '/docs') if (external_base_domain | default('')) else '/docs' }}
+      # Northbound catalog deploy-time default images, from all.yml (single source).
+      VITE_NB_WIFI_IMAGE={{ northbound_image_registry }}/wifi-positioning:{{ northbound_image_tags.wifi_positioning }}
+      VITE_NB_REST_ADAPTER_IMAGE={{ northbound_image_registry }}/rest-adapter:{{ northbound_image_tags.rest_adapter }}
+      # CAMARA tenant the Add-asset form defaults to (single-org testbed).
+      VITE_CAMARA_ORG={{ camara_org }}
+      # Seed tenant account the IAM page points the operator at (phase 08 creates it).
+      VITE_IAM_TENANT_USER={{ camara_tenant_username }}
   register: frontend_env_file
   when: dashboard_dev_enabled | bool
 
@@ -305,15 +312,21 @@
     kubeconfig: "{{ kubeconfig_path }}"
   when: dashboard_cluster_enabled | bool
 
-- name: Pre-pull dashboard frontend image on worker
+# Best-effort warm-up: the cluster Deployment uses imagePullPolicy: Always and pulls
+# this :latest image itself on the forced rollout below, so a transient registry/DNS
+# blip here must NOT abort the phase. Retry a few times, then carry on regardless.
+- name: Pre-pull dashboard frontend image on worker (best-effort; rollout pulls on Always)
   ansible.builtin.command:
     cmd: "k3s ctr -n k8s.io images pull {{ dashboard_frontend_image }}"
   delegate_to: "{{ groups['workers'][0] }}"
   become: true
   run_once: true
-  changed_when: false
   register: prepull_dashboard
-  failed_when: prepull_dashboard.rc != 0 and 'already exists' not in (prepull_dashboard.stderr | default(''))
+  retries: 3
+  delay: 5
+  until: prepull_dashboard.rc == 0
+  changed_when: false
+  failed_when: false
   when: dashboard_cluster_enabled | bool
 
 - name: Apply dashboard frontend ConfigMap (nginx.conf + env-config.js)

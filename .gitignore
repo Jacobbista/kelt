@@ -19,6 +19,7 @@ Thumbs.db
 .physical_ran_bridge_applied
 .testbed.env
 .testbed.secrets
+.testbed.versions
 *.vmdk
 *.vdi
 *.vbox

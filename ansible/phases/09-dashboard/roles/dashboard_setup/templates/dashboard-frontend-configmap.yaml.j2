@@ -13,7 +13,14 @@ data:
       VITE_KEYCLOAK_REALM: "{{ dashboard_keycloak_realm }}",
       VITE_KEYCLOAK_CLIENT_ID: "{{ dashboard_keycloak_client_id }}",
       DASHBOARD_DEV_EXTERNAL_URL: "{{ dashboard_dev_external_url if dashboard_dev_external_url else 'http://' ~ hostvars[groups['control'][0]]['ansible_host'] ~ ':' ~ dashboard_frontend_port }}",
-      VITE_DOCS_URL: "{{ '/docs' if dashboard_docs_enabled | default(true) | bool else 'https://jacobbista.github.io/kelt' }}"
+      VITE_DOCS_URL: "{{ '/docs' if dashboard_docs_enabled | default(true) | bool else 'https://jacobbista.github.io/kelt' }}",
+      {# Northbound catalog deploy-time default images, from all.yml (single source). #}
+      VITE_NB_WIFI_IMAGE: "{{ northbound_image_registry }}/wifi-positioning:{{ northbound_image_tags.wifi_positioning }}",
+      VITE_NB_REST_ADAPTER_IMAGE: "{{ northbound_image_registry }}/rest-adapter:{{ northbound_image_tags.rest_adapter }}",
+      {# CAMARA tenant the Add-asset form defaults to (single-org testbed). #}
+      VITE_CAMARA_ORG: "{{ camara_org }}",
+      {# Seed tenant account the IAM page points the operator at (phase 08 creates it). #}
+      VITE_IAM_TENANT_USER: "{{ camara_tenant_username }}"
     };
   default.conf: |
     server {

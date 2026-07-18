@@ -26,6 +26,11 @@ gate_namespace: "default"
 gate_upstream: ""                         # http://<service>.<ns>.svc.cluster.local:<port>
 gate_client_id: ""                        # confidential realm client (phase 08)
 gate_client_secret: "changeme"
+# Gate session lifetime. Independent of the Keycloak SSO session, so keep it
+# short and refresh often: the gate re-validates against Keycloak every
+# cookie_refresh, which is what makes a logout or a group change take effect.
+gate_cookie_expire: "8h"
+gate_cookie_refresh: "15m"
 gate_allowed_groups: []                   # full-path groups, e.g. ["/g-dashboard-admins"]
 gate_nodeport: 31950
 gate_external_origin: ""                  # browser-facing origin (redirect URI base)

@@ -140,7 +140,13 @@ placement_editor_enabled: "{{ (lookup('ansible.builtin.env', 'PLACEMENT_EDITOR_E
 # local registry (insecure HTTP + basic-auth, NodePort only, never tunneled). See
 # docs/architecture/edge-apps.md.
 apps_enabled: "{{ lookup('ansible.builtin.env', 'APPS_ENABLED') | default('false', true) | bool }}"
-apps_namespace: apps
+# Edge apps are MEC apps: they deploy into the `mec` namespace and (optionally)
+# attach to the MEC data network n6m so UEs reach them via the UPF. Convention:
+# they run on the worker now and can move to the edge node later. The local
+# registry is platform infrastructure, not a MEC app, so it lives in its own
+# namespace. See docs/architecture/edge-apps.md and 5g-interfaces.md.
+apps_namespace: mec
+apps_registry_namespace: apps
 # Local image registry (registry:2) for build-outside-push-here-deploy. Exposed on
 # this NodePort on the worker only; k3s containerd pulls from it via
 # /etc/rancher/k3s/registries.yaml (insecure mirror). Credentials live in
@@ -157,22 +163,33 @@ apps_registry_username: "{{ lookup('ansible.builtin.env', 'APPS_REGISTRY_USERNAM
 apps_registry_password: "{{ lookup('ansible.builtin.env', 'APPS_REGISTRY_PASSWORD') | default('changeme-registry', true) }}"
 
 # ── External access (single base domain) ─────────────────────────────────────
-# One operator-set base domain fronts every HTTP surface as <subdomain>.<base>,
-# routed by the in-cluster front-door (phase 09) behind a single Cloudflare
-# wildcard (*.<base>). Leave EXTERNAL_BASE_DOMAIN empty to fall back to per-service
-# LAN NodePorts (no external exposure). Each service has a default subdomain below
-# and an individual *_external_origin override (env) that still wins, for one-offs
-# or staged migration. See docs/security/external-access.md.
+# EXTERNAL_BASE_DOMAIN is the operator's bare domain (e.g. `example.com`). KELT
+# namespaces all its surfaces under a first-level prefix label (kelt_prefix, default
+# `kelt`): the catalogue at `kelt.<base>` and every service at `kelt-<name>.<base>`.
+# All KELT hostnames are therefore FIRST-LEVEL subdomains, covered by the free
+# Cloudflare Universal SSL wildcard (`*.<base>`); a second-level scheme
+# (`*.kelt.<base>`) would need paid Advanced Certificate Manager, so it is avoided.
+# A single Cloudflare wildcard tunnel (`*.<base>` -> front-door) routes everything
+# by Host. The operator's own subdomains stay theirs: an explicit DNS record wins
+# over the wildcard; only undefined first-level names fall to the front-door (which
+# serves a branded 404). Leave EXTERNAL_BASE_DOMAIN empty for per-service LAN
+# NodePorts (no external exposure). See docs/security/external-access.md.
 external_base_domain: "{{ lookup('ansible.builtin.env', 'EXTERNAL_BASE_DOMAIN') | default('', true) }}"
 external_scheme: "{{ lookup('ansible.builtin.env', 'EXTERNAL_SCHEME') | default('https', true) }}"
-# Per-service subdomains (overridable). The front-door routing, the realm redirect
-# URIs/web origins, and the dashboard public-link derivation all read these so the
-# subdomain of a surface is defined in exactly one place.
-dashboard_subdomain: "{{ lookup('ansible.builtin.env', 'DASHBOARD_SUBDOMAIN') | default('kelt', true) }}"
-dashboard_dev_subdomain: "{{ lookup('ansible.builtin.env', 'DASHBOARD_DEV_SUBDOMAIN') | default('dev', true) }}"
-camara_subdomain: "{{ lookup('ansible.builtin.env', 'CAMARA_SUBDOMAIN') | default('api', true) }}"
-positioning_demo_subdomain: "{{ lookup('ansible.builtin.env', 'POSITIONING_DEMO_SUBDOMAIN') | default('demo', true) }}"
-placement_editor_subdomain: "{{ lookup('ansible.builtin.env', 'PLACEMENT_EDITOR_SUBDOMAIN') | default('placement', true) }}"
+# KELT's first-level namespace prefix. The catalogue is `<prefix>.<base>`, services
+# are `<prefix>-<name>.<base>`, edge apps are `<prefix>-<app>.<base>`. Keeps KELT's
+# names clearly separate from the operator's own first-level subdomains.
+kelt_prefix: "{{ lookup('ansible.builtin.env', 'KELT_PREFIX') | default('kelt', true) }}"
+# Per-service subdomains (overridable), each a first-level label under the base. The
+# front-door routing, the realm redirect URIs/web origins, and the dashboard
+# public-link derivation all read these so the subdomain of a surface is defined in
+# exactly one place. catalogue_subdomain (bare prefix) serves the service catalogue.
+catalogue_subdomain: "{{ lookup('ansible.builtin.env', 'CATALOGUE_SUBDOMAIN') | default(kelt_prefix, true) }}"
+dashboard_subdomain: "{{ lookup('ansible.builtin.env', 'DASHBOARD_SUBDOMAIN') | default(kelt_prefix ~ '-dashboard', true) }}"
+dashboard_dev_subdomain: "{{ lookup('ansible.builtin.env', 'DASHBOARD_DEV_SUBDOMAIN') | default(kelt_prefix ~ '-dev', true) }}"
+camara_subdomain: "{{ lookup('ansible.builtin.env', 'CAMARA_SUBDOMAIN') | default(kelt_prefix ~ '-camara', true) }}"
+positioning_demo_subdomain: "{{ lookup('ansible.builtin.env', 'POSITIONING_DEMO_SUBDOMAIN') | default(kelt_prefix ~ '-demo', true) }}"
+placement_editor_subdomain: "{{ lookup('ansible.builtin.env', 'PLACEMENT_EDITOR_SUBDOMAIN') | default(kelt_prefix ~ '-placement', true) }}"
 # NodePort the in-cluster front-door (phase 09) listens on; the Cloudflare wildcard
 # tunnel points *.<base> here. Front-door routes by Host to each service.
 frontdoor_nodeport: 31500
@@ -225,3 +242,36 @@ nf_images:
   pcf:  "ghcr.io/jacobbista/5g-nf-platform/pcf:2.7.7-p0"
   bsf:  "ghcr.io/jacobbista/5g-nf-platform/bsf:2.7.7-p0"
   nssf: "ghcr.io/jacobbista/5g-nf-platform/nssf:2.7.7-p0"
+
+# ── 5g-northbound companion images (phase 10 + dashboard catalog) ─────────────
+# Single source of truth for every northbound image tag. Filtered CI advances each
+# image independently, so each carries its OWN tag (no shared release tag). Phase-10
+# role defaults and the dashboard catalog both derive their baseline from here; do
+# not hardcode a northbound tag anywhere else.
+#   Baseline (committed): these values.
+#   Live override (gitignored): .testbed.versions, written by the dashboard "Update
+#   all" so a phase re-run keeps an operator-rolled image instead of downgrading. It
+#   layers ON TOP of this baseline (env override wins); it is not a second source.
+# Source: https://github.com/Jacobbista/5g-northbound
+northbound_image_registry: "ghcr.io/jacobbista/5g-northbound"
+northbound_image_tags:
+  positioning_engine: "0.8.15"
+  mock_positioning:   "0.8.15"
+  camara_gateway:     "0.8.15"
+  placement_editor:   "0.8.17"
+  positioning_demo:   "0.8.12"
+  wifi_positioning:   "0.8.15"
+  rest_adapter:       "0.8.18"
+
+# ── CAMARA tenant (single-org testbed) ───────────────────────────────────────
+# The one CAMARA tenant the testbed uses. The gateway scopes an asset's visibility
+# by matching the caller's `org` token claim against `asset.org`; a caller with no
+# `org` claim is the operator (god-mode, sees all). `org` is carried as a USER
+# attribute (person or service account) via a shared token mapper, so the same rule
+# applies to browser login and M2M. Multi-tenant = give other users a different
+# `org` attribute; no code change. See docs/security/iam.md.
+camara_org: "demo"
+# Username of the seed TENANT account phase 08 creates with that `org` attribute
+# (alongside the org-less admin/viewer operators), so scoped browser login is
+# demonstrable out of the box. Shared with phase 09, which shows it on the IAM page.
+camara_tenant_username: "demo"

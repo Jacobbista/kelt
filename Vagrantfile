@@ -364,8 +364,9 @@ INVENTORY
       inline: <<-'SHELL'
       if ! grep -q 'TESTBED_ENV_AUTOSOURCE' ~/.bashrc; then
         echo '# TESTBED_ENV_AUTOSOURCE' >> ~/.bashrc
-        echo '[ -f /vagrant/.testbed.env ]     && { set -a; . /vagrant/.testbed.env;     set +a; }' >> ~/.bashrc
-        echo '[ -f /vagrant/.testbed.secrets ] && { set -a; . /vagrant/.testbed.secrets; set +a; }' >> ~/.bashrc
+        echo '[ -f /vagrant/.testbed.env ]      && { set -a; . /vagrant/.testbed.env;      set +a; }' >> ~/.bashrc
+        echo '[ -f /vagrant/.testbed.secrets ]  && { set -a; . /vagrant/.testbed.secrets;  set +a; }' >> ~/.bashrc
+        echo '[ -f /vagrant/.testbed.versions ] && { set -a; . /vagrant/.testbed.versions; set +a; }' >> ~/.bashrc
       fi
     SHELL
 
@@ -395,6 +396,9 @@ INVENTORY
       set -euo pipefail
       export PATH="$HOME/.local/bin:$PATH"
       export ANSIBLE_CONFIG=/home/vagrant/ansible-work/ansible.cfg
+      # Companion per-image release tags the dashboard rolled forward (generic source,
+      # so no per-image *_TAG is hardcoded here). Keeps a re-provision from downgrading.
+      set -a; [ -f /vagrant/.testbed.versions ] && . /vagrant/.testbed.versions; set +a
       deploy_mode="${DEPLOY_MODE:-core_only}"
       physical_ran_enabled="${PHYSICAL_RAN_ENABLED:-false}"
       edge_enabled="${EDGE_ENABLED:-false}"

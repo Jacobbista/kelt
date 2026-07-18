@@ -2,7 +2,12 @@
 positioning_enabled: true
 positioning_namespace: positioning
 
-positioning_engine_image: "ghcr.io/jacobbista/5g-northbound/positioning-engine:0.8.1"
+# Each companion image advances independently (filtered CI), so each reads its OWN
+# release-tag env var, persisted to .testbed.versions by the dashboard "Update all"
+# (rolls the running testbed forward). Baseline tag lives in all.yml
+# (northbound_image_tags), the single source of truth; do not hardcode it here.
+# See dashboard/backend/app/services/northbound_service.py.
+positioning_engine_image: "{{ northbound_image_registry }}/positioning-engine:{{ lookup('ansible.builtin.env', 'POSITIONING_ENGINE_TAG') | default(northbound_image_tags.positioning_engine, true) }}"
 positioning_engine_nodeport: 31930
 
 # Engine-owned blueprint store (v0.5.0 authority model): only the engine mounts
@@ -18,9 +23,11 @@ positioning_blueprint_pvc_size: "100Mi"
 # from the dashboard catalog. See docs/architecture/positioning-adapters.md.
 engine_adapter_urls: ""
 
-# Optional per-device routing OVERRIDE: CSV of device_id=adapter_name. Empty (default,
-# v0.8.0) = capability-driven routing: the gateway passes the asset's source (?source=)
-# and the engine fans out to registered adapters, fusing those that answer.
+# Optional per-device routing pin: CSV of device_id=adapter_name. Routing order
+# (v0.8.0, capability-driven): the asset source (?source= from the gateway) wins and
+# selects the registered adapter whose ADAPTER_NAME equals it; else this map pins a
+# device to an adapter; else the engine fans out to all adapters and fuses those that
+# answer (also the WebSocket stream path). Empty by default.
 engine_device_map: ""
 
 # Devices the engine tracks and broadcasts on the WebSocket.
@@ -37,7 +44,8 @@ engine_websocket_interval_ms: 500
 # ── mock-positioning reference adapter (lean baseline) ───────────────────────
 # Synthetic random-walk adapter deployed alongside the engine so the demo shows
 # live movement out of the box. Room bounds come from the floor_* dims below.
-mock_positioning_image: "ghcr.io/jacobbista/5g-northbound/mock-positioning:0.8.2"
+# Own release-tag env var; baseline from all.yml (see positioning_engine_image note above).
+mock_positioning_image: "{{ northbound_image_registry }}/mock-positioning:{{ lookup('ansible.builtin.env', 'MOCK_POSITIONING_TAG') | default(northbound_image_tags.mock_positioning, true) }}"
 
 # Floor plan defaults (passed to the engine for mock bounds and to the demo
 # for 3D rendering). Override at deploy time for real room dimensions:
