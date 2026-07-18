@@ -20,7 +20,13 @@ import { getUserManager } from "../auth/oidc";
 // keeps returning the same error without an interactive prompt).
 const RETRY_KEY = "kelt_auth_retry_at";
 const RETRY_WINDOW_MS = 15000;
-const RECOVERABLE = /No matching state|No state in response|expired|invalid_grant|login_required/i;
+// Any failure at the callback is treated as recoverable: an authorization code
+// that cannot be redeemed (already used, expired, "Code not valid" after a
+// logout round-trip) never becomes valid by showing the user a dead screen. The
+// RETRY_KEY guard below is what prevents this from becoming a redirect loop, so
+// the safe default is to start a fresh login and only surface the error if that
+// already happened moments ago.
+const RECOVERABLE = /./;
 
 export default function CallbackPage() {
   const navigate = useNavigate();

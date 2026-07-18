@@ -2,16 +2,21 @@ import { createContext, useCallback, useContext, useEffect, useState } from "rea
 import { AUTH_ENABLED, extractRoles, getUserManager, KEYCLOAK_AUTHORITY } from "./oidc";
 import { env } from "../runtime-env";
 
-// Keycloak end-session URL without post_logout_redirect_uri. The SPA
-// drives navigation locally to /logged-out so behavior does not depend
-// on Keycloak resolving redirect URI patterns (KC 26 + cross-origin
-// hostnames sometimes fall back to the client's first redirectUri
-// instead of /logged-out, sending the user straight to /auth/callback
-// and re-authenticating via SSO).
-function buildEndSessionUrl(idToken, clientId) {
+// Keycloak end-session URL for a real RP-initiated logout: a TOP-LEVEL redirect
+// carrying id_token_hint plus post_logout_redirect_uri. Both matter. The hint is
+// what makes Keycloak honour the requested return URI instead of guessing the
+// client's first redirectUri (which is what previously dumped the browser on
+// /auth/callback and re-authenticated over SSO). The realm registers both the
+// prod and dev origins under post.logout.redirect.uris, so /logged-out matches.
+//
+// This replaces an earlier hidden-iframe logout: framing Keycloak is blocked by
+// `frame-ancestors 'self'` whenever the app is served from the dev origin, so the
+// SSO session was never actually terminated and only the local tab forgot it.
+function buildEndSessionUrl(idToken, clientId, postLogoutUri) {
   const params = new URLSearchParams();
   params.set("client_id", clientId);
   if (idToken) params.set("id_token_hint", idToken);
+  if (postLogoutUri) params.set("post_logout_redirect_uri", postLogoutUri);
   return `${KEYCLOAK_AUTHORITY}/protocol/openid-connect/logout?${params.toString()}`;
 }
 
@@ -91,19 +96,15 @@ export function AuthProvider({ children }) {
     } catch {
       // ignore: still proceed with SPA navigation
     }
-    // Best-effort Keycloak SSO termination via hidden iframe. The SPA
-    // does not depend on the iframe completing; the local logout (SPA
-    // route + cleared sessionStorage) is authoritative for this tab.
-    try {
-      const iframe = document.createElement("iframe");
-      iframe.style.display = "none";
-      iframe.src = buildEndSessionUrl(idToken, clientId);
-      document.body.appendChild(iframe);
-      setTimeout(() => { try { iframe.remove(); } catch { /* noop */ } }, 4000);
-    } catch {
-      // noop: SPA navigation below is what the user sees regardless
+    // Hand the browser to Keycloak so the SSO session really ends, and let it
+    // bring the user back to /logged-out. Without an id_token there is nothing to
+    // prove the session with, so fall back to clearing this tab only.
+    const back = `${window.location.origin}/logged-out`;
+    if (idToken) {
+      window.location.assign(buildEndSessionUrl(idToken, clientId, back));
+    } else {
+      window.location.assign("/logged-out");
     }
-    window.location.assign("/logged-out");
   }, [user]);
 
   const roles = extractRoles(user);

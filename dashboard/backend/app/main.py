@@ -120,7 +120,7 @@ app.include_router(apps_public_router)  # unauthenticated: welcome-page app list
 app.include_router(apps_read_router, dependencies=_viewer)
 app.include_router(branding_read_router, dependencies=_viewer)
 # Dashboard self-update status (deployed-vs-registry for frontend/docs).
-app.include_router(selfupdate_read_router, dependencies=_viewer)
+app.include_router(selfupdate_read_router, dependencies=_admin)
 
 # Admin-only: privileged actions with cluster-wide blast radius.
 # - subscribers: read access also gated because the records contain K and OPc

@@ -93,8 +93,13 @@ export default function ManualPage() {
   const [components, setComponents] = useState([]);
   const [busy, setBusy] = useState("");
 
-  const load = () => getDashboardComponents().then(setComponents).catch(() => {});
-  useEffect(() => { load(); }, []);
+  // Component versions and "update available" are operator information (and the
+  // endpoint is admin-only), so a viewer neither fetches nor sees this block.
+  const load = () => {
+    if (!isAdmin) return;
+    getDashboardComponents().then(setComponents).catch(() => {});
+  };
+  useEffect(() => { load(); }, [isAdmin]);
 
   const doUpdate = async (name) => {
     setBusy(name);
@@ -131,6 +136,7 @@ export default function ManualPage() {
         <p className="text-xs text-slate-500">Find your way around the dashboard and cluster, and learn how the testbed works.</p>
       </header>
 
+      {isAdmin && (
       <Panel
         title="Updates"
         hint="Dashboard components vs the latest published image. Updating re-pulls only that component (no full redeploy)."
@@ -160,6 +166,7 @@ export default function ManualPage() {
           </div>
         )}
       </Panel>
+      )}
 
       <Panel title="Documentation" hint="The full docs site (always in sync with the repo).">
         <a
