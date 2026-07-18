@@ -138,13 +138,23 @@ See [RAN Modes](../deployment/ran-modes-dashboard.md) for the full workflow.
 
 ## Edge apps (phase 12)
 
-Operator-deployed application pods in the `apps` namespace. See [architecture/edge-apps.md](../architecture/edge-apps.md).
+Operator-deployed application pods in the `mec` namespace; the local registry lives in the `apps` namespace. See [architecture/edge-apps.md](../architecture/edge-apps.md).
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| GET | `/api/v1/apps` | — | Inventory of deployed apps (name, image, replicas, ready, exposed, public URL `<name>.<base>`) |
-| POST | `/api/v1/apps` | ✅ Admin | Deploy an app. Requires `DASHBOARD_ALLOW_WORKLOAD_CREATE=true`. Body: `{name, image, port?, replicas?, env[], image_pull_secret?, expose?}`. Creates a Deployment (+ Service on port 80 when exposed) pinned to the worker |
+| GET | `/api/v1/apps` | — | Inventory of deployed apps (name, image, replicas, ready, exposed, public URL `kelt-<name>.<base>`, `mec_attached`, `mec_ip`) |
+| GET | `/api/v1/apps/public` | — | Unauthenticated (no token even in auth mode): names + public URLs of exposed apps, for the front-door welcome page |
+| GET | `/api/v1/apps/updates` | — | Per app: whether the registry digest for its tag is newer than the running pod's |
+| POST | `/api/v1/apps` | ✅ Admin | Deploy an app. Requires `DASHBOARD_ALLOW_WORKLOAD_CREATE=true`. Body: `{name, image, port?, replicas?, env[], image_pull_secret?, expose?, attach_mec?, mec_ip?, udp_ports[]}`. Creates a Deployment (+ Service on port 80 when exposed) pinned to the worker; `attach_mec` adds an `n6m-net` interface so UEs reach it over the user plane |
+| PUT | `/api/v1/apps/{name}/image` | ✅ Admin | Retarget a deployed app to a chosen registry tag (date-ordered picker), preserving its other settings. Body: `{image}`. Requires `DASHBOARD_ALLOW_WORKLOAD_CREATE=true` |
 | DELETE | `/api/v1/apps/{name}` | ✅ Admin | Delete an app (Deployment, Service, config ConfigMap/Secret) |
+| GET | `/api/v1/apps/registry-credentials` | ✅ Admin | Local-registry host + basic-auth credentials, so an admin can `docker login` and push |
+| GET | `/api/v1/apps/registry/images` | ✅ Admin | Repos and tags in the local registry, each tag with its build timestamp (newest first) |
+| GET | `/api/v1/apps/starter-kit` | ✅ Admin | Zip (README + `.env.example` + `deploy.sh`) prefilled with the registry host, for an app developer |
+| POST | `/api/v1/apps/provision` | ✅ Admin | Deploy the platform from the UI (phases 12 + 11), streaming progress as NDJSON |
+| GET | `/api/v1/apps/gnb/console` | — | gNB management console state (configured, origin `host:port`, public URL) |
+| PUT | `/api/v1/apps/gnb/console` | ✅ Admin | Expose the gNB web UI at `kelt-gnb.<base>`. Body: `{host, port?}`. Registers a selectorless Service+Endpoints `gnb` reached via the dynamic apps route. Requires `DASHBOARD_ALLOW_WORKLOAD_CREATE=true` |
+| DELETE | `/api/v1/apps/gnb/console` | ✅ Admin | Remove the gNB console Service+Endpoints |
 
 ---
 

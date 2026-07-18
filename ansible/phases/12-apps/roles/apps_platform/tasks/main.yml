@@ -1,20 +1,24 @@
 ---
 # APPS PLATFORM
-# The namespace the deploy-from-image console (dashboard Apps page) targets. Apps
-# land here as Deployment + Service, pinned to the worker via nodeSelector by the
-# backend. See docs/architecture/edge-apps.md.
+# Namespaces the edge apps platform uses: `apps_namespace` (mec) is where MEC apps
+# deploy via the dashboard Apps page; `apps_registry_namespace` (apps) holds the
+# local registry. Both ensured idempotently (mec usually already exists from the
+# overlay/MEC phases). See docs/architecture/edge-apps.md.
 
-- name: Ensure apps namespace exists
+- name: Ensure edge-apps namespaces exist
   kubernetes.core.k8s:
     api_version: v1
     kind: Namespace
     state: present
     definition:
       metadata:
-        name: "{{ apps_namespace }}"
+        name: "{{ item }}"
         labels:
-          name: "{{ apps_namespace }}"
+          name: "{{ item }}"
           kelt.io/surface: apps
     kubeconfig: "{{ kubeconfig_path }}"
+  loop:
+    - "{{ apps_namespace }}"
+    - "{{ apps_registry_namespace }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true

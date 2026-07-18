@@ -20,6 +20,10 @@ use_ovs_cni: true
 # Overlay networks (N1/N2/N3/N4/N6e/N6c)
 overlay_mtu: 1450
 n6_data_mtu: 1400
+# Per-interface overlay NADs (subnet, bridge, VXLAN VNI, IPAM range/gateway). The
+# interface matrix (subnets, static IPs, VNIs) and the static-IP-via-Whereabouts
+# convention are owned by docs/architecture/5g-interfaces.md — read it before
+# changing values here.
 overlay_networks:
   - {
       name: "n1-net",
@@ -79,7 +83,14 @@ overlay_networks:
       end: "10.207.0.250",
       gw: "10.207.0.1",
     }
-  # N6 MEC data network (UPF-Cloud → MEC services)
+  # N6 MEC data network (UPF-Cloud → MEC services). MEC pods on this DN are reached
+  # by UEs via UPF-Cloud (connected route). A MEC app that needs a fixed IP requests
+  # it the same way the NFs do: `ips` in the Multus annotation (whereabouts honors it
+  # directly; see amf/smf/upf in 05-5g-core nf_deployments).
+  # NO per-NAD `routes` here: the UPF-Cloud also attaches this NAD and OWNS the UE
+  # pools (10.45/10.46) on ogstun, so a UE-pool route via n6m hijacks UE downlink and
+  # breaks internet. Two-way app return-routing is a per-app concern, not this shared
+  # NAD. See docs/architecture/edge-apps.md.
   - {
       name: "n6m-net",
       ns: "mec",
@@ -88,6 +99,10 @@ overlay_networks:
       start: "10.208.0.100",
       end: "10.208.0.250",
       gw: "10.208.0.1",
+      # Reserve 10.208.0.200-.207 for MEC apps that need a fixed IP (UEs target a
+      # stable address). Excluded from dynamic allocation; an app claims one via the
+      # `ips` annotation, same pattern as the UPF static IPs on n3-net.
+      exclude: ["10.208.0.200/29"],
     }
 
 # Expected Multus DS readiness (workers + edge if enabled)

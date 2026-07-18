@@ -131,12 +131,14 @@ Shortcut for the supported sub-domain convention:
 testbed auth-network preset-cloudflare yourdomain.com
 ```
 
-This sets `DASHBOARD_EXTERNAL_ORIGIN=https://core.yourdomain.com`,
-`CAMARA_GATEWAY_EXTERNAL_ORIGIN=https://api.yourdomain.com`,
-`POSITIONING_DEMO_EXTERNAL_ORIGIN=https://demo.yourdomain.com`, and
-the dev frontend at `https://dev.yourdomain.com`. The tunnel itself
-(Cloudflare, ngrok, ssh-based, etc.) is configured outside the
-testbed and is documented separately.
+This takes the operator's bare domain and namespaces every KELT surface under a
+first-level `kelt-` prefix: the catalogue at `kelt.yourdomain.com`, the dashboard at
+`kelt-dashboard.yourdomain.com`, CAMARA at `kelt-camara.yourdomain.com`, plus
+`kelt-demo`, `kelt-placement`, and `kelt-dev`. All are first-level subdomains, so one
+free Cloudflare wildcard (`*.yourdomain.com`) covers their TLS, and the operator's
+own subdomains are left untouched. The tunnel itself (Cloudflare, ngrok, ssh-based,
+etc.) is configured outside the testbed. Full surface map and rationale:
+[docs/security/external-access.md](docs/security/external-access.md).
 
 ### Deploy your own app (edge apps platform)
 
@@ -145,8 +147,8 @@ Run your own container as a pod and reach its frontend at its own subdomain. Opt
 ```bash
 testbed apps on
 testbed secrets generate-missing      # registry password (or set APPS_REGISTRY_PASSWORD)
-testbed run-phase 12-apps             # local registry + apps namespace (restarts k3s on the worker once)
-testbed run-phase 11-frontdoor        # emit the dynamic <name>.<base> route
+testbed run-phase 12-apps             # local registry (apps ns) + mec app namespace (restarts k3s on the worker once)
+testbed run-phase 11-frontdoor        # emit the dynamic kelt-<name>.<base> route
 ```
 
 Then build outside the cluster, push to the local registry, and deploy from the
@@ -156,7 +158,7 @@ dashboard (Services → Edge apps, admin):
 docker login 192.168.56.11:31501      # user kelt, the generated registry password
 docker build -t 192.168.56.11:31501/face:dev .
 docker push    192.168.56.11:31501/face:dev
-# Apps page: image=192.168.56.11:31501/face:dev, port, replicas, expose -> face.<base>
+# Apps page: image=192.168.56.11:31501/face:dev, port, replicas, expose -> kelt-face.<base>
 ```
 
 The registry is insecure HTTP on a NodePort only (never tunneled); add it to the

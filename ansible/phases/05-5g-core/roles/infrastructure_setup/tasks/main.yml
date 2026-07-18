@@ -55,7 +55,18 @@
 # ctr with -n k8s.io pulls into the namespace K3s/kubelet uses.
 # crictl pull uses the 'default' namespace — images end up invisible to pods.
 # `timeout 300` (unix command) kills ctr after 5min — ctr has no --timeout flag.
-- name: Pre-pull container images on worker
+# Pull only images NOT already present, with real retries (retries needs `until`).
+# `ctr pull` hits the registry even for a present image, so an unconditional pull
+# hard-fails a re-run on a transient DNS/registry blip; listing first and skipping
+# present images makes the phase robust and avoids needless registry traffic.
+- name: List container images already present on worker
+  command: k3s ctr -n k8s.io images ls -q
+  delegate_to: "{{ groups['workers'][0] }}"
+  run_once: true
+  changed_when: false
+  register: prepull_present_worker
+
+- name: Pre-pull container images on worker (only if absent, retry transient blips)
   command: >
     timeout 300 k3s ctr -n k8s.io images pull {{ item }}
   loop: "{{ ([mongodb_image, network_setup_image] + nf_images.values() | list) | unique }}"
@@ -63,13 +74,22 @@
     label: "{{ item.split('/')[-1] }}"
   delegate_to: "{{ groups['workers'][0] }}"
   run_once: true
-  changed_when: false
+  register: prepull_result
   retries: 3
   delay: 10
-  register: prepull_result
-  failed_when: prepull_result.rc != 0 and prepull_result.rc != 124 and 'already exists' not in (prepull_result.stderr | default(''))
+  until: prepull_result.rc == 0
+  changed_when: prepull_result.rc == 0
+  when: item not in (prepull_present_worker.stdout | default(''))
 
-- name: Pre-pull container images on edge
+- name: List container images already present on edge
+  command: ctr --address /run/containerd/containerd.sock -n k8s.io images ls -q
+  delegate_to: "{{ groups['edges'][0] }}"
+  run_once: true
+  changed_when: false
+  register: prepull_present_edge
+  when: edge_enabled | default(false) | bool
+
+- name: Pre-pull container images on edge (only if absent, retry transient blips)
   command: >
     timeout 300 ctr --address /run/containerd/containerd.sock
     -n k8s.io images pull {{ item }}
@@ -78,9 +98,11 @@
     label: "{{ item.split('/')[-1] }}"
   delegate_to: "{{ groups['edges'][0] }}"
   run_once: true
-  changed_when: false
+  register: prepull_edge_result
   retries: 3
   delay: 10
-  register: prepull_edge_result
-  failed_when: prepull_edge_result.rc != 0 and prepull_edge_result.rc != 124 and 'already exists' not in (prepull_edge_result.stderr | default(''))
-  when: edge_enabled | default(false) | bool
+  until: prepull_edge_result.rc == 0
+  changed_when: prepull_edge_result.rc == 0
+  when:
+    - edge_enabled | default(false) | bool
+    - item not in (prepull_present_edge.stdout | default(''))

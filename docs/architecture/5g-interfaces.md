@@ -169,6 +169,8 @@ sudo k3s kubectl -n 5g exec deploy/smf -- ip -o -4 addr show dev n4
 
 **N6m (MEC application network via UPF-Cloud)**: A second N6 interface on UPF-Cloud connecting to a dedicated data network (`10.208.0.0/24`) that hosts the testbed's MEC application workloads. It is where edge-style application services are deployed and reached today, served by the central (cloud) UPF.
 
+The band `10.208.0.200/29` (`10.208.0.200`-`10.208.0.207`) is excluded from the `n6m-net` Whereabouts dynamic pool and reserved for MEC apps that need a stable address (so a UE can target a fixed IP). A MEC app claims one the same way the NFs claim their N1-N4 addresses: an `ips` entry in its Multus annotation, which Whereabouts honors directly. Apps that do not need a fixed address take a dynamic pool IP. The edge apps platform that consumes this band is owned by [edge-apps.md](edge-apps.md).
+
 **N6e (edge-local MEC breakout via UPF-Edge)**: The same role anchored at the edge UPF instead of the central one, reserved for MEC applications co-located on the edge node. Currently inactive because UPF-Edge is disabled. See [known-issues/upf-edge-cni-route-conflict.md](../known-issues/upf-edge-cni-route-conflict.md).
 
 **On "MEC" and locality**: MEC is defined by function (local application hosting with local breakout), not by which UPF serves it, so the N6m data network is the testbed's MEC network even though it is anchored at the cloud UPF. On a single workstation there is no physical distance, so "cloud" and "edge" are logical roles rather than latency tiers. A real latency difference appears only when application workloads run on the edge VM via KubeEdge, where link latency can be injected, or when the nodes are physically separated.

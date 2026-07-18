@@ -44,20 +44,49 @@ data:
       large_client_header_buffers 4 16k;
       client_max_body_size       25m;
 
-      # Unknown / wrong Host (a mistyped subdomain, or the apex): serve the public
-      # service directory so an operator who does not know what is deployed — or
-      # picked the wrong route — can discover and reach each surface. Pre-auth: it
-      # only lists names + links; each service enforces its own Keycloak gate.
+      # The front-door catalogue lives at <prefix>.<base> (e.g. kelt.<base>). An
+      # operator who does not know what is deployed — or picked the wrong route —
+      # comes here to discover and reach each surface. Pre-auth: it only lists names +
+      # links; each service enforces its own Keycloak gate. The Cloudflare wildcard
+      # tunnel (*.<base>) forwards every KELT host here; the operator's own subdomains
+      # keep their explicit DNS records and never reach this front-door. See
+      # docs/security/external-access.md.
       server {
-        listen 80 default_server;
+        listen 80;
+        server_name {{ catalogue_subdomain }}.{{ external_base_domain }};
         root /usr/share/nginx/html;
         # Exact match wins, so the co-brand JSON is served as itself; everything
         # else falls back to the welcome page.
         location = /brand.json { default_type application/json; }
-        location / { default_type text/html; try_files /index.html =404; }
+{% if apps_enabled | default(false) | bool %}
+        # Live list of deployed edge apps (names + URLs) for the welcome page,
+        # via the dashboard backend's unauthenticated endpoint. Same data the
+        # static catalogue shows; the page fetches it client-side.
+        location = /apps.json {
+          set $up http://dashboard-frontend.{{ frontdoor_dashboard_namespace }}.svc.cluster.local:{{ frontdoor_dashboard_port }}/api/v1/apps/public;
+          proxy_pass $up;
+        }
+{% endif %}
+        # The catalogue is a single static landing: the root serves it; any other
+        # path is stray (the real app routes live on the dashboard host), so bounce
+        # it to the clean root rather than rendering the catalogue under a junk URL.
+        location = / { default_type text/html; try_files /index.html =404; }
+        location / { return 302 /; }
       }
 
-      # kelt.<base> -> dashboard frontend (serves /, and reverse-proxies
+      # Everything that is NOT a real surface — an unknown Host, direct-IP access, or
+      # (via the per-app fallback below) a mistyped/undeployed app subdomain — gets a
+      # branded 404 with a button back to the catalogue. A wrong address never
+      # silently renders the full directory; it points the way back instead.
+      server {
+        listen 80 default_server;
+        root /usr/share/nginx/html;
+        error_page 404 /notfound.html;
+        location = /notfound.html { internal; }
+        location / { return 404; }
+      }
+
+      # kelt-dashboard.<base> -> dashboard frontend (serves /, and reverse-proxies
       # /auth /api /docs internally, so this one route covers Keycloak too).
       server {
         listen 80;
@@ -117,19 +146,29 @@ data:
 {% endif %}
 {% if apps_enabled | default(false) | bool %}
 
-      # <app>.<base> -> operator-deployed edge app (phase 12). Dynamic: the named
-      # server blocks above win by exact match, so any OTHER single-label subdomain
-      # is treated as an app name and proxied to the same-named Service in the apps
-      # namespace, resolved at request time. A new app is reachable the moment its
-      # Service exists, with no template edit / front-door re-run. Trade-off: a
-      # mistyped known subdomain falls here and yields 502 instead of the welcome
-      # page. See docs/architecture/edge-apps.md.
+      # <prefix>-<app>.<base> -> operator-deployed edge app (phase 12). Dynamic: the
+      # named server blocks above win by exact match, so any OTHER <prefix>-<name>
+      # host is treated as an app and proxied to the same-named Service (the prefix is
+      # stripped: kelt-face -> Service "face") in the apps namespace, resolved at
+      # request time. A new app is reachable the moment its Service exists, with no
+      # template edit / front-door re-run. A mistyped name, or an app that does not
+      # exist / is down, lands on the branded 404 below (button back to the
+      # catalogue). See docs/architecture/edge-apps.md.
       server {
         listen 80;
-        server_name ~^(?<app>[^.]+)\.{{ external_base_domain | regex_escape }}$;
+        server_name ~^{{ kelt_prefix }}-(?<app>[^.]+)\.{{ external_base_domain | regex_escape }}$;
+        root /usr/share/nginx/html;
+        # Branded 404 ONLY when KELT itself cannot reach the app: the Service name
+        # does not resolve (no such app) or the upstream refuses / times out — both
+        # surface as nginx-generated 502/504. proxy_intercept_errors stays OFF (the
+        # default), so an app that IS reachable and returns its OWN 5xx (e.g. a 503
+        # maintenance page, or its own 502) passes through untouched rather than
+        # being masked by our 404. See docs/architecture/edge-apps.md.
+        location = /notfound.html { internal; }
         location / {
           set $up http://$app.{{ apps_namespace }}.svc.cluster.local;
           proxy_pass $up;
+          error_page 502 504 =404 /notfound.html;
         }
       }
 {% endif %}
@@ -174,6 +213,27 @@ data:
         .desc { color: #94a3b8; font-size: .8rem; margin-left: auto; text-align: right; }
         footer { margin-top: 1.5rem; text-align: center; color: #64748b; font-size: .75rem; }
         footer .lock { color: var(--accent); }
+
+        /* Splash intro: KELT mark scales in, name + motto rise, then the co-brand
+           ("operated by" + org) fades in after, then the service cards stagger in. */
+        @keyframes riseIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+        @keyframes markIn { from { opacity: 0; transform: scale(.78) rotate(-6deg); } to { opacity: 1; transform: none; } }
+        .kelt .mark { animation: markIn .7s cubic-bezier(.2,.7,.2,1) both; }
+        .kelt h1 { animation: riseIn .6s ease both .15s; }
+        p.sub { animation: riseIn .6s ease both .32s; }
+        #cobrand { opacity: 0; transform: translateX(-8px); transition: opacity .8s ease, transform .8s ease; }
+        #cobrand.show { opacity: 1; transform: none; }
+        a.card { opacity: 0; animation: riseIn .5s ease forwards; }
+        a.card:nth-of-type(1) { animation-delay: .5s; }
+        a.card:nth-of-type(2) { animation-delay: .58s; }
+        a.card:nth-of-type(3) { animation-delay: .66s; }
+        a.card:nth-of-type(4) { animation-delay: .74s; }
+        a.card:nth-of-type(n+5) { animation-delay: .82s; }
+        footer { animation: riseIn .6s ease both .9s; }
+        @media (prefers-reduced-motion: reduce) {
+          .kelt .mark, .kelt h1, p.sub, a.card, footer { animation: none; opacity: 1; }
+          #cobrand { transition: none; }
+        }
       </style>
     </head>
     <body>
@@ -225,6 +285,12 @@ data:
           <span class="desc">OpenAPI docs</span>
         </a>
 {% endif %}
+{% if apps_enabled | default(false) | bool %}
+        <div id="edge-apps-section" style="display:none">
+          <p style="margin:1.5rem 0 .5rem;color:#64748b;font-size:.62rem;text-transform:uppercase;letter-spacing:.16em">Edge apps</p>
+          <div id="edge-apps"></div>
+        </div>
+{% endif %}
         <footer><span class="lock">&#128274;</span> Each service prompts for login on entry.</footer>
       </main>
       <script>
@@ -249,11 +315,87 @@ data:
           var name = b.org_name ? '<span style="color:#f1f5f9;font-size:1.15rem;font-weight:600">' + b.org_name + '</span>' : '';
           // Side by side with KELT, split by a thin vertical rule; "operated by"
           // sits as a small label above the org so the ownership reads clearly.
-          document.getElementById('cobrand').innerHTML = '<span class="divider"></span>'
+          var el = document.getElementById('cobrand');
+          el.innerHTML = '<span class="divider"></span>'
             + '<div style="display:flex;flex-direction:column;align-items:center;gap:.4rem">'
             + '<span style="color:#64748b;font-size:.6rem;text-transform:uppercase;letter-spacing:.16em">operated by</span>'
             + '<div style="display:flex;align-items:center;gap:.6rem">' + logo + name + '</div></div>';
+          // Reveal after the KELT splash has settled, so "operated by <org>"
+          // transitions in rather than appearing at once.
+          setTimeout(function () { el.classList.add('show'); }, 750);
         }).catch(function () {});
       </script>
+{% if apps_enabled | default(false) | bool %}
+      <script>
+        // Deployed edge apps (live, from the dashboard's unauthenticated list).
+        // Rendered as their own group so they never blur into the core services.
+        // Hidden entirely when none are deployed.
+        fetch('/apps.json', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : { apps: [] }; }).then(function (d) {
+          var apps = (d && d.apps) || [];
+          if (!apps.length) return;
+          var host = function (u) { return u.replace(/^https?:\/\//, ''); };
+          document.getElementById('edge-apps').innerHTML = apps.map(function (a) {
+            return '<a class="card" href="' + a.url + '">'
+              + '<span class="dot"></span>'
+              + '<span class="body"><span class="name">' + a.name + '</span>'
+              + '<span class="host">' + host(a.url) + '</span></span>'
+              + '<span class="desc">' + (a.ready ? 'edge app' : 'starting…') + '</span></a>';
+          }).join('');
+          document.getElementById('edge-apps-section').style.display = 'block';
+        }).catch(function () {});
+      </script>
+{% endif %}
+    </body>
+    </html>
+  # Branded 404 served for any address that is not a real surface (unknown Host,
+  # direct IP, or a mistyped / undeployed app subdomain). KELT-only and
+  # self-contained (no fetches), with a single button back to the catalogue at the
+  # base. See docs/security/external-access.md.
+  notfound.html: |
+    <!doctype html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <title>{{ frontdoor_brand_title }} · Not found</title>
+      <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cg fill='none' stroke-linecap='round'%3E%3Cpath d='M21 58 C15 50 27 43 21 35 C15 28 25 21 21 14' stroke='%2314b8a6' stroke-width='4'/%3E%3Cpath d='M32 58 C26 49 38 41 32 33 C26 25 38 17 32 8' stroke='%230d9488' stroke-width='4'/%3E%3Cpath d='M43 58 C49 50 37 43 43 35 C49 28 39 22 43 16' stroke='%2314b8a6' stroke-width='4'/%3E%3C/g%3E%3Cg fill='%23f59e0b'%3E%3Ccircle cx='32' cy='8' r='2.8'/%3E%3Ccircle cx='21' cy='14' r='2.6'/%3E%3Ccircle cx='43' cy='16' r='2.6'/%3E%3C/g%3E%3C/svg%3E" />
+      <style>
+        :root { color-scheme: dark; --accent: {{ frontdoor_brand_accent }}; }
+        * { box-sizing: border-box; }
+        body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+               background: radial-gradient(1200px 600px at 50% -10%, #0d2b2a 0%, #0b1120 55%); color: #e2e8f0;
+               font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; text-align: center; }
+        main { max-width: 520px; padding: 2.5rem 1.25rem; }
+        .mark { width: 54px; height: 54px; margin: 0 auto 1.2rem; display: block; }
+        h1 { font-size: 1.5rem; letter-spacing: .03em; margin: 0 0 .6rem; }
+        h1 .acc { color: var(--accent); }
+        p { color: #94a3b8; margin: .3rem 0 1.6rem; font-size: .95rem; line-height: 1.5; }
+        a.btn { display: inline-flex; align-items: center; gap: .5rem; text-decoration: none;
+                border: 1px solid var(--accent); color: #f1f5f9; background: rgba(20,184,166,.08);
+                border-radius: .6rem; padding: .7rem 1.2rem; font-weight: 600; transition: background .15s; }
+        a.btn:hover { background: rgba(20,184,166,.18); }
+        .host { color: #5eead4; font-family: ui-monospace, monospace; font-size: .78rem; margin-top: 1.4rem; }
+      </style>
+    </head>
+    <body>
+      <main>
+        <svg class="mark" viewBox="0 0 64 64" aria-hidden="true">
+          <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M16 58 Q32 63 48 58" stroke="#0f766e" stroke-width="3"/>
+            <path d="M21 58 C15 50 27 43 21 35 C15 28 25 21 21 14" stroke="#14b8a6" stroke-width="4"/>
+            <path d="M32 58 C26 49 38 41 32 33 C26 25 38 17 32 8" stroke="#0d9488" stroke-width="4"/>
+            <path d="M43 58 C49 50 37 43 43 35 C49 28 39 22 43 16" stroke="#14b8a6" stroke-width="4"/>
+          </g>
+          <g fill="#f59e0b">
+            <circle cx="21" cy="14" r="2.6"/><circle cx="32" cy="8" r="2.8"/>
+            <circle cx="43" cy="16" r="2.6"/><circle cx="33.5" cy="33" r="2.2"/>
+          </g>
+        </svg>
+        <h1>Not a <span class="acc">{{ frontdoor_brand_title }}</span> service</h1>
+        <p>This address does not match any deployed surface, or the service is not
+           reachable right now. Head back to the front door to see what is available.</p>
+        <a class="btn" href="{{ external_scheme }}://{{ catalogue_subdomain }}.{{ external_base_domain }}/">&#8592; {{ frontdoor_brand_title }} services</a>
+        <p class="host">{{ catalogue_subdomain }}.{{ external_base_domain }}</p>
+      </main>
     </body>
     </html>

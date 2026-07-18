@@ -75,6 +75,7 @@ Read-only.
 RAN attachment control, with a tab per mode.
 
 - "Physical RAN" tab: detect host bridge interfaces, create `br-ran` and patch it into `br-n2`/`br-n3`, patch the AMF `n2phy` annotation, and show the resulting OVS and annotation state; generates the `PHYSICAL_RAN_BRIDGE=<nic> vagrant reload worker` command
+- gNB Management Console: expose the physical gNB/femtocell web UI at `kelt-gnb.<base>` by entering its management address (IP:port); KELT registers it as an external endpoint reached via the dynamic apps route, no deploy-time change. Behind the front-door perimeter plus the appliance login
 - "UERANSIM" tab: simulated RAN controls
 
 Admin actions: bridge setup and RAN configuration changes. See [Physical RAN Integration](../deployment/physical-ran.md) and [RAN Modes](../deployment/ran-modes-dashboard.md).
@@ -182,12 +183,18 @@ Console for operator-deployed application pods (phase 12). Reached from the
 Services hub. Read views are open to `dashboard-viewer`; deploy/delete require
 `dashboard-admin` plus the backend `allow_workload_create` gate.
 
-- Deployed apps: name, image, ready replicas, and the public link (`<name>.<base>`)
-  for exposed apps. Admins can delete an app
+- Deployed apps: name, image, ready replicas, the public link (`kelt-<name>.<base>`)
+  for exposed apps, and an n6m badge for MEC-attached apps. Admins can delete an app,
+  or switch it to another pushed tag from a date-ordered version picker; an
+  "update available" hint appears when the registry holds a newer image for the tag
 - Deploy from image: a registry image (`<host>/name:tag`), port, replicas, env
-  vars (secret-marked go into a Secret), optional `imagePullSecret`, and an
-  **expose** toggle. The backend creates a worker-pinned Deployment and, when
-  exposed, a port-80 Service the front-door reaches at `<name>.<base>`
+  vars (secret-marked go into a Secret), optional `imagePullSecret`, an **expose**
+  toggle, and an **attach to MEC network (n6m)** toggle (optional fixed IP + extra
+  UDP ingest ports) so UEs reach the app over the 5G user plane. The backend creates
+  a worker-pinned Deployment and, when exposed, a port-80 Service the front-door
+  reaches at `kelt-<name>.<base>`
+- Starter kit: admins download a zip (README + `.env.example` + `deploy.sh`,
+  prefilled with the registry host) to hand to an app developer
 
 The image must be pushed to the in-cluster local registry first. See
 [architecture/edge-apps.md](../architecture/edge-apps.md).

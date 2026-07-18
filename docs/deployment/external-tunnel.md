@@ -28,26 +28,50 @@ Paths that should remain protected by the external auth layer:
 
 ## Cloudflare Zero-Trust example
 
-Cloudflare Tunnel forwards a single wildcard (`*.<base>`) over an outbound tunnel
-to the in-cluster front-door (phase 11), which routes each subdomain by Host to
-its service (dashboard at `kelt.<base>`, CAMARA at `api.<base>`, demo, placement,
-dev). Cloudflare Access then sits in front and enforces an identity policy. See
-[external-access.md](../security/external-access.md) for the surface map and the
-single-base model.
+`<base>` is the operator's bare domain (for example `example.com`). KELT namespaces
+its surfaces under a first-level prefix (`kelt`): the catalogue at `kelt.<base>`,
+the dashboard at `kelt-dashboard.<base>`, CAMARA at `kelt-camara.<base>`, plus
+`kelt-demo`, `kelt-placement`, `kelt-dev`, and any edge app or registered endpoint
+at `kelt-<name>.<base>`. All are first-level subdomains, so the free Cloudflare
+Universal SSL wildcard (`*.<base>`) covers their TLS; a second-level scheme
+(`*.kelt.<base>`) would need paid Advanced Certificate Manager and is avoided.
+Cloudflare Tunnel forwards `*.<base>` to the in-cluster front-door (phase 11), which
+routes by Host. Cloudflare Access then sits in front and enforces an identity
+policy. See [external-access.md](../security/external-access.md) for the surface map
+and the single-base model.
 
 ### Tunnel config
 
-`cloudflared` config on the operator host (`~/.cloudflared/config.yml`), one
-wildcard rule (the front-door handles per-Host routing):
+`cloudflared` config on the operator host (`~/.cloudflared/config.yml`). One wildcard
+rule points every KELT host at the front-door NodePort; the front-door handles
+per-Host routing. Keep any unrelated rule (an appliance proxy, another site) above
+the catch-all:
 
 ```yaml
 tunnel: <tunnel-uuid>
 credentials-file: /home/operator/.cloudflared/<tunnel-uuid>.json
 ingress:
-  - hostname: "*.example.com"
+  - hostname: "*.example.com"             # kelt.<base> + kelt-*.<base> (every surface + edge apps)
     service: http://192.168.56.11:31500   # front-door NodePort (frontdoor_nodeport)
   - service: http_status:404
 ```
+
+Apply it step by step (validate the config, route the wildcard as DNS, reload):
+
+```bash
+sudo cloudflared --config /etc/cloudflared/config.yml tunnel ingress validate
+sudo TUNNEL_ORIGIN_CERT=~/.cloudflared/cert.pem cloudflared tunnel route dns <tunnel-uuid> "*.example.com"
+sudo systemctl restart cloudflared
+```
+
+The wildcard sends only undefined first-level names to the tunnel; the operator's
+own subdomains keep their explicit DNS records and never reach KELT.
+
+`tunnel route dns` calls the Cloudflare API and needs the account origin certificate
+created by `cloudflared tunnel login` (`~/.cloudflared/cert.pem`). Under `sudo` the
+home directory changes, so pass it explicitly with `TUNNEL_ORIGIN_CERT=` as above
+(otherwise it fails with an origin-cert / "Cannot determine default origin
+certificate path" error). `ingress validate` and the daemon itself do not need it.
 
 `192.168.56.11:31500` is the front-door NodePort on the worker VM. (In LAN-only
 mode, with no `external_base_domain`, there is no front-door and the dashboard is
@@ -57,7 +81,7 @@ WebSocket forwarding is on by default in `cloudflared`; no `disableChunkedEncodi
 
 ### Access policies
 
-Define these as one Self-hosted Access application over the wildcard `*.example.com` plus path-scoped bypass apps. Cloudflare matches the most specific path first, so the bypass apps below take precedence over the catch-all. The paths are host-relative, so they apply across every subdomain the front-door serves (the dashboard's `/auth` and `/api` live under `kelt.example.com`).
+Define these as one Self-hosted Access application over the wildcard `*.example.com` plus path-scoped bypass apps. Cloudflare matches the most specific path first, so the bypass apps below take precedence over the catch-all. The paths are host-relative, so they apply across every KELT subdomain the front-door serves (the dashboard's `/auth` and `/api` live under `kelt-dashboard.example.com`).
 
 Each bypass application uses a single policy with **Action: Bypass** and **Include: Everyone** (not "Service Token only", which would block browser users).
 
@@ -108,10 +132,10 @@ Cloudflare evaluates apps in order from most specific to least specific path, so
 
 ### Dev frontend hostname (optional)
 
-The Vite dev frontend (`dev.example.com`) is served through the same wildcard:
-the front-door routes `dev.<base>` to the Vite server on the ansible VM
+The Vite dev frontend (`kelt-dev.example.com`) is served through the same wildcard:
+the front-door routes `kelt-dev.<base>` to the Vite server on the ansible VM
 (`192.168.56.13:31573`), so no second tunnel hostname is needed. The dev frontend
-uses absolute Keycloak authority pointing at `kelt.<base>`, so Keycloak paths do
+uses absolute Keycloak authority pointing at `kelt-dashboard.<base>`, so Keycloak paths do
 NOT need bypass on the dev hostname; only the backend proxy paths served by Vite
 do. Create on the dev hostname:
 
@@ -120,7 +144,7 @@ do. Create on the dev hostname:
 | Field | Value |
 |-------|-------|
 | Application name | `dev-api-bypass` |
-| Path | `dev.example.com/api/*` |
+| Path | `kelt-dev.example.com/api/*` |
 | Policy action | `Bypass` + `Everyone` |
 
 Covers REST + `/api/v1/ws/*` WebSocket endpoints. Backend Bearer JWT validation still runs.
@@ -130,7 +154,7 @@ Covers REST + `/api/v1/ws/*` WebSocket endpoints. Backend Bearer JWT validation 
 | Field | Value |
 |-------|-------|
 | Application name | `dev-health-bypass` |
-| Path | `dev.example.com/health` |
+| Path | `kelt-dev.example.com/health` |
 | Policy action | `Bypass` + `Everyone` |
 
 `SystemHealthGate` polls `/health` before the SPA hydrates; an Access challenge here keeps the splash screen up forever.
@@ -140,7 +164,7 @@ Covers REST + `/api/v1/ws/*` WebSocket endpoints. Backend Bearer JWT validation 
 | Field | Value |
 |-------|-------|
 | Application name | `dev-watchdog-bypass` |
-| Path | `dev.example.com/watchdog/*` |
+| Path | `kelt-dev.example.com/watchdog/*` |
 | Policy action | `Bypass` + `Everyone` |
 
 Watchdog uses an `X-Watchdog-Token` header issued by the backend; Access would strip the upgrade and add nothing.
@@ -150,7 +174,7 @@ Watchdog uses an `X-Watchdog-Token` header issued by the backend; Access would s
 | Field | Value |
 |-------|-------|
 | Application name | `dev-hmr-bypass` |
-| Path | `dev.example.com/__vite_hmr*` |
+| Path | `kelt-dev.example.com/__vite_hmr*` |
 | Policy action | `Bypass` + `Everyone` |
 
 Vite listens for HMR upgrades on `/__vite_hmr` by default (set in `dashboard_dev_hmr_path`), so this single bypass is the only Access change required. Without the bypass the WebSocket upgrade is intercepted, the page enters a reload loop, and HMR is unusable. To opt out of HMR entirely instead, set `DASHBOARD_DEV_HMR_ENABLED=false` and skip App D4.
@@ -160,7 +184,7 @@ Vite listens for HMR upgrades on `/__vite_hmr` by default (set in `dashboard_dev
 | Field | Value |
 |-------|-------|
 | Application name | `dev-spa` |
-| Path | `dev.example.com/*` |
+| Path | `kelt-dev.example.com/*` |
 | Policy action | `Allow` |
 | Include rule | (your identity policy) |
 

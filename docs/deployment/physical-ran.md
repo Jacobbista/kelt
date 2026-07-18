@@ -31,9 +31,9 @@ The worker VM acts as a **transport router** between the physical RAN network an
        │ radio                     │     ├── patch-ran-n2 ──┐          │
   ┌────┴─────┐     enp0s9         │     └── patch-ran-n3 ──┼──┐       │
   │   gNB    │ ─────────────────> │                        │  │       │    ┌──────────────┐
-  │ .5.100   │  (L2 bridged)      │   br-n2  (10.202.0.1) │  │       │    │ AMF          │
+  │ .6.100   │  (L2 bridged)      │   br-n2  (10.202.0.1) │  │       │    │ AMF          │
   └──────────┘                     │     └── patch-n2-ran ──┘  │       │──> │ n2: .202.0.100│
-                                   │                           │       │    │ n2phy: .5.150 │
+                                   │                           │       │    │ n2phy: .6.150 │
                                    │   br-n3  (10.203.0.1)    │       │    └──────────────┘
                                    │          (10.203.0.254)   │       │
                                    │     └── patch-n3-ran ─────┘       │    ┌──────────────┐
@@ -87,6 +87,25 @@ Return path:
 | AMF       | n2                | 10.202.0.100/24  | NGAP endpoint (overlay)         |
 | UPF-Cloud | n3                | 10.203.0.101/24  | GTP-U endpoint                  |
 | gNB       | eth               | 192.168.6.100/24 | Physical RAN interface          |
+
+The gNB RAN IP is whatever the appliance is configured with on `physical_ran_subnet`
+(192.168.6.100 is an example; a given femtocell may use another address in that
+range). Many femtocells also have a second, separate **management interface** on a
+different LAN that the testbed does not define; its address is operator-specific.
+
+### Management console (optional)
+
+A physical femtocell typically serves a web management UI on its management
+interface, an address only reachable on the operator's management LAN, not from a
+browser. KELT can expose it as `kelt-gnb.<base>` through the front-door without any
+deploy-time change: an admin enters the appliance management address (IP:port) in
+the dashboard RAN page, and the backend registers a selectorless Service plus
+Endpoints named `gnb` in the `mec` namespace, which the dynamic `kelt-<app>.<base>` route
+already proxies through `kube-proxy`. KELT assumes no management subnet exists, so
+the surface stays absent until set. Access control is the front-door perimeter
+(Cloudflare Access over `*.<base>`) plus the appliance's own login. The surface
+requires the apps route to be enabled. See
+[../security/external-access.md](../security/external-access.md).
 
 ### OVS DaemonSet vs NAD (what runs where)
 

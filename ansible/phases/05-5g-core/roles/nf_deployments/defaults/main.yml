@@ -1,5 +1,8 @@
 ---
 # Network Functions deployment defaults
+# Per-NF secondary networks and their static IPs (the `networks:`/`ips:` below) are
+# the interface matrix owned by docs/architecture/5g-interfaces.md (static-IP table
+# + Whereabouts-exclusion convention). Read it before changing addresses/NADs here.
 kubeconfig_path: "/home/vagrant/kubeconfig"
 namespace_5g: "5g"
 

@@ -693,6 +693,11 @@
 # ==============================================================
 # CREATE NETWORK ATTACHMENT DEFINITIONS (NADs)
 # These are used by pods with k8s.v1.cni.cncf.io/networks annotations
+#
+# Static IPs are requested the repo's proven way: `ips` in the Multus annotation
+# (like amf/smf/upf), with the target excluded from the whereabouts range. No
+# per-NAD `routes` are injected here: a UE-pool route on a NAD the UPF also attaches
+# (n6m) hijacks UE downlink. See docs/architecture/edge-apps.md.
 # ==============================================================
 
 - name: Create NADs
@@ -762,6 +767,52 @@
     - physical_ran_enabled | default(false) | bool
     - (physical_ran_skip_bridge_check | default(false) | bool) or (physical_ran_bridge_available | default(false) | bool)
 
+- name: Determine physical RAN teardown (disabling, or enabled but bridge missing)
+  set_fact:
+    physical_ran_teardown: >-
+      {{ not (physical_ran_enabled | default(false) | bool)
+         or ((physical_ran_enabled | default(false) | bool)
+             and not ((physical_ran_skip_bridge_check | default(false) | bool)
+                      or (physical_ran_bridge_available | default(false) | bool))) }}
+
+# Resilience: on teardown, remove n2-physical from the AMF annotation BEFORE
+# deleting the NAD (same order as dashboard RanService.disable). Otherwise the AMF
+# keeps an annotation referencing a NAD that no longer exists, Multus returns
+# NoNetworkFound, and the AMF pod can never start (Init:0/2) — taking the core down.
+# Read always so the strip task can reference it safely. See docs/architecture/edge-apps.md.
+- name: Read AMF deployment (for networks annotation)
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: amf
+    namespace: 5g
+    kubeconfig: "/home/vagrant/kubeconfig"
+  register: amf_dep_state
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Strip n2-physical from AMF networks annotation on teardown (keep AMF startable)
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "/home/vagrant/kubeconfig"
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: { name: amf, namespace: 5g }
+      spec:
+        template:
+          metadata:
+            annotations:
+              k8s.v1.cni.cncf.io/networks: >-
+                {{ ((amf_dep_state.resources[0].spec.template.metadata.annotations | default({})).get('k8s.v1.cni.cncf.io/networks', '[]')
+                    | from_json | rejectattr('name', 'equalto', 'n2-physical') | list) | to_json }}
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when:
+    - physical_ran_teardown | bool
+    - amf_dep_state.resources | default([]) | length > 0
+    - "'n2-physical' in ((amf_dep_state.resources[0].spec.template.metadata.annotations | default({})).get('k8s.v1.cni.cncf.io/networks', ''))"
+
 - name: Delete Physical RAN NAD (n2-physical) when disabling or bridge is unavailable
   kubernetes.core.k8s:
     state: absent
@@ -772,12 +823,4 @@
     kubeconfig: "/home/vagrant/kubeconfig"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
-  when: >-
-    not (physical_ran_enabled | default(false) | bool)
-    or (
-      (physical_ran_enabled | default(false) | bool)
-      and not (
-        (physical_ran_skip_bridge_check | default(false) | bool)
-        or (physical_ran_bridge_available | default(false) | bool)
-      )
-    )
+  when: physical_ran_teardown | bool

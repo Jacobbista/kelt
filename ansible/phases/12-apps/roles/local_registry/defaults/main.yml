@@ -5,7 +5,7 @@
 # Cloudflare tunnel: it speaks plain HTTP and is protected by basic-auth + the
 # trusted LAN/Tailscale transport. See docs/architecture/edge-apps.md.
 
-registry_namespace: "{{ apps_namespace }}"
+registry_namespace: "{{ apps_registry_namespace }}"
 registry_app_name: registry
 registry_container_port: 5000
 registry_htpasswd_realm: "KELT Registry"

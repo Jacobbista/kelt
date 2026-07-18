@@ -1,0 +1,47 @@
+{#
+  Config-validation Job. Runs `nginx -t` against the just-applied front-door
+  ConfigMap, in the SAME image as the live front-door, BEFORE the Deployment is
+  rolled. A syntactically invalid nginx.conf fails this Job, the phase aborts, and
+  the running front-door (old pod) is never rolled with a broken config — external
+  access stays up. `nginx -t` only parses the config (no DNS, no upstream connect,
+  no file-existence checks), so mounting nginx.conf alone is enough.
+  See docs/security/external-access.md.
+#}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: frontdoor-validate
+  namespace: {{ frontdoor_namespace }}
+  labels:
+    app: frontdoor-validate
+spec:
+  backoffLimit: 0           # fail fast: a bad config is bad on the first try
+  ttlSecondsAfterFinished: 120
+  template:
+    metadata:
+      labels:
+        app: frontdoor-validate
+    spec:
+      restartPolicy: Never
+      # Validate with the same image, on the same node, as the real front-door.
+      nodeSelector:
+        kubernetes.io/hostname: worker
+      containers:
+        - name: nginx-validate
+          image: {{ frontdoor_image }}
+          command: ["nginx", "-t", "-c", "/etc/nginx/nginx.conf"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 64Mi
+      volumes:
+        - name: config
+          configMap:
+            name: frontdoor-nginx

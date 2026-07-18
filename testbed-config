@@ -763,15 +763,16 @@ do_set_base_domain() {
   local domain="${1:-}"
   if [[ -z "$domain" ]]; then
     if $HAS_GUM; then
-      domain="$(gum input --placeholder "example.com (base domain; subdomains derived)")"
+      domain="$(gum input --placeholder "example.com (bare domain; KELT uses kelt-*.example.com)")"
     else
-      read -rp "External base domain (subdomains derived): " domain
+      read -rp "External base domain (bare domain, e.g. example.com): " domain
     fi
   fi
   EXTERNAL_BASE_DOMAIN="$domain"
   save_config
   if [[ -n "$domain" ]]; then
-    echo "External base domain set to ${domain} (surfaces: kelt/api/demo/placement/dev.${domain})."
+    echo "External base domain set to ${domain} (front door: kelt.${domain}; surfaces: kelt-dashboard/kelt-camara/kelt-demo/kelt-placement/kelt-dev.${domain})."
+    echo "KELT namespaces under the first-level prefix kelt-* so it does not squat your own subdomains."
   else
     echo "External base domain cleared (LAN NodePorts)."
   fi
@@ -890,16 +891,21 @@ do_auth_network() {
       do_set_base_domain "$arg"
       ;;
     "Apply cloudflare-style preset"|preset-cloudflare)
-      # Single-base model: set one base domain and let ansible derive every
-      # surface as <subdomain>.<base>. The phase 11 front-door routes them by
-      # Host, so Cloudflare needs ONE wildcard tunnel (*.<base>) and one Access
-      # app, not a route per service. See docs/security/external-access.md.
+      # Single-base model: set the operator's BARE domain. KELT namespaces all its
+      # surfaces under a first-level prefix (kelt): catalogue at kelt.<domain>, every
+      # service at kelt-<name>.<domain>. First-level hosts are covered by the free
+      # Cloudflare Universal SSL wildcard (*.<domain>); a second-level scheme would
+      # need paid Advanced Certificate Manager, so it is avoided. ONE wildcard tunnel
+      # (*.<domain> -> front-door) + one Access app cover everything. The operator's
+      # own subdomains keep their explicit DNS records (those win over the wildcard);
+      # only undefined first-level names fall to KELT (branded 404). See
+      # docs/security/external-access.md.
       local domain="$arg"
       if [[ -z "$domain" ]]; then
         if $HAS_GUM; then
-          domain="$(gum input --placeholder "example.com (base domain; subdomains derived)")"
+          domain="$(gum input --placeholder "example.com (your bare domain; KELT uses kelt-*.example.com)")"
         else
-          read -rp "Public base domain (subdomains derived): " domain
+          read -rp "Your bare domain (KELT uses kelt-*.<domain>): " domain
         fi
       fi
       if [[ -z "$domain" ]]; then
@@ -908,7 +914,7 @@ do_auth_network() {
       fi
       DASHBOARD_AUTH_ENABLED="true"
       EXTERNAL_BASE_DOMAIN="${domain}"
-      # Clear per-service overrides so all surfaces derive from the base domain.
+      # Clear per-service overrides so all surfaces derive from the base + kelt prefix.
       # (Set one of these again only for a deliberate one-off override.)
       KEYCLOAK_PATH_PREFIX=""
       DASHBOARD_KEYCLOAK_PATH_PREFIX=""
@@ -918,15 +924,19 @@ do_auth_network() {
       CAMARA_GATEWAY_EXTERNAL_ORIGIN=""
       POSITIONING_DEMO_EXTERNAL_ORIGIN=""
       save_config
-      echo "Applied single-base preset for ${domain}:"
-      echo "  dashboard:   https://kelt.${domain}   (also /auth /api /docs)"
-      echo "  CAMARA API:  https://api.${domain}"
-      echo "  demo:        https://demo.${domain}"
-      echo "  placement:   https://placement.${domain}"
-      echo "  dev:         https://dev.${domain}   (when dashboard dev enabled)"
+      echo "Applied single-base preset for ${domain} (KELT namespaced under kelt-*):"
+      echo "  front door:  https://kelt.${domain}             (service catalogue)"
+      echo "  dashboard:   https://kelt-dashboard.${domain}   (also /auth /api /docs)"
+      echo "  CAMARA API:  https://kelt-camara.${domain}"
+      echo "  demo:        https://kelt-demo.${domain}"
+      echo "  placement:   https://kelt-placement.${domain}"
+      echo "  dev:         https://kelt-dev.${domain}   (when dashboard dev enabled)"
+      echo "  edge apps:   https://kelt-<app>.${domain}   (deployed from the Apps page)"
       echo ""
-      echo "Cloudflare (one-time): point a wildcard tunnel *.${domain} -> worker:31500 (front-door NodePort),"
-      echo "  add one Access app for *.${domain}, and Bypass /auth/realms/* (OIDC) and api.${domain} (M2M)."
+      echo "Cloudflare (one-time): point ONE wildcard tunnel *.${domain} -> worker:31500"
+      echo "  (front-door NodePort), add one Access app over *.${domain} and Bypass"
+      echo "  /auth/realms/* (OIDC) and kelt-camara.${domain} (M2M). Your own subdomains"
+      echo "  keep their explicit DNS records and are untouched; undefined names -> KELT 404."
       ;;
     *)
       echo "Usage: $0 auth-network status|dev|auth|base-domain|origin|positioning-origin|prefix|keycloak-url|preset-cloudflare"
@@ -1052,7 +1062,7 @@ do_run_phase() {
 
   (
     cd "$SCRIPT_DIR"
-    vagrant ssh ansible -c "bash -lc 'set -euo pipefail; cd ~/ansible-ro; set -a; [ -f /vagrant/.testbed.env ] && source /vagrant/.testbed.env; [ -f /vagrant/.testbed.secrets ] && source /vagrant/.testbed.secrets; set +a; ${phase_extra_env}ansible-playbook ${playbook_rel} -e dashboard_dev_enabled=${DASHBOARD_DEV_ENABLED} ${phase_extra_args}'"
+    vagrant ssh ansible -c "bash -lc 'set -euo pipefail; cd ~/ansible-ro; set -a; [ -f /vagrant/.testbed.env ] && source /vagrant/.testbed.env; [ -f /vagrant/.testbed.secrets ] && source /vagrant/.testbed.secrets; [ -f /vagrant/.testbed.versions ] && source /vagrant/.testbed.versions; set +a; ${phase_extra_env}ansible-playbook ${playbook_rel} -e dashboard_dev_enabled=${DASHBOARD_DEV_ENABLED} ${phase_extra_args}'"
   )
 }
 

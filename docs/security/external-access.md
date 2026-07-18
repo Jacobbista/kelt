@@ -8,15 +8,30 @@ which tunnel technology is chosen.
 
 ## Single base domain and the front-door
 
-External exposure is driven by one operator-set value, `external_base_domain`.
-When it is set, every HTTP surface is reached as `<subdomain>.<base>` through an
-in-cluster front-door (phase 11): a small nginx that routes by Host header to the
-matching Service. A single Cloudflare wildcard tunnel (`*.<base>` to the
-front-door NodePort `31500`) and one Access app then cover every surface, instead
-of a tunnel route and Access app per service. Subdomains, the base, the scheme,
-and the front-door NodePort all live in `ansible/group_vars/all.yml`; the realm
-redirect URIs (phase 08) and the dashboard public links derive from the same
-values, so a surface's external address is defined in exactly one place.
+External exposure is driven by one operator-set value, `external_base_domain`: the
+operator's **bare domain** (`example.com`). KELT namespaces every surface under a
+**first-level prefix** label (`kelt_prefix`, default `kelt`): the catalogue at
+`kelt.<base>` and each service at `kelt-<name>.<base>` (`kelt-dashboard.<base>`,
+`kelt-camara.<base>`, an edge app at `kelt-<app>.<base>`). Every KELT hostname is a
+first-level subdomain, so it is covered by the free Cloudflare Universal SSL
+wildcard (`*.<base>`); a second-level scheme (`*.kelt.<base>`) would need paid
+Advanced Certificate Manager and is deliberately avoided.
+
+When the base is set, an in-cluster front-door (phase 11), a small nginx that
+routes by Host header to the matching Service, fronts everything. The Cloudflare
+tunnel forwards the wildcard `*.<base>` to the front-door NodePort `31500`, and one
+Access app covers it, instead of a tunnel route and Access app per service. The
+prefix keeps KELT's names clear of the operator's own first-level subdomains: an
+explicit DNS record for the operator's `blog.<base>` wins over the wildcard, so it
+never reaches the front-door; only undefined first-level names fall through to KELT.
+Subdomains, the base, the prefix, the scheme, and the front-door NodePort all live
+in `ansible/group_vars/all.yml`; the realm redirect URIs (phase 08) and the
+dashboard public links derive from the same values, so a surface's external address
+is defined in exactly one place.
+
+A request that matches no real surface (an unknown Host, direct-IP access, or a
+mistyped / undeployed app name) is served a branded 404 with a button back to the
+catalogue, so a wrong address never silently renders the full directory.
 
 When `external_base_domain` is empty the front-door is not deployed and the
 testbed uses the per-service LAN NodePorts below (LAN-only operation). A single
@@ -67,22 +82,37 @@ surface serves, not by preference:
   image to its deployment location, so it is avoided.
 
 Routing by Host is the front-door's job, not the tunnel's: Cloudflare forwards
-the wildcard `*.<base>` to the single front-door NodePort, and the front-door
-maps each Host to its Service. One wildcard Access policy (`*.<base>`) covers them
-all, so adding a surface is a server block in the front-door config plus its
-subdomain default, with no new tunnel route, DNS record, or Access rule.
+the wildcard `*.<base>` to the single front-door NodePort, and the front-door maps
+each Host to its Service. One Access policy over `*.<base>` covers them all, so
+adding a surface is a server block in the front-door config plus its subdomain
+default, with no new tunnel route, DNS record, or Access rule.
 
 ## Dynamic edge-app routes
 
 When the edge apps platform is enabled (`apps_enabled`), the front-door also
-carries one regex server block that proxies any otherwise-unmatched single-label
-subdomain `<name>.<base>` to the same-named Service in the `apps` namespace,
-resolved at request time. An operator-deployed app is therefore reachable the
-moment its Service exists, with no template edit or front-door re-run. App
-frontends exposed this way have no application-level auth by default and sit
-behind the same optional Access perimeter as every other surface; an app needing
-login can be fronted by the `frontdoor_gate` building block. See
+carries one regex server block that proxies any otherwise-unmatched `kelt-<name>.<base>`
+host to the same-named Service (the prefix is stripped: `kelt-face` -> Service
+`face`) in the `mec` namespace, resolved at request time. An operator-deployed app
+is therefore reachable the moment its Service exists, with no template edit or
+front-door re-run, and the single first-level wildcard `*.<base>` already covers its
+TLS and DNS (no per-app Cloudflare change). The branded
+404 (with a button to the catalogue) is served only when the front-door cannot
+reach the app: the Service name does not resolve, or the upstream refuses or times
+out. An app that is reachable and returns its own 5xx is passed through untouched
+(`proxy_intercept_errors` stays off), so the front-door never masks a response the
+app chose to send. App frontends exposed this way have no application-level auth by
+default and sit behind the same optional Access perimeter as every other surface; an
+app needing login can be fronted by the `frontdoor_gate` building block. See
 [../architecture/edge-apps.md](../architecture/edge-apps.md).
+
+The same dynamic route also serves the optional **gNB management console**: the
+dashboard (admin) registers the physical gNB/femtocell web UI as a selectorless
+Service plus Endpoints named `gnb` in the `mec` namespace, so `kelt-gnb.<base>` reaches
+the appliance through `kube-proxy` with no front-door, ansible, or tunnel change.
+The appliance address is operator-supplied at runtime from the dashboard (KELT
+assumes no management subnet exists; unset means no surface), and the surface sits
+behind the same Access perimeter plus the appliance's own login. See
+[../deployment/physical-ran.md](../deployment/physical-ran.md).
 
 ## Front-door auth (services without native auth)
 
@@ -119,7 +149,7 @@ options are supported by phase 08:
   reachable origin. This is the default in LAN mode (no base domain), where
   Keycloak is hit directly on its NodePort.
 
-The path-prefix layout keeps Keycloak on the single `kelt.<base>` origin and
+The path-prefix layout keeps Keycloak on the single `kelt-dashboard.<base>` origin and
 removes a class of CORS, mixed-content, and Private Network Access (PNA) issues.
 It is selected automatically under the single-base model.
 
@@ -130,10 +160,11 @@ read the following Ansible variables:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `external_base_domain` | `""` | The one operator-set value. When set, every surface is `<subdomain>.<base>` and each `*_external_origin` below derives from it; empty means LAN NodePorts. |
+| `external_base_domain` | `""` | The operator's bare domain. When set, every surface is `kelt-<name>.<base>` (catalogue `kelt.<base>`) and each `*_external_origin` below derives from it; empty means LAN NodePorts. |
 | `external_scheme` | `https` | Scheme for the derived origins. |
-| `dashboard_subdomain` / `camara_subdomain` / `positioning_demo_subdomain` / `placement_editor_subdomain` / `dashboard_dev_subdomain` | `kelt` / `api` / `demo` / `placement` / `dev` | Per-surface subdomain defaults; overridable. The front-door, realm origins, and dashboard links all read these. |
-| `dashboard_external_origin` | `<scheme>://<kelt>.<base>` (else `http://<worker-ip>:31573`) | OIDC redirect URI and Web Origin for the `dashboard` client. Also `KC_HOSTNAME` so Keycloak emits browser-coherent URLs behind a proxy. |
+| `kelt_prefix` | `kelt` | First-level namespace prefix. Catalogue = `<prefix>.<base>`, services = `<prefix>-<name>.<base>`. Keeps KELT clear of the operator's own subdomains. |
+| `dashboard_subdomain` / `camara_subdomain` / `positioning_demo_subdomain` / `placement_editor_subdomain` / `dashboard_dev_subdomain` | `kelt-dashboard` / `kelt-camara` / `kelt-demo` / `kelt-placement` / `kelt-dev` | Per-surface first-level labels (derived from `kelt_prefix`); overridable. The front-door, realm origins, and dashboard links all read these. `catalogue_subdomain` (`kelt`) serves the catalogue. |
+| `dashboard_external_origin` | `<scheme>://kelt-dashboard.<base>` (else `http://<worker-ip>:31573`) | OIDC redirect URI and Web Origin for the `dashboard` client. Also `KC_HOSTNAME` so Keycloak emits browser-coherent URLs behind a proxy. |
 | `dashboard_dev_external_url` | `""` | Optional second origin for the opt-in Vite dev frontend. When set, added to the `dashboard` client allow lists. |
 | `camara_gateway_external_origin` | `http://<worker-ip>:31920` | Advertised in the gateway's OpenAPI `servers` block and in any absolute URL the gateway emits. Operator routes the chosen hostname to the worker NodePort. |
 | `positioning_demo_external_origin` | `http://<worker-ip>:31940` | OIDC redirect URI and Web Origin for the `positioning-demo` client. |
@@ -169,20 +200,24 @@ A single surface can still be pinned to a one-off hostname by setting its
 
 ## Sub-domain convention
 
-The `auth-network preset-cloudflare <base-domain>` helper sets the base; every
-surface is then `<subdomain>.<base>`, served through the front-door (phase 11).
-The same subdomains apply to any tunnel or reverse-proxy provider; only the layer
-in front of the front-door NodePort changes.
+The `auth-network preset-cloudflare <domain>` helper sets the base to the bare
+domain; the catalogue is then `kelt.<base>` and every service is
+`kelt-<name>.<base>`, all served through the front-door (phase 11). The same hosts
+apply to any tunnel or reverse-proxy provider; only the layer in front of the
+front-door NodePort changes.
 
 | Hostname | Front-door routes to | Audience |
 |----------|----------------------|----------|
-| `kelt.<base>` | `dashboard-frontend.dashboard:80` (also `/auth` `/api` `/docs`) | Operators (dashboard) |
-| `dev.<base>` | ansible VM `:31573` (Vite) | Frontend developers (opt-in) |
-| `api.<base>` | `camara-gateway.camara:8080` | M2M CAMARA API consumers |
-| `demo.<base>` | `positioning-demo.mec:80` | End users (positioning demo) |
-| `placement.<base>` | `oauth2-proxy-placement.positioning:4180` | Editors (placement-editor, behind the front-door gate) |
+| `kelt.<base>` | branded service catalogue (static) | Anyone (front door / discovery) |
+| `kelt-dashboard.<base>` | `dashboard-frontend.dashboard:80` (also `/auth` `/api` `/docs`) | Operators (dashboard) |
+| `kelt-dev.<base>` | ansible VM `:31573` (Vite) | Frontend developers (opt-in) |
+| `kelt-camara.<base>` | `camara-gateway.camara:8080` | M2M CAMARA API consumers |
+| `kelt-demo.<base>` | `positioning-demo.mec:80` | End users (positioning demo) |
+| `kelt-placement.<base>` | `oauth2-proxy-placement.positioning:4180` | Editors (placement-editor, behind the front-door gate) |
+| `kelt-<app>.<base>` | `<app>.mec:80` (dynamic, when `apps_enabled`) | Edge-app users; unknown/down → branded 404 |
+| `kelt-gnb.<base>` | external gNB appliance (dashboard-registered Service+Endpoints in `mec`, when set) | Admins (femtocell management UI) |
 
-Keycloak is reachable under `kelt.<base>/auth/` via the dashboard frontend
+Keycloak is reachable under `kelt-dashboard.<base>/auth/` via the dashboard frontend
 reverse proxy. No separate `auth.<base>` hostname is required;
 `keycloak_path_prefix` defaults to `/auth` whenever a base domain is set.
 
@@ -241,43 +276,48 @@ Prerequisites:
 4. `cloudflared tunnel create <name>` to provision the tunnel and the
    credentials JSON.
 
-Minimum `/etc/cloudflared/config.yml`, one wildcard rule to the front-door
-NodePort (the in-cluster front-door handles per-Host routing):
+Minimum `/etc/cloudflared/config.yml`. `<base>` is the operator's bare domain; one
+wildcard rule points every KELT host at the front-door NodePort, which handles
+per-Host routing. Keep any unrelated rule (an appliance, another site) above it:
 
 ```yaml
 tunnel: <tunnel-uuid>
 credentials-file: /etc/cloudflared/<tunnel-uuid>.json
 
 ingress:
-  - hostname: "*.<base-domain>"
-    service: http://192.168.56.11:31500   # front-door NodePort (frontdoor_nodeport)
+  - hostname: "*.<base>"                    # kelt.<base> + kelt-*.<base> (every surface + edge apps)
+    service: http://192.168.56.11:31500     # front-door NodePort (frontdoor_nodeport)
   - service: http_status:404
 ```
 
-Validate and route DNS (one wildcard CNAME):
+Validate and route DNS (one wildcard CNAME; `route dns` needs the origin cert from
+`cloudflared tunnel login`, passed explicitly under `sudo`):
 
 ```bash
 sudo cloudflared --config /etc/cloudflared/config.yml tunnel ingress validate
-sudo cloudflared tunnel route dns <tunnel-uuid> "*.<base-domain>"
+sudo TUNNEL_ORIGIN_CERT=~/.cloudflared/cert.pem cloudflared tunnel route dns <tunnel-uuid> "*.<base>"
 sudo systemctl restart cloudflared
 ```
 
+The wildcard sends only undefined first-level names to the tunnel; the operator's
+own subdomains keep their explicit DNS records and never reach KELT.
+
 For Cloudflare Zero Trust Access (optional perimeter gate), one self-hosted
-Access application over the wildcard `*.<base-domain>` covers every surface, so
-no per-service rule is needed. Two bypass policies are required so machine and
-discovery traffic, which cannot do interactive login, still works:
+Access application over `*.<base>` covers every surface, so no per-service rule is
+needed. Two bypass policies are required so machine and discovery traffic, which
+cannot do interactive login, still works:
 
 ```
 # OIDC discovery and token exchange (browser PKCE and oauth2-proxy both need it)
-Destination: *.<base-domain>/auth/realms/<realm>/*
+Destination: *.<base>/auth/realms/<realm>/*
 Action: Bypass
 
 # M2M CAMARA API (client_credentials, no human session)
-Destination: api.<base-domain>
+Destination: kelt-camara.<base>
 Action: Bypass
 ```
 
-`placement.<base-domain>` does NOT need a bypass: its front-door gate
+`kelt-placement.<base>` does NOT need a bypass: its front-door gate
 (oauth2-proxy) performs the interactive Keycloak login itself.
 
 ## Alternative: SSH local forward

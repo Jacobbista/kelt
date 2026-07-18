@@ -18,9 +18,10 @@ Phases fall into three classes. **Core** phases always run. **Optional** phases 
 | 8  | IAM                | Core                          | Keycloak realm and PostgreSQL |
 | 9  | Dashboard          | Core                          | Out-of-band FastAPI + React control plane |
 | 10 | Northbound         | Optional addon                | CAMARA Location API gateway, positioning engine, and demo |
-| 11 | Front-door         | Core (base-domain-conditional) | Single-origin nginx edge; routes `<subdomain>.<base>` by Host. No-op unless `external_base_domain` is set |
+| 11 | Front-door         | Core (base-domain-conditional) | Single-origin nginx edge; serves the catalogue at `kelt.<base>` and routes each `kelt-<name>.<base>` by Host. No-op unless `external_base_domain` is set |
+| 12 | Apps               | Optional addon (`apps_enabled`) | Edge apps platform: in-cluster local registry plus the namespace for deploy-from-image app pods. Pairs with the phase 11 dynamic `kelt-<name>.<base>` route |
 
-Optional addons are off by default (opt-in). Phase 6 (UERANSIM) is gated by `ueransim_enabled`, set automatically by `DEPLOY_MODE=full` or by `testbed run-phase 06-ueransim-mec`. Phase 10 (Northbound) bundles the CAMARA gateway, positioning engine, and demo into one phase with roles selectable by tag (`camara`, `positioning`, `placement`, `demo`); the parts are gated by `camara_enabled` / `positioning_enabled` / `positioning_demo_enabled` / `placement_editor_enabled` in `all.yml`, and the umbrella `testbed northbound on` enables them together. See [gaps.md](../gaps.md) for the remaining CAMARA/positioning rework.
+Optional addons are off by default (opt-in). Phase 6 (UERANSIM) is gated by `ueransim_enabled`, set automatically by `DEPLOY_MODE=full` or by `testbed run-phase 06-ueransim-mec`. Phase 10 (Northbound) bundles the CAMARA gateway, positioning engine, and demo into one phase with roles selectable by tag (`camara`, `positioning`, `placement`, `demo`); the parts are gated by `camara_enabled` / `positioning_enabled` / `positioning_demo_enabled` / `placement_editor_enabled` in `all.yml`, and the umbrella `testbed northbound on` enables them together. Phase 12 (Apps) is gated by `apps_enabled`, set by `testbed apps on`. See [gaps.md](../gaps.md) for the remaining CAMARA/positioning rework.
 
 ## Running Phases
 

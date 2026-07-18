@@ -144,6 +144,7 @@ Platform-specific limitations with documented workarounds. These are bugs or con
 | [UPF-Edge CNI Route Conflict](known-issues/upf-edge-cni-route-conflict.md) | UPF-Edge stuck in ContainerCreating — open issue, investigation roadmap |
 | [TCP Performance over 5G DRX](known-issues/tcp-performance-5g-drx.md) | TCP throughput degradation on the radio path from DRX latency variance |
 | [No Network-Based Positioning](known-issues/no-network-based-positioning.md) | 3GPP/LMF positioning is out of scope on current hardware; position comes from non-3GPP adapters |
+| [subPath mount creates a directory](known-issues/wifi-calibration-subpath-directory.md) | An empty-PVC subPath file mount becomes a directory; the writable store uses a whole-dir mount + env redirect instead |
 
 ---
 

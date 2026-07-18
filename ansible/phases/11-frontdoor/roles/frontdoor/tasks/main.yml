@@ -28,6 +28,73 @@
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
+# ============================================================================
+# CONFIG VALIDATION GATE
+# `nginx -t` the just-applied ConfigMap in a throwaway Job BEFORE rolling the live
+# Deployment. A broken nginx.conf fails the phase HERE, so the running front-door
+# (old pod, still on its valid config — subPath mounts do not live-update) is never
+# rolled with a bad config and external access is not interrupted. The check lives
+# in the phase, not in a manual step. See docs/security/external-access.md.
+# ============================================================================
+- name: Remove any previous front-door config-validation Job
+  kubernetes.core.k8s:
+    state: absent
+    api_version: batch/v1
+    kind: Job
+    name: frontdoor-validate
+    namespace: "{{ frontdoor_namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+    wait: true
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Validate the front-door nginx config (nginx -t in a throwaway Job)
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/frontdoor-validate-job.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Wait for the config-validation Job to finish
+  kubernetes.core.k8s_info:
+    api_version: batch/v1
+    kind: Job
+    name: frontdoor-validate
+    namespace: "{{ frontdoor_namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: frontdoor_validate
+  retries: 20
+  delay: 3
+  until: >-
+    frontdoor_validate.resources | length > 0 and
+    (((frontdoor_validate.resources[0].status.succeeded | default(0)) | int >= 1) or
+     ((frontdoor_validate.resources[0].status.failed | default(0)) | int >= 1))
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Capture nginx -t output when the config is invalid
+  kubernetes.core.k8s_log:
+    namespace: "{{ frontdoor_namespace }}"
+    label_selectors:
+      - "app=frontdoor-validate"
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: frontdoor_validate_log
+  when: (frontdoor_validate.resources[0].status.succeeded | default(0)) | int < 1
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Fail the phase if the front-door nginx config is invalid
+  ansible.builtin.fail:
+    msg: |
+      Front-door nginx config validation FAILED (nginx -t). The live front-door was
+      NOT rolled, so external access is unaffected. Fix the config and re-run phase 11.
+      ---
+      {{ frontdoor_validate_log.log | default('(no logs captured; inspect the frontdoor-validate Job)') }}
+  when: (frontdoor_validate.resources[0].status.succeeded | default(0)) | int < 1
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
 # Co-brand ConfigMap (org logo/name under KELT) is owned by the dashboard, so only
 # SEED it when absent — a phase re-run must never clobber a dashboard-set brand.
 - name: Check whether the front-door brand ConfigMap exists
@@ -68,7 +135,11 @@
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
-- name: Wait for front-door to be ready
+# Gate on the ROLLOUT, not on bare availability: with a rolling update the old pod
+# keeps availableReplicas >= 1 even if the new pod crashes, so checking only that
+# would pass a broken deploy. Require the updated replica to be the available one
+# (observedGeneration caught up, updated == available == desired, none unavailable).
+- name: Wait for the front-door rollout to complete (new pod healthy)
   kubernetes.core.k8s_info:
     api_version: apps/v1
     kind: Deployment
@@ -76,11 +147,14 @@
     namespace: "{{ frontdoor_namespace }}"
     kubeconfig: "{{ kubeconfig_path }}"
   register: frontdoor_deploy
-  retries: 12
+  retries: 24
   delay: 5
   until: >-
     frontdoor_deploy.resources | length > 0 and
-    frontdoor_deploy.resources[0].status.availableReplicas | default(0) >= 1
+    (frontdoor_deploy.resources[0].status.observedGeneration | default(0)) >= (frontdoor_deploy.resources[0].metadata.generation | default(1)) and
+    (frontdoor_deploy.resources[0].status.updatedReplicas | default(0)) == (frontdoor_deploy.resources[0].spec.replicas | default(1)) and
+    (frontdoor_deploy.resources[0].status.availableReplicas | default(0)) == (frontdoor_deploy.resources[0].spec.replicas | default(1)) and
+    (frontdoor_deploy.resources[0].status.unavailableReplicas | default(0)) | int == 0
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
@@ -88,8 +162,9 @@
   debug:
     msg:
       - "Front-door listening on NodePort {{ frontdoor_nodeport }} (point the Cloudflare wildcard *.{{ external_base_domain }} here)"
+      - "{{ external_scheme }}://{{ catalogue_subdomain }}.{{ external_base_domain }}  -> service catalogue (front door)"
       - "{{ external_scheme }}://{{ dashboard_subdomain }}.{{ external_base_domain }}  -> dashboard (also /auth /api /docs)"
-      - "{{ (external_scheme ~ '://' ~ camara_subdomain ~ '.' ~ external_base_domain ~ '  -> CAMARA gateway') if (camara_enabled | default(false) | bool) else 'api: (camara disabled)' }}"
+      - "{{ (external_scheme ~ '://' ~ camara_subdomain ~ '.' ~ external_base_domain ~ '  -> CAMARA gateway') if (camara_enabled | default(false) | bool) else 'camara: (disabled)' }}"
       - "{{ (external_scheme ~ '://' ~ positioning_demo_subdomain ~ '.' ~ external_base_domain ~ '  -> positioning demo') if (positioning_demo_enabled | default(false) | bool) else 'demo: (disabled)' }}"
       - "{{ (external_scheme ~ '://' ~ placement_editor_subdomain ~ '.' ~ external_base_domain ~ '  -> placement editor (gated)') if (placement_editor_enabled | default(false) | bool) else 'placement: (disabled)' }}"
       - "{{ (external_scheme ~ '://' ~ dashboard_dev_subdomain ~ '.' ~ external_base_domain ~ '  -> dev (Vite on ansible VM)') if (frontdoor_dev_enabled | default(false) | bool) else 'dev: (disabled)' }}"
