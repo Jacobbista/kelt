@@ -1,177 +1,343 @@
 # Contributing Guide
 
-Guidelines for contributing to the 5G KubeEdge Testbed project.
+Conventions for changing this codebase. The short entry point for agents and new
+contributors is [AGENTS.md](https://github.com/Jacobbista/kelt/blob/main/AGENTS.md);
+this document holds the detail it points to.
 
-## Getting Started
+Before writing a fact into any document, find its owner in the
+[Documentation Map](../README.md#documentation-map). Facts are written once, at
+the owner, and linked from everywhere else.
 
-1. Fork the repository
-2. Clone your fork
-3. Create a feature branch
-4. Make changes
-5. Run tests
-6. Submit a pull request
+---
 
-## Project Structure
+## Ansible
 
-```
-kelt/
-├── ansible/
-│   ├── phases/              # Deployment phases (01-06)
-│   │   ├── 01-infrastructure/
-│   │   ├── 02-kubernetes/
-│   │   ├── 03-kubeedge/
-│   │   ├── 04-overlay-network/
-│   │   ├── 05-5g-core/
-│   │   └── 06-ueransim-mec/
-│   ├── group_vars/          # Global variables
-│   ├── inventory.ini        # Host inventory
-│   └── ansible.cfg          # Ansible configuration
-├── docs/                    # Documentation
-├── tests/                   # Test suites
-├── Vagrantfile              # VM definitions
-├── LICENSE                  # Apache 2.0
-└── README.md
-```
+### Phase structure
 
-## Coding Standards
+Each deployment phase lives in `ansible/phases/0X-phase-name/` and contains a
+`playbook.yml` entry point, a `README.md` with implementation notes (not
+user-facing), and its roles under `roles/<role-name>/` with the usual
+`tasks/`, `defaults/`, `templates/`, `handlers/` layout.
 
-### Ansible
+The orchestrator `ansible/phases/00-main-playbook.yml` imports every phase in
+order. A new phase is registered there, documented in
+[deployment/phases.md](../deployment/phases.md), and given tests under `tests/`.
 
-- Use YAML syntax consistently
-- Include comments for complex tasks
-- Use variables from `group_vars/all.yml`
-- Follow role structure: `tasks/`, `templates/`, `handlers/`, `defaults/`
+Phases fall into three classes, orthogonal to the maturity tiers in
+[status.md](../status.md):
+
+- **Core**: the mandatory backbone, always run. Together they are the
+  reproducible software platform, deployable with no RAN hardware.
+- **Optional addons**: not part of the minimal core and never a prerequisite for
+  it. A new optional phase must be toggleable by its own `*_enabled` flag in
+  `all.yml`, and the core must stay deployable with the addon disabled.
+- **Conditional toggles**: flags that change phase behavior rather than adding a
+  phase, such as the edge node and physical-RAN toggles.
+
+Which phases belong to which class is listed in
+[deployment/phases.md](../deployment/phases.md).
+
+Phase class (whether it runs by default) is independent of maturity tier (how
+validated it is). A Core phase may still ship Experimental features.
+
+All shared variables belong in `ansible/group_vars/all.yml`. Do not hardcode
+IPs, versions, or image names in roles.
+
+### Component image versions
+
+Every container image tag is defined once in `all.yml` and referenced from
+roles, templates, and the frontend. Never hardcode a tag in a role default, a
+`.j2`, or a source file.
+
+The companion images use a baseline-plus-override model: a committed registry
+and tag map in `all.yml`, and a live override so a phase re-run keeps an
+operator-rolled image instead of downgrading it. An override entry must never
+pin below the baseline, which reintroduces the downgrade this model removes.
+Filtered CI advances each companion image independently, so each carries its own
+tag and there is no shared release tag. To bump a version, edit the tag map in
+`all.yml` only.
+
+### Edge vs worker
+
+The testbed runs with and without the edge VM, so all code touching the edge
+node must be gated, both in playbook host selection and in individual tasks:
 
 ```yaml
-# Good
-- name: Install required packages
-  ansible.builtin.apt:
-    name: "{{ item }}"
-    state: present
-  loop: "{{ required_packages }}"
+hosts: "masters,workers{{ ',edges' if (edge_enabled | default(false) | bool) else '' }}"
 
-# Bad
-- apt: name=curl state=present
+when: edge_enabled | default(false) | bool
 ```
 
-### Python (Tests)
+Worker nodes use the K3s containerd socket; edge nodes use standalone
+containerd. Use the `worker_cri_endpoint` and `edge_cri_endpoint` variables from
+`all.yml` rather than writing a socket path.
 
-- Follow PEP 8
-- Use type hints
-- Include docstrings
-- Handle exceptions properly
+When a role behaves differently on edge and worker, delegate explicitly to the
+relevant host group with its own `when:`. Do not mix edge and worker logic in
+one task block.
 
-```python
-def test_feature(self) -> bool:
-    """Test feature description."""
-    try:
-        result = self.do_something()
-        return result is not None
-    except Exception as e:
-        self.logger.error(f"Test failed: {e}")
-        return False
+### Kubectl
+
+Inside VMs, always `sudo k3s kubectl`, never plain `kubectl`. In Ansible tasks,
+use the `kubernetes.core` collection with `kubeconfig: "{{ kubeconfig_path }}"`.
+
+### Task naming
+
+Sentence case, verb first, qualifying the target node when relevant:
+
+```yaml
+- name: Configure crictl on worker (k3s containerd)
+- name: Configure crictl on edge (standalone containerd)
+- name: Wait for gNB pods ready (per cell)
 ```
 
-### Documentation
+### Commenting
 
-- Use clear, concise English
-- Include code examples
-- Add diagrams for complex concepts
-- Keep formatting consistent
+Any workaround or non-obvious decision must carry an inline comment pointing at
+the document that explains it:
 
-## Development Workflow
+```yaml
+# KubeEdge workaround — see docs/known-issues/kubeedge-serviceaccount-token.md
+automountServiceAccountToken: false
+```
 
-### 1. Setup Development Environment
+Use `# ====` section markers for major blocks in long task files.
+
+### Idempotency
+
+Every task must be safe to run repeatedly. Use modules that are idempotent by
+design:
+
+| Need | Idempotent module |
+|------|-------------------|
+| Write a file | `copy`, `template` |
+| Insert a block into an existing file | `blockinfile` (uses `marker:`) |
+| Create/update a directory | `file` with `state: directory` |
+| Install packages | `apt` with `state: present` |
+| Manage systemd units | `systemd` |
+| Apply Kubernetes manifests | `kubernetes.core.k8s` |
+| Reinstall language deps (`npm install`, `pip install -r`) | `command` with a `stat`-then-`when` guard comparing manifest mtime to the install marker |
+
+That last row matters: running dependency installs unconditionally rewrites
+lockfile timestamps and can invalidate downstream watchers, see
+[Dashboard frontend](#dashboard-frontend).
+
+When `command` or `shell` is unavoidable, guard it with `creates:`,
+`changed_when: false` for read-only probes, an explicit `changed_when:`, or a
+`when:` precondition. Never use `shell` to write files, install packages, or
+manage services when a dedicated module exists.
+
+### Templates
+
+Jinja2 templates are named `<component>-<resource-type>.yaml.j2` and live in
+`roles/<role>/templates/`. Use Jinja2 block comments (`{# ... #}`) to explain
+non-obvious logic, and reference variables rather than hardcoding values.
+
+**Never indent a `{# ... #}` comment inside YAML structure.** Ansible renders
+with `trim_blocks=True`, which removes the newline after `#}`. The comment's own
+leading whitespace then merges with the following line, pushing it deeper than
+its parent key, and the manifest fails to parse with "mapping values are not
+allowed here". Put the comment at column 0, or use a plain YAML `#` comment,
+which survives into the rendered manifest and reads fine there. Indented Jinja
+comments are only safe inside a literal block scalar whose content is not YAML
+(an embedded script, say), where stray leading spaces do not change meaning.
+
+After editing a role's defaults or removing a variable, dry-render every `*.j2`
+in that role with `StrictUndefined` against the role's `defaults/main.yml`. This
+surfaces stale references before they fail at deploy time.
+
+---
+
+## Dashboard frontend
+
+The frontend lives in `dashboard/frontend/` (Vite + React, Tailwind,
+`oidc-client-ts` for PKCE). Two deploy targets coexist: a cluster pod at the
+worker NodePort, and an opt-in Vite dev server on the ansible VM.
+
+Adding a page requires four touch points:
+
+1. A component file under `src/pages/`.
+2. A route entry in `src/App.jsx` (both the routes dict and the `<Route>` line).
+3. A sidebar entry in `src/components/Sidebar.jsx`. Set `adminOnly: true` to
+   gate the nav button; the render-time filter already enforces it.
+4. A backend router, if the page needs new endpoints, included in
+   `dashboard/backend/app/main.py` with the viewer or admin dependency.
+
+Frontend role gating reads from `useAuth().roles`. Backend gating is enforced at
+router-include time via FastAPI `Depends`, and per-route on mixed routers. The
+role model and its per-route matrix are owned by
+[security/iam.md](../security/iam.md).
+
+Runtime configuration reaches the bundle through `public/env-config.js`,
+populated at deploy time by the phase-09 configmap template (cluster) or the
+`.env` written to the source mount (dev). Read values via `env()` from
+`src/runtime-env.js`. Do not import `import.meta.env.*` directly: the wrapper
+checks `window.__ENV__` first, which is what lets one bundle serve both targets.
+
+When shipping a new bundle, bump the frontend `package.json` version and tag the
+commit, see [Publishing images](#publishing-images-what-needs-a-tag).
+
+**Vite optimize cache caveat.** Any task that touches `package-lock.json` mtime
+invalidates the pre-bundle cache and forces a `?v=<hash>` rotation on every
+dependency chunk URL. Tabs holding the previous hash end up with two copies of
+React and crash with "Invalid hook call". Gate dependency installs on the
+manifest mtime, as the phase-09 tasks do.
+
+---
+
+## Bash CLI conventions (testbed-config)
+
+`testbed-config` carries two interfaces over one implementation, and both are
+first-class. The interactive TUI is the intended way to operate the testbed: it
+shows state before asking, and confirms destructive actions. The positional
+subcommands serve direct terminal control, CI, and agents that read the
+repository and act on their own.
+
+That makes parity a hard rule, not a nicety: **every interactive flow must have a
+matching positional invocation**, because an agent cannot drive a prompt. A
+capability reachable only through a menu is a bug. Subcommand grammar is
+`testbed <noun> [subnoun] [value]`; no flags, values are positional.
+
+Both paths must call the same underlying function and read and write the same
+persisted state, so an operator can mix them within a session. See
+[QUICKSTART](https://github.com/Jacobbista/kelt/blob/main/QUICKSTART.md), which
+owns the subcommand reference.
+
+When adding a prompt or selector:
+
+- Use `gum_choose_or_cancel` for pickers; it appends a cancel entry and treats
+  Esc as cancel.
+- Call `prompt_continue` after every terminal action in a submenu, so the
+  operator can read command output before the menu redraws.
+- Give submenus a back entry; the top-level menu asks for a second Esc to exit.
+
+A function driving a `gum` (or any TTY-bound) prompt must not be wrapped in
+`$(...)`. The capture redirects its stdout into a pipe, detaching gum from
+`/dev/tty` and folding raw ANSI bytes into the caller's variable. Return values
+through a global variable and emit every UI line on stderr. `prompt_kc_reconcile`
+and its caller in `do_run_phase` are the canonical shape.
+
+Persisted operator choices live in `.testbed.env` (config) and
+`.testbed.secrets` (sensitive). `load_config` initializes from defaults then
+overrides from the env file; `save_config` rewrites the whole file. A new
+variable goes in both functions and in the `env` subcommand output.
+
+---
+
+## Networking
+
+Each 5G interface runs on a dedicated VXLAN overlay with its own VNI. Do not
+share overlays between interfaces. Adding an interface means:
+
+1. Define the subnet and VNI in `ansible/group_vars/all.yml`.
+2. Create a Multus NetworkAttachmentDefinition in the appropriate phase.
+3. Add a row to [architecture/5g-interfaces.md](../architecture/5g-interfaces.md),
+   which owns the matrix.
+
+The primary CNI on edge uses `isDefaultGateway: false` deliberately. Changing it
+reintroduces the UPF-Edge route conflict documented in `known-issues/`.
+
+---
+
+## KubeEdge constraints
+
+Before modifying anything involving edge node workloads, read
+[known-issues/](../known-issues/) in full. Several non-obvious workarounds are
+implemented in the edge pod specs and CNI configuration; removing them breaks
+the edge deployment. Open investigations are tracked in [gaps.md](../gaps.md).
+
+---
+
+## Python (backend and tests)
+
+- Follow PEP 8, use type hints, and include docstrings.
+- Handle exceptions explicitly rather than letting a request fail opaquely.
+
+---
+
+## Documentation
+
+### Tone and format
+
+- English only.
+- Impersonal and factual. No "we", no "I", no "you should".
+- No em-dashes in prose. Use commas or restructure the sentence. Tables and code
+  blocks are unaffected.
+- No editorial commentary ("Note that...", "Keep in mind...").
+- H1 for the title, H2 for major sections, code blocks with language hints,
+  tables for structured data.
+
+### Where a document goes
+
+`docs/architecture/` for system design, `docs/deployment/` for setup guides,
+`docs/operations/` for procedures, `docs/development/` for developer guides,
+`docs/runbooks/` for diagnostics, `docs/known-issues/` for platform
+limitations, `docs/security/` for the access model. Every new document is added
+to the [docs index](../README.md).
+
+### Known-issue format
+
+A known-issue file documents a platform limitation and the solution implemented
+here. It is not a debugging narrative. Structure: one sentence describing the
+platform behavior, how the testbed handles it, and which files implement that,
+with paths. Do not include symptom logs, failed approaches, or debugging steps.
+
+### Gaps file
+
+Every entry in [gaps.md](../gaps.md) must correspond to something verifiable: a
+file that does not exist, a feature disabled in the code, or a confirmed bug. No
+speculative or aspirational entries.
+
+### Feature maturity
+
+[status.md](../status.md) is the canonical maturity matrix; the README carries a
+condensed summary only. Three tiers:
+
+- **Supported**: deploys through the standard flow, is documented, and has been
+  exercised end to end. Reproducible on a clean install. Enabled by default.
+- **Experimental**: code and manifests exist and deploy, but the path is not
+  validated end to end, depends on an experimental component, or has no
+  exercised use case. Often disabled by default.
+- **Planned**: a documented direction with no working code yet.
+
+One-drop rule: a component is Supported only when all three Supported conditions
+hold. If one fails it is Experimental. With no working code it is Planned.
+Abandoned code is removed, not tiered.
+
+When adding or changing a feature, classify it in `status.md` and record the
+evidence in the Validated by column. Do not promote a component to Supported
+without end-to-end validation.
+
+---
+
+## Development workflow
 
 ```bash
-# Clone
-git clone https://github.com/your-fork/kelt.git
+git clone https://github.com/Jacobbista/kelt.git
 cd kelt
-
-# Start VMs
-vagrant up
-
-# Verify
-vagrant ssh master -c "sudo k3s kubectl get nodes"
+./testbed-config              # configure and deploy
 ```
 
-### 2. Make Changes
+Make changes, re-run the affected phase with `./testbed-config run-phase`, then
+run the suites in `tests/`. Testing is owned by [testing.md](testing.md).
 
-```bash
-# Create branch
-git checkout -b feature/my-feature
+### Commit messages
 
-# Edit files
-vim ansible/phases/05-5g-core/roles/nf_deployments/tasks/main.yml
-
-# Test changes
-vagrant ssh ansible
-cd ~/ansible-ro
-ansible-playbook phases/05-5g-core/playbook.yml -i inventory.ini
-```
-
-### 3. Run Tests
-
-```bash
-cd tests
-make e2e
-```
-
-### 4. Commit Changes
-
-```bash
-git add .
-git commit -m "feat: add new feature
-
-- Description of change 1
-- Description of change 2"
-```
-
-### 5. Submit Pull Request
-
-- Describe what changed and why
-- Reference related issues
-- Include test results
-
-## Commit Messages
-
-Follow conventional commits:
+Conventional Commits, one-line subject:
 
 ```
 type(scope): description
-
-[optional body]
-
-[optional footer]
 ```
 
-Types:
-- `feat`: New feature
-- `fix`: Bug fix
-- `docs`: Documentation
-- `refactor`: Code refactoring
-- `test`: Test changes
-- `chore`: Maintenance
-- `perf`: Performance improvement
-- `ci`: CI configuration
-- `build`: Build system or dependencies
-- `style`: Formatting only (no behavior change)
-- `revert`: Revert a previous commit
+Types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `perf`, `ci`,
+`build`, `style`, `revert`. Scope and a breaking-change `!` are optional. The
+optional `commit-msg` hook enforces the format locally.
 
-The optional `commit-msg` hook (below) enforces this format locally. A scope and a
-breaking-change `!` are optional: `feat(dashboard)!: drop legacy endpoint`.
+Do not add co-author trailers.
 
-Examples:
-```
-feat(5g-core): add BSF network function
-fix(ueransim): correct IMSI generation
-docs(architecture): update network topology diagram
-```
+### Git hooks (developer-only)
 
-## Git hooks (developer-only)
-
-Optional local hooks guard the commit/push workflow. They are opt-in and not
-part of the operator install:
+Optional local hooks, opt-in and not part of the operator install:
 
 ```
 testbed dev-hooks on       # install (sets core.hooksPath=.githooks)
@@ -179,124 +345,51 @@ testbed dev-hooks status   # show hook + release state
 testbed dev-hooks off      # uninstall
 ```
 
-- **pre-commit** runs `gitleaks` on staged changes and blocks the commit if it
-  finds a secret (mirrors the CI scan). Install `gitleaks` locally for this to
-  apply; without it the scan is skipped and CI still scans on push.
-- **commit-msg** blocks a commit whose subject line is not a Conventional Commit
-  (the format above). Pure bash, no Node/commitlint dependency. Merge, revert, and
-  rebase autosquash (`fixup!`/`squash!`) subjects pass through unchecked.
-- **pre-push** is advisory only (never blocks): it reminds you when the frontend
-  has changes that need a version tag to publish, and flags WIP commits.
+- **pre-commit** runs `gitleaks` on staged changes and blocks on a secret. Without
+  `gitleaks` installed the scan is skipped and CI still scans on push.
+- **commit-msg** blocks a non-conforming subject. Pure bash, no Node dependency.
+  Merge, revert, and rebase autosquash subjects pass through.
+- **pre-push** is advisory only: it flags a frontend change that needs a version
+  tag, and WIP commits.
 
-## Publishing images (what needs a tag)
+### Publishing images (what needs a tag)
 
 Each image has its own release lifecycle, decoupled from the others:
 
 - **Dashboard frontend** publishes only on a `dashboard-frontend-v<semver>` git
-  tag. Editing `dashboard/frontend/` does not change the published `:latest`
-  until you tag. Use the confirmed helper:
+  tag. Editing the frontend does not change the published image until you tag:
   ```
-  testbed dev-hooks release          # tags the current package.json version, or
-                                     # offers a patch/minor/major bump, then pushes
+  testbed dev-hooks release    # tags the current package.json version, or offers
+                               # a patch/minor/major bump, then pushes
   ```
-- **Docs** (`kelt-docs`) publish **automatically**: the `docs-site` workflow
-  rebuilds the image on any push touching `docs/**`, so no manual tag is needed.
-  The in-cluster docs pod runs `:latest`; re-running phase 09 forces a rollout so
-  it pulls the freshly built image.
-- **NF / northbound images** live in their own repositories (`5g-nf-platform`,
-  `5g-northbound`) and are tagged there, not from this repo.
+  The cluster runs that semver **pinned** from `dashboard_frontend_tag` in
+  `all.yml`, with `imagePullPolicy: IfNotPresent`. One tag is one image, so the
+  rollout happens because the pod spec changed and `kubectl rollout undo` means
+  something. Bump the baseline in the same commit as the git tag, never earlier:
+  it must always name a tag that exists on the registry, and `package.json` can
+  legitimately be ahead while a release is still pending.
+- **Docs** publish automatically: the docs workflow rebuilds on any push touching
+  `docs/**`, and re-running phase 09 forces a rollout. This image is deliberately
+  **not** pinned. It is continuously published and carries no semver, so pinning
+  it would mean editing a digest on every documentation commit. It stays on
+  `:latest` with `imagePullPolicy: Always`, and the dashboard detects a new build
+  by comparing image digests rather than tags.
+- **NF and northbound images** live in their own repositories and are tagged
+  there, not from this repo.
 
-## Adding a New Phase
+### Review checklist
 
-1. Create phase directory:
-```
-ansible/phases/07-new-feature/
-├── playbook.yml
-├── README.md
-└── roles/
-    └── new_role/
-        ├── tasks/main.yml
-        ├── templates/
-        ├── handlers/main.yml
-        └── defaults/main.yml
-```
-
-2. Add to main playbook (`phases/00-main-playbook.yml`):
-```yaml
-- import_playbook: phases/07-new-feature/playbook.yml
-  tags: [phase7, new-feature]
-```
-
-3. Document in `docs/deployment/phases.md`
-
-4. Add tests in `tests/`
-
-## Adding Documentation
-
-1. Create file in appropriate directory:
-   - `docs/architecture/` - System design
-   - `docs/deployment/` - Setup guides
-   - `docs/operations/` - Operational procedures
-   - `docs/development/` - Developer guides
-   - `docs/runbooks/` - Diagnostic procedures
-   - `docs/known-issues/` - Platform limitations
-
-2. Update `docs/README.md` index
-
-3. Use consistent formatting:
-   - H1 for title
-   - H2 for major sections
-   - Code blocks with language hints
-   - Tables for structured data
-
-## Testing Guidelines
-
-### Write Tests For
-
-- New features
-- Bug fixes
-- Configuration changes
-
-### Test Categories
-
-- **E2E**: Full system validation
-- **Unit**: Individual components
-- **Integration**: Component interactions
-
-### Running Tests
-
-```bash
-cd tests
-
-# All tests
-make
-
-# Specific suite
-make e2e
-
-# Verbose
-python3 run_tests.py -s e2e -v
-```
-
-## Code Review Checklist
-
-- [ ] Code follows project style
+- [ ] No hardcoded values; variables come from `all.yml`
+- [ ] Ansible tasks are idempotent, workarounds carry a doc backlink
+- [ ] Edge-specific code is gated
+- [ ] Facts written at their owner document, linked elsewhere
+- [ ] Feature classified in `status.md`
 - [ ] Tests pass
-- [ ] Documentation updated
-- [ ] No hardcoded values (use variables)
-- [ ] Error handling present
-- [ ] Commit messages follow convention
+- [ ] Commit subject follows the convention
 
-## Getting Help
-
-- Check existing documentation
-- Search closed issues
-- Open a new issue with:
-  - Clear description
-  - Steps to reproduce
-  - Expected vs actual behavior
-  - Environment details
+---
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the Apache 2.0 License.
+By contributing, you agree that your contributions will be licensed under the
+Apache 2.0 License.

@@ -1,7 +1,7 @@
 # 5G NF Platform: Development Plan
 
 Standalone specification for the `5g-nf-platform` repository. Copy this document to the
-root of that repository as `CLAUDE.md` or `SPEC.md` before starting development.
+root of that repository as `AGENTS.md` or `SPEC.md` before starting development.
 
 ---
 
@@ -294,7 +294,7 @@ wants to update an NF:
 
 1. Check `versions.json` in this repository for the new tag.
 2. Update the corresponding `nf_image_<name>` variable in `all.yml`.
-3. Run `ansible-playbook phases/05-5g-core/playbook.yml`.
+3. Run `testbed run-phase 05-5g-core`.
 
 The testbed dashboard (future feature) automates steps 1 and 2 via the GitHub API and a
 confirmation prompt.

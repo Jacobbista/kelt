@@ -1,7 +1,7 @@
 ---
 - name: "PHASE 1 | Infrastructure Setup"
   # Master + workers always; edge only when enabled, so a disabled/absent edge VM
-  # does not make the phase UNREACHABLE (edge-gating convention, CLAUDE.md).
+  # does not make the phase UNREACHABLE (edge-gating convention, AGENTS.md).
   hosts: "masters,workers{{ ',edges' if (edge_enabled | default(false) | bool) else '' }}"
   become: true
   roles:

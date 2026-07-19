@@ -20,6 +20,47 @@ KELT (Kubernetes-Edge Lightweight Testbed) is a lightweight, reproducible, cloud
 
 ---
 
+## Documentation Map
+
+Every topic has one document that owns it. Other documents link to the owner and
+never restate its content, especially concrete values such as IPs, VNIs, ports,
+and counts. This is what keeps the same fact from drifting in two places. When
+documenting something, write it at its owner and link from elsewhere.
+
+**Entry points**, one per audience. They link out, they do not duplicate each other.
+
+| Document | Audience | Owns |
+|----------|----------|------|
+| [README](https://github.com/Jacobbista/kelt/blob/main/README.md) | Anyone arriving | Pitch, status summary, stack, links out |
+| [QUICKSTART](https://github.com/Jacobbista/kelt/blob/main/QUICKSTART.md) | Operators, agents | Install, deploy, daily ops, `testbed` subcommands |
+| [AGENTS](https://github.com/Jacobbista/kelt/blob/main/AGENTS.md) | Agents, new contributors | Hard constraints and where to look first |
+| This index | Anyone navigating | Links to every document, grouped by area |
+
+**Topic owners.** Single source of truth; everyone else links, never restates.
+
+| Topic | Owner |
+|-------|-------|
+| Interface matrix (subnets, static IPs, VXLAN VNIs) | [architecture/5g-interfaces.md](architecture/5g-interfaces.md) |
+| Node/VM topology and IPs | [architecture/overview.md](architecture/overview.md) |
+| System design (layers, network, NFs, positioning) | [architecture/](architecture/) |
+| Deployment phases and how to run them | [deployment/phases.md](deployment/phases.md) |
+| External exposure and tunnels | [security/external-access.md](security/external-access.md), [deployment/external-tunnel.md](deployment/external-tunnel.md) |
+| Dashboard architecture, access, security summary | [dashboard/overview.md](dashboard/overview.md) |
+| Dashboard modules | [dashboard/modules.md](dashboard/modules.md) |
+| Dashboard REST/WS endpoints | [dashboard/api-reference.md](dashboard/api-reference.md) |
+| IAM: roles, OIDC clients, per-route matrix | [security/iam.md](security/iam.md) |
+| Diagnostics and troubleshooting | [operations/troubleshooting.md](operations/troubleshooting.md), [runbooks/](runbooks/) |
+| Feature maturity | [status.md](status.md) |
+| Future direction | [roadmap.md](roadmap.md) |
+| Verified gaps and open bugs | [gaps.md](gaps.md) |
+| Platform limitations and workarounds | [known-issues/](known-issues/) |
+| Per-phase implementation notes | `ansible/phases/0X/README.md` |
+| Test suites and how to run them | [development/testing.md](development/testing.md) |
+| Coding standards and contribution workflow | [development/contributing.md](development/contributing.md) |
+| Operator quick-reference (consolidated IPs, ports, commands) | [operations/handbook.md](operations/handbook.md), cheat-sheet only |
+
+---
+
 ## Architecture
 
 These documents explain how the system is designed. Read them in order; each builds on the previous.
@@ -72,7 +113,7 @@ The testbed includes an out-of-band operations dashboard (FastAPI + React) that 
 | Document | Description |
 |----------|-------------|
 | [Overview](dashboard/overview.md) | Architecture, access URLs, security model, deployment |
-| [Modules](dashboard/modules.md) | All 10 modules: Overview, Kubernetes, 5G Core, Topology, RAN, Subscribers, UE Monitor, Diagnostics, Metrics, IAM |
+| [Modules](dashboard/modules.md) | Every module, grouped by area: cluster, 5G, network, services, settings |
 | [API Reference](dashboard/api-reference.md) | Full REST and WebSocket endpoint listing |
 
 ---
