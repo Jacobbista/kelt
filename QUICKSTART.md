@@ -13,9 +13,9 @@ cd kelt
 ./testbed-config
 ```
 
-KELT is distributed as a git checkout, so updating it later is `testbed update`:
+KELT is distributed as a git checkout, so updating it later is `kelt update`:
 it fast-forwards this clone and lists the phases worth re-running. It is offered
-automatically before `testbed up` when the checkout is behind, and it is also how
+automatically before `kelt up` when the checkout is behind, and it is also how
 newer container image baselines arrive, since those are pinned in the repo.
 
 Tested on Ubuntu 24.04 LTS (Server and Desktop). Auto-fixes use `apt`; on other
@@ -31,7 +31,7 @@ auto-fixes:
 - CPU virtualization extensions (`vmx`/`svm`) enabled in BIOS/UEFI
 - `gum` TUI helper installed
 - Local `.testbed.env` initialized
-- Shell alias `testbed` installed in `~/.bashrc`
+- `kelt` installed as a real command in `~/.local/bin` (plus `testbed` as an alternative name)
 
 **Optional:**
 - User in `vboxusers` group, only relevant for VirtualBox USB
@@ -43,7 +43,7 @@ Items the wizard can fix automatically:
 | Item | Fix |
 |---|---|
 | `gum` missing | apt install via `repo.charm.sh` |
-| Alias missing | Writes `testbed` alias + bash completion to `~/.bashrc` |
+| Command missing | Symlinks `kelt` and `testbed` into `~/.local/bin`, adds bash completion |
 | Config missing | Prompts for deployment profile |
 
 Items requiring manual install:
@@ -55,7 +55,7 @@ Items requiring manual install:
 
 After onboarding, the wizard writes a marker at
 `~/.config/5g-testbed/onboarded` so subsequent runs skip straight to
-the menu. Re-run the wizard any time with `testbed onboarding`.
+the menu. Re-run the wizard any time with `kelt onboarding`.
 
 ---
 
@@ -63,9 +63,9 @@ the menu. Re-run the wizard any time with `testbed onboarding`.
 
 ### Two interfaces, one behavior
 
-`testbed` exposes the same functionality two ways, and both are first-class.
+`kelt` exposes the same functionality two ways, and both are first-class.
 
-The **interactive TUI** (`testbed` with no arguments) is the intended way to use
+The **interactive TUI** (`kelt` with no arguments) is the intended way to use
 the testbed. It shows current state before asking anything, names the
 consequence of each choice, and confirms destructive actions, so it is the safer
 surface when the next step is not already decided.
@@ -80,14 +80,16 @@ subcommand, and a capability that exists only behind a prompt is considered a
 bug. The two paths share the same functions and the same persisted state, so
 mixing them within one session is safe.
 
-After onboarding, the `testbed` alias works from any directory.
+After onboarding, `kelt` works from any directory. It is a real command on PATH,
+not a shell alias, so scripts, cron, `ssh host "kelt ..."` and agents can call it
+too. `testbed` is an alternative name for the same tool.
 
 ```bash
-testbed                  # interactive TUI menu (gum)
-testbed up               # bring up the cluster (vagrant up)
-testbed provision        # full Ansible provision
-testbed show             # show current configuration
-testbed help             # man-style reference
+kelt                  # interactive TUI menu (gum)
+kelt up               # bring up the cluster (vagrant up)
+kelt provision        # full Ansible provision
+kelt show             # show current configuration
+kelt help             # man-style reference
 ```
 
 ### Navigation
@@ -110,7 +112,7 @@ The interactive menu groups commands into sections:
 | Tests | end-to-end and protocol test suites |
 | Show full status | dump of current configuration |
 | Re-run onboarding checks | re-validate host requirements |
-| Install CLI alias + completion | bashrc setup |
+| Install CLI command + completion | symlink into ~/.local/bin |
 | Help | this reference |
 
 ---
@@ -121,9 +123,9 @@ Useful on a dedicated testbed host that should come up after a reboot
 (power loss, kernel upgrade, etc.).
 
 ```bash
-testbed autostart on        # install + enable systemd unit
-testbed autostart status    # show current state
-testbed autostart off       # disable + remove unit
+kelt autostart on        # install + enable systemd unit
+kelt autostart status    # show current state
+kelt autostart off       # disable + remove unit
 ```
 
 The unit is system-wide at `/etc/systemd/system/5g-testbed.service`,
@@ -152,7 +154,7 @@ frontend HMR), see
 Shortcut for the supported sub-domain convention:
 
 ```bash
-testbed auth-network preset-cloudflare yourdomain.com
+kelt auth-network preset-cloudflare yourdomain.com
 ```
 
 This takes the operator's bare domain and namespaces every KELT surface under a
@@ -169,10 +171,10 @@ etc.) is configured outside the testbed. Full surface map and rationale:
 Run your own container as a pod and reach its frontend at its own subdomain. Opt-in:
 
 ```bash
-testbed apps on
-testbed secrets generate-missing      # registry password (or set APPS_REGISTRY_PASSWORD)
-testbed run-phase 12-apps             # local registry (apps ns) + mec app namespace (restarts k3s on the worker once)
-testbed run-phase 11-frontdoor        # emit the dynamic kelt-<name>.<base> route
+kelt apps on
+kelt secrets generate-missing      # registry password (or set APPS_REGISTRY_PASSWORD)
+kelt run-phase 12-apps             # local registry (apps ns) + mec app namespace (restarts k3s on the worker once)
+kelt run-phase 11-frontdoor        # emit the dynamic kelt-<name>.<base> route
 ```
 
 Then build outside the cluster, push to the local registry, and deploy from the
@@ -203,49 +205,49 @@ configuration and secrets, which a raw playbook run does not.
 
 | Command | Args | Notes |
 |---|---|---|
-| `testbed onboarding` | — | Re-run wizard, idempotent |
-| `testbed install` | — | Install alias + completion (asks for gum if missing) |
-| `testbed update` | — | Pull new KELT commits and list the phases to re-run |
+| `kelt onboarding` | — | Re-run wizard, idempotent |
+| `kelt install` | — | Install alias + completion (asks for gum if missing) |
+| `kelt update` | — | Pull new KELT commits and list the phases to re-run |
 
 ### Deploy
 
 | Command | Args | Effect |
 |---|---|---|
-| `testbed up` | — | `vagrant up` with current profile |
-| `testbed provision` | — | Full Ansible playbook |
-| `testbed run-phase` | `<phase-dir>` | Single phase, e.g. `09-dashboard` |
-| `testbed autostart` | `on \| off \| status` | systemd unit toggle |
+| `kelt up` | — | `vagrant up` with current profile |
+| `kelt provision` | — | Full Ansible playbook |
+| `kelt run-phase` | `<phase-dir>` | Single phase, e.g. `09-dashboard` |
+| `kelt autostart` | `on \| off \| status` | systemd unit toggle |
 
 ### Configure
 
 | Command | Args |
 |---|---|
-| `testbed set-profile` | `laptop \| server` |
-| `testbed edge` | `on \| off \| true \| false` |
-| `testbed ran` | `<nic> \| disable` |
-| `testbed northbound` | `on \| off` (positioning/CAMARA feature: phases 10-12 + placement-editor, in one command) |
-| `testbed apps` | `on \| off` (edge apps platform: phase 12 local registry + deploy-from-image + dynamic `<name>.<base>` route) |
+| `kelt set-profile` | `laptop \| server` |
+| `kelt edge` | `on \| off \| true \| false` |
+| `kelt ran` | `<nic> \| disable` |
+| `kelt northbound` | `on \| off` (positioning/CAMARA feature: phases 10-12 + placement-editor, in one command) |
+| `kelt apps` | `on \| off` (edge apps platform: phase 12 local registry + deploy-from-image + dynamic `<name>.<base>` route) |
 
 ### External access
 
 | Command | Args |
 |---|---|
-| `testbed auth-network` | `status \| dev \| auth \| origin \| positioning-origin \| prefix \| keycloak-url \| preset-cloudflare <root-domain>` |
-| `testbed dashboard-dev` | `true \| false` |
-| `testbed dashboard-auth` | `enabled \| disabled` |
+| `kelt auth-network` | `status \| dev \| auth \| origin \| positioning-origin \| prefix \| keycloak-url \| preset-cloudflare <root-domain>` |
+| `kelt dashboard-dev` | `true \| false` |
+| `kelt dashboard-auth` | `enabled \| disabled` |
 
 ### IAM
 
 | Command | Args |
 |---|---|
-| `testbed iam reconcile` | `on \| off \| ask \| status` (controls phase 08 realm reconcile gate) |
+| `kelt iam reconcile` | `on \| off \| ask \| status` (controls phase 08 realm reconcile gate) |
 
 Phase 08 seeds two end users on first deploy: `admin` (group `g-dashboard-admins`)
 and `viewer` (group `g-dashboard-viewers`). Both are created with
 `temporary: true`, so the password must be reset at first login. Phase 08
 reruns never overwrite a password changed via the Keycloak console.
 
-When the reconcile gate is set to `ask` (default), `testbed run-phase 08-iam`
+When the reconcile gate is set to `ask` (default), `kelt run-phase 08-iam`
 prompts the operator with a short description of what reconcile does and
 collects an answer for that run. The IAM page in the dashboard
 (admin-only) lists the role model, seed users, and clients without leaving
@@ -255,17 +257,17 @@ the SPA. Full reference: [docs/security/iam.md](docs/security/iam.md).
 
 | Command | Args |
 |---|---|
-| `testbed iam-admin-password` | `<password> \| --clear` |
-| `testbed secrets` | `generate-missing \| manual \| rotate \| status \| clear` |
+| `kelt iam-admin-password` | `<password> \| --clear` |
+| `kelt secrets` | `generate-missing \| manual \| rotate \| status \| clear` |
 
 ### Inspect
 
 | Command | Args |
 |---|---|
-| `testbed show` | — |
-| `testbed endpoints` | — (URLs for dashboard, demo, CAMARA, Keycloak — external if configured, else worker NodePort) |
-| `testbed env` | — (prints `export` lines, eval-safe) |
-| `testbed tests` | `[suite...]` |
+| `kelt show` | — |
+| `kelt endpoints` | — (URLs for dashboard, demo, CAMARA, Keycloak — external if configured, else worker NodePort) |
+| `kelt env` | — (prints `export` lines, eval-safe) |
+| `kelt tests` | `[suite...]` |
 
 ---
 
@@ -273,14 +275,14 @@ the SPA. Full reference: [docs/security/iam.md](docs/security/iam.md).
 
 | Symptom | Action |
 |---|---|
-| `vagrant up` fails after host reboot | `testbed onboarding` to re-check requirements; if VMs partially up, `vagrant halt && testbed up` |
+| `vagrant up` fails after host reboot | `kelt onboarding` to re-check requirements; if VMs partially up, `vagrant halt && testbed up` |
 | Dashboard shows API errors right after boot | Initial pod boot can take ~2 min; the SPA splash screen waits on backend + Keycloak. If it never clears, check `sudo k3s kubectl -n iam get pods` on the master |
-| `testbed` alias not found in new shell | `source ~/.bashrc` or open a new shell. Re-install with `./testbed-config install` |
+| `kelt` alias not found in new shell | `source ~/.bashrc` or open a new shell. Re-install with `./testbed-config install` |
 | `gum` install fails behind a proxy | Manual: `sudo apt-get install -y gum` after adding the Charm repo (see install_gum_apt in `testbed-config`) |
-| Want to switch domain | `testbed auth-network preset-cloudflare newdomain.com && testbed run-phase 08-iam` |
+| Want to switch domain | `kelt auth-network preset-cloudflare newdomain.com && testbed run-phase 08-iam` |
 | Dev frontend reloads in a loop, splash flashes | Vite HMR WebSocket blocked by the tunnel. Either disable HMR (`DASHBOARD_DEV_HMR_ENABLED=false`) or add a Zero-Trust bypass for `<dev-host>/__vite_hmr*` (the path is baked in by phase 09). Reference: `docs/deployment/external-tunnel.md`. |
 | Browser console: `Invalid hook call ... more than one copy of React` | Vite pre-bundle cache rotated mid-session, leaving two chunk generations live in the tab. Hard-refresh (`Ctrl+Shift+R`). Persistent occurrence means a task ran `npm install` unconditionally; see docs/development/contributing.md "Dashboard frontend" for the mtime gate. |
-| Sidebar mode badge shows the wrong environment (e.g. `PROD` on the dev URL) | Bundle stale. Hard-refresh; if it persists after, ship a new bundle with `testbed run-phase 09-dashboard` and tag a new `dashboard-frontend-v*`. |
+| Sidebar mode badge shows the wrong environment (e.g. `PROD` on the dev URL) | Bundle stale. Hard-refresh; if it persists after, ship a new bundle with `kelt run-phase 09-dashboard` and tag a new `dashboard-frontend-v*`. |
 
 ---
 

@@ -4,11 +4,15 @@ KELT is a reproducible 5G cloud-edge testbed: Vagrant provisions up to three VMs
 (master, worker, optional edge), Ansible deploys K3s, KubeEdge, an Open5GS 5G
 core, and an operations dashboard on top of per-interface VXLAN overlays.
 
-`./testbed-config` drives everything. It carries two interfaces over one
-implementation: an interactive TUI, which is how people are meant to operate the
-testbed, and positional subcommands, which are the surface for agents, scripts,
-and CI. Every menu action has a matching subcommand, so nothing needs a prompt
-to be reached. Use the subcommands.
+`kelt` drives everything. It carries two interfaces over one implementation: an
+interactive TUI, which is how people are meant to operate the testbed, and
+positional subcommands, which are the surface for agents, scripts, and CI. Every
+menu action has a matching subcommand, so nothing needs a prompt to be reached.
+Use the subcommands.
+
+`kelt install` puts it on PATH as a real command, so it works from a
+non-interactive shell. Before that, or in a fresh checkout, run it in place as
+`./testbed-config`. `testbed` is an alternative name for the same tool.
 
 ## Before assuming anything, read the owner document
 
@@ -28,11 +32,12 @@ whose workarounds are load-bearing.
 ## Commands
 
 ```bash
-./testbed-config              # interactive TUI: configure, deploy, operate
-./testbed-config up           # deploy non-interactively
-./testbed-config run-phase    # re-run a single deployment phase
-./testbed-config endpoints    # print the reachable URLs
-cd tests && make test         # run the automated suites
+kelt                  # interactive TUI: configure, deploy, operate
+kelt up               # deploy non-interactively
+kelt run-phase        # re-run a single deployment phase (takes tags and key=value)
+kelt update           # pull new commits and list the phases to re-run
+kelt endpoints        # print the reachable URLs
+cd tests && make test # run the automated suites
 ```
 
 Prefer these over driving `vagrant` and `ansible-playbook` by hand: the CLI

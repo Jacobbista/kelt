@@ -1749,16 +1749,44 @@ do_install_cli() {
     fi
   fi
 
+  # A real command on PATH, not a shell alias. An alias only exists in interactive
+  # shells, so `ssh host "kelt ..."`, cron, CI and agents could never reach it, which
+  # contradicts the positional subcommands being the automation surface.
+  # See QUICKSTART.md "Two interfaces, one behavior".
+  local bin_dir="${HOME}/.local/bin"
+  mkdir -p "$bin_dir"
+  local name
+  for name in kelt testbed; do
+    if [ -L "$bin_dir/$name" ] && [ "$(readlink -f "$bin_dir/$name")" = "$(readlink -f "$bin_path")" ]; then
+      echo "Command '$name' already points at $bin_path"
+    elif [ -e "$bin_dir/$name" ] && [ ! -L "$bin_dir/$name" ]; then
+      echo "Skipping '$name': $bin_dir/$name exists and is not a symlink."
+    else
+      ln -sfn "$bin_path" "$bin_dir/$name"
+      echo "Installed command '$name' -> $bin_path"
+    fi
+  done
+
+  # Drop the old alias: it shadows the symlink in interactive shells, which is
+  # exactly what hid the automation gap.
   if grep -q "$marker_alias" "$rc_file" 2>/dev/null; then
-    echo "Alias already present in $rc_file"
-  else
-    {
-      echo ""
-      echo "$marker_alias"
-      echo "alias testbed='$bin_path'"
-    } >> "$rc_file"
-    echo "Added alias 'testbed' -> $bin_path in $rc_file"
+    sed -i "/${marker_alias}/,+1d" "$rc_file"
+    echo "Removed the legacy 'testbed' alias from $rc_file (the command is on PATH now)"
   fi
+
+  case ":${PATH}:" in
+    *":${bin_dir}:"*) ;;
+    *)
+      if ! grep -q 'TESTBED_CONFIG_PATH' "$rc_file" 2>/dev/null; then
+        {
+          echo ""
+          echo "# TESTBED_CONFIG_PATH"
+          echo "export PATH=\"\$HOME/.local/bin:\$PATH\""
+        } >> "$rc_file"
+        echo "Added ~/.local/bin to PATH in $rc_file (open a new shell to pick it up)"
+      fi
+      ;;
+  esac
 
   local comp_dir="${HOME}/.bash_completion.d"
   mkdir -p "$comp_dir"
@@ -1789,6 +1817,7 @@ autostart update help"
   esac
   COMPREPLY=( $(compgen -W "$opts" -- "$cur") )
 }
+complete -F _testbed_complete kelt
 complete -F _testbed_complete testbed
 complete -F _testbed_complete testbed-config
 BASH
@@ -1804,11 +1833,11 @@ BASH
   fi
 
   echo ""
-  echo "Done. The alias is live in any NEW shell you open."
-  echo "To use it in THIS shell right now, run one of:"
-  echo "    source $rc_file"
-  echo "    exec bash"
-  echo "Then call:  testbed help"
+  echo "Done. 'kelt' is a real command on PATH, so it also works from scripts,"
+  echo "cron, ssh and agents, not only in an interactive shell. 'testbed' stays"
+  echo "as an alternative name."
+  echo "Tab completion needs a NEW shell (or: source $rc_file)."
+  echo "Try:  kelt help"
 }
 
 # ─── Developer git hooks (opt-in, developer-only) ───────────────────────────
@@ -1978,10 +2007,14 @@ do_dev_hooks() {
 print_help() {
   cat <<EOF
 NAME
-    testbed-config - configure and drive the 5G K3s KubeEdge testbed
+    kelt - configure and drive the KELT 5G cloud-edge testbed
 
 SYNOPSIS
-    testbed-config [command] [args...]
+    kelt [command] [args...]
+
+    Installed by 'kelt install' as a real command on PATH, so it works from
+    scripts, cron and agents as well as an interactive shell. 'testbed' is an
+    alternative name for the same tool; ./testbed-config runs it in place.
 
 DESCRIPTION
     Interactive TUI when called without arguments. All commands are also

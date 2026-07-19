@@ -1,6 +1,6 @@
 # testbed-config
 
-`testbed-config` is an interactive CLI tool for configuring the testbed before deployment. It manages deployment profiles, edge VM toggle, physical RAN bridge selection, IAM/CAMARA secret material, and other parameters, persisting non-secret values to `.testbed.env` and secrets to `.testbed.secrets`.
+`kelt` (the `testbed-config` script; `testbed` is an alternative name) is the CLI for configuring and driving the testbed. `kelt install` puts it on PATH as a real command, not a shell alias, so scripts, cron and agents can call it too. It manages deployment profiles, edge VM toggle, physical RAN bridge selection, IAM/CAMARA secret material, and other parameters, persisting non-secret values to `.testbed.env` and secrets to `.testbed.secrets`.
 
 It carries two interfaces over one implementation: an interactive TUI, which is the intended way to operate the testbed, and positional subcommands for direct terminal control, CI, and agents. Every menu action has a matching subcommand. See [Two interfaces](https://github.com/Jacobbista/kelt/blob/main/QUICKSTART.md#two-interfaces-one-behavior), which owns that model and the subcommand reference.
 
