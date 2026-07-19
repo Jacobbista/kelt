@@ -3,7 +3,11 @@
 # Uses gum (https://github.com/charmbracelet/gum) for TUI when available.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# readlink -f: the command is installed as a symlink in ~/.local/bin, so without
+# resolving it SCRIPT_DIR would be ~/.local/bin and every repo-relative path
+# (.testbed.env, ansible/, package.json) would silently miss, reporting defaults
+# instead of the operator's real configuration.
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 ENV_FILE="${SCRIPT_DIR}/.testbed.env"
 SECRETS_FILE="${SCRIPT_DIR}/.testbed.secrets"
 APPLIED_RAN_FILE="${SCRIPT_DIR}/.physical_ran_bridge_applied"
@@ -1050,7 +1054,7 @@ phase_tags() {
       next
     }
     { inblock = 0 }
-  ' "$playbook" | grep -Ev '^phase[0-9]*$' | sort -u
+  ' "$playbook" | grep -Ev '^(phase[0-9]*|always|never)$' | sort -u
 }
 
 do_run_phase() {
@@ -1802,10 +1806,10 @@ iam iam-admin-password secrets run-phase tests up provision env install onboardi
 autostart update help"
   case "$prev" in
     set-profile)        COMPREPLY=( $(compgen -W "laptop server" -- "$cur") ); return ;;
-    run-phase)          COMPREPLY=( $(compgen -W "$(ls -d ansible/phases/[0-9][0-9]-*/ 2>/dev/null | xargs -n1 basename 2>/dev/null)" -- "$cur") ); return ;;
+    run-phase)          COMPREPLY=( $(compgen -W "$(ls -d __KELT_ROOT__/ansible/phases/[0-9][0-9]-*/ 2>/dev/null | xargs -n1 basename 2>/dev/null)" -- "$cur") ); return ;;
     # Second arg after run-phase: offer that phase's tags.
     [0-9][0-9]-*)
-      COMPREPLY=( $(compgen -W "$(awk '/^[[:space:]]*tags:[[:space:]]*\[/{l=$0;sub(/^[^[]*\[/,"",l);sub(/\].*/,"",l);n=split(l,a,",");for(i=1;i<=n;i++){gsub(/[[:space:]]/,"",a[i]);if(a[i]!="")print a[i]}next}/^[[:space:]]*tags:[[:space:]]*$/{b=1;next}b&&/^[[:space:]]*-[[:space:]]/{t=$0;sub(/^[[:space:]]*-[[:space:]]*/,"",t);gsub(/[[:space:]]/,"",t);if(t!="")print t;next}{b=0}' "ansible/phases/${prev}/playbook.yml" 2>/dev/null | grep -Ev '^phase[0-9]*$' | sort -u)" -- "$cur") ); return ;;
+      COMPREPLY=( $(compgen -W "$(awk '/^[[:space:]]*tags:[[:space:]]*\[/{l=$0;sub(/^[^[]*\[/,"",l);sub(/\].*/,"",l);n=split(l,a,",");for(i=1;i<=n;i++){gsub(/[[:space:]]/,"",a[i]);if(a[i]!="")print a[i]}next}/^[[:space:]]*tags:[[:space:]]*$/{b=1;next}b&&/^[[:space:]]*-[[:space:]]/{t=$0;sub(/^[[:space:]]*-[[:space:]]*/,"",t);gsub(/[[:space:]]/,"",t);if(t!="")print t;next}{b=0}' "__KELT_ROOT__/ansible/phases/${prev}/playbook.yml" 2>/dev/null | grep -Ev '^(phase[0-9]*|always|never)$' | sort -u)" -- "$cur") ); return ;;
     edge|dashboard-dev|northbound|apps) COMPREPLY=( $(compgen -W "true false on off" -- "$cur") ); return ;;
     dev-hooks)          COMPREPLY=( $(compgen -W "on off status release" -- "$cur") ); return ;;
     dashboard-auth)     COMPREPLY=( $(compgen -W "enabled disabled" -- "$cur") ); return ;;
@@ -1821,6 +1825,7 @@ complete -F _testbed_complete kelt
 complete -F _testbed_complete testbed
 complete -F _testbed_complete testbed-config
 BASH
+  sed -i "s|__KELT_ROOT__|${SCRIPT_DIR}|g" "$comp_file"
   echo "Wrote bash completion -> $comp_file"
 
   if ! grep -q "$marker_comp" "$rc_file" 2>/dev/null; then
