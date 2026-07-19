@@ -359,15 +359,19 @@ Each image has its own release lifecycle, decoupled from the others:
 - **Dashboard frontend** publishes only on a `dashboard-frontend-v<semver>` git
   tag. Editing the frontend does not change the published image until you tag:
   ```
-  testbed dev-hooks release    # tags the current package.json version, or offers
-                               # a patch/minor/major bump, then pushes
+  testbed dev-hooks release    # bumps package.json and the deploy baseline,
+                               # commits, tags, and pushes
   ```
   The cluster runs that semver **pinned** from `dashboard_frontend_tag` in
   `all.yml`, with `imagePullPolicy: IfNotPresent`. One tag is one image, so the
   rollout happens because the pod spec changed and `kubectl rollout undo` means
-  something. Bump the baseline in the same commit as the git tag, never earlier:
-  it must always name a tag that exists on the registry, and `package.json` can
-  legitimately be ahead while a release is still pending.
+  something. The two versions are deliberately separate: `package.json` is what
+  CI builds, the baseline is what the cluster runs, and they legitimately differ
+  while a release is pending. `dev-hooks release` moves both in one commit and
+  tags it, so the baseline can never name a tag that was never published.
+
+  A pinned deploy cannot pull an image that does not exist yet, so wait for the
+  CI build to finish before re-running phase 09.
 - **Docs** publish automatically: the docs workflow rebuilds on any push touching
   `docs/**`, and re-running phase 09 forces a rollout. This image is deliberately
   **not** pinned. It is continuously published and carries no semver, so pinning

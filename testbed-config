@@ -1837,6 +1837,27 @@ else: z = z + 1
 print(f"{x}.{y}.{z}")
 PY
 }
+# The deployed version is pinned separately from the source version: package.json
+# is what CI builds, dashboard_frontend_tag in all.yml is what the cluster runs.
+# A release moves both in the same commit, so the baseline can never name a tag
+# that was never published, and the tag always points at a commit that agrees
+# with it. See docs/development/contributing.md "Publishing images".
+_devhooks_get_baseline() {
+  sed -n 's/^dashboard_frontend_tag:[[:space:]]*"\(.*\)".*/\1/p' \
+    "${SCRIPT_DIR}/ansible/group_vars/all.yml" | head -1
+}
+
+_devhooks_set_baseline() {  # $1=new version (regex replace, preserves formatting)
+  python3 - "${SCRIPT_DIR}/ansible/group_vars/all.yml" "$1" <<'BASELINE'
+import re, sys
+path, new = sys.argv[1], sys.argv[2]
+text = open(path).read()
+open(path, "w").write(
+    re.sub(r'(^dashboard_frontend_tag:\s*")[^"]*(")', r'\g<1>' + new + r'\g<2>',
+           text, count=1, flags=re.M))
+BASELINE
+}
+
 _devhooks_set_fe_version() {  # $1=new version (regex replace, preserves formatting)
   python3 - "${SCRIPT_DIR}/dashboard/frontend/package.json" "$1" <<'PY'
 import re, sys
@@ -1911,13 +1932,24 @@ _devhooks_release() {
     echo "Plan: bump package.json $pkg -> $newver, commit, tag dashboard-frontend-v$newver."
     gum_confirm "Proceed?" || { echo "Cancelled."; return 0; }
     _devhooks_set_fe_version "$newver"
-    git -C "$SCRIPT_DIR" add dashboard/frontend/package.json
+    _devhooks_set_baseline "$newver"
+    git -C "$SCRIPT_DIR" add dashboard/frontend/package.json ansible/group_vars/all.yml
     git -C "$SCRIPT_DIR" commit -m "chore(frontend): release v$newver"
     git -C "$SCRIPT_DIR" tag "dashboard-frontend-v$newver"
   else
     newver="$pkg"
-    echo "frontend package.json is v$pkg, not yet tagged. Plan: tag dashboard-frontend-v$pkg on HEAD."
-    gum_confirm "Proceed?" || { echo "Cancelled."; return 0; }
+    local baseline; baseline="$(_devhooks_get_baseline || true)"
+    if [ "$baseline" != "$newver" ]; then
+      echo "frontend package.json is v$pkg, not yet tagged; deploy baseline is v${baseline:-unset}."
+      echo "Plan: pin dashboard_frontend_tag to $newver, commit, tag dashboard-frontend-v$pkg."
+      gum_confirm "Proceed?" || { echo "Cancelled."; return 0; }
+      _devhooks_set_baseline "$newver"
+      git -C "$SCRIPT_DIR" add ansible/group_vars/all.yml
+      git -C "$SCRIPT_DIR" commit -m "chore(dashboard): pin the deployed frontend to $newver"
+    else
+      echo "frontend package.json is v$pkg, not yet tagged. Plan: tag dashboard-frontend-v$pkg on HEAD."
+      gum_confirm "Proceed?" || { echo "Cancelled."; return 0; }
+    fi
     git -C "$SCRIPT_DIR" tag "dashboard-frontend-v$newver"
   fi
 
@@ -1925,6 +1957,8 @@ _devhooks_release() {
     git -C "$SCRIPT_DIR" push
     git -C "$SCRIPT_DIR" push origin "dashboard-frontend-v$newver"
     echo "Pushed. CI builds ghcr.io/jacobbista/dashboard-frontend:$newver and :latest."
+    echo "Wait for that build to finish before 'testbed run-phase 09-dashboard': the"
+    echo "deploy is pinned to $newver and cannot pull it until CI has published it."
   else
     echo "Tag created locally. Push when ready:  git push && git push origin dashboard-frontend-v$newver"
   fi
