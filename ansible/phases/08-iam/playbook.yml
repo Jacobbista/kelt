@@ -13,6 +13,34 @@
     - iam
     - namespaces
   tasks:
+    # The admin password is read from the environment and falls back to a
+    # placeholder, so a hand-run `ansible-playbook` that never sourced
+    # .testbed.secrets authenticates against an existing Keycloak with the wrong
+    # password: every admin API call 401s and the run can leave a half-applied
+    # realm behind. Refuse that combination instead of discovering it midway.
+    # `testbed run-phase 08-iam` sources the secrets and never trips this.
+    # See QUICKSTART.md "Two interfaces, one behavior".
+    - name: Check whether Keycloak is already deployed
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        name: keycloak
+        namespace: "{{ iam_namespace }}"
+        kubeconfig: "{{ kubeconfig_path }}"
+      register: _kc_existing
+      run_once: true
+
+    - name: Fail when an existing Keycloak would be reconfigured with the placeholder password
+      ansible.builtin.fail:
+        msg: >-
+          Keycloak is already deployed but KEYCLOAK_ADMIN_PASSWORD is unset, so this run
+          would use the placeholder password and every admin API call would fail. Run the
+          phase through `testbed run-phase 08-iam`, which sources .testbed.secrets, or
+          export the secrets before calling ansible-playbook directly.
+      when:
+        - _kc_existing.resources | default([]) | length > 0
+        - lookup('ansible.builtin.env', 'KEYCLOAK_ADMIN_PASSWORD') | default('', true) | length == 0
+      run_once: true
+
     - name: Ensure iam namespace exists
       kubernetes.core.k8s:
         api_version: v1
