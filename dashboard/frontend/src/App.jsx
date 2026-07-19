@@ -14,6 +14,9 @@ import CallbackPage from "./pages/CallbackPage";
 import CorePage from "./pages/CorePage";
 import DiagnosticsPage from "./pages/DiagnosticsPage";
 import SettingsPage from "./pages/SettingsPage";
+import IamPage from "./pages/IamPage";
+import BrandingPage from "./pages/BrandingPage";
+import StoragePage from "./pages/StoragePage";
 import KubernetesPage from "./pages/KubernetesPage";
 import LoggedOutPage from "./pages/LoggedOutPage";
 import MetricsPage from "./pages/MetricsPage";
@@ -190,8 +193,11 @@ function AppInner() {
         <Route path="/services/apps" element={<AppsPage />} />
         <Route path="/northbound" element={<Navigate to="/services/northbound" replace />} />
         <Route path="/settings" element={<AdminOnly><SettingsPage /></AdminOnly>} />
-        <Route path="/iam" element={<Navigate to="/settings" replace />} />
-        <Route path="/branding" element={<Navigate to="/settings" replace />} />
+        <Route path="/settings/iam" element={<AdminOnly><IamPage /></AdminOnly>} />
+        <Route path="/settings/branding" element={<AdminOnly><BrandingPage /></AdminOnly>} />
+        <Route path="/settings/storage" element={<AdminOnly><StoragePage /></AdminOnly>} />
+        <Route path="/iam" element={<Navigate to="/settings/iam" replace />} />
+        <Route path="/branding" element={<Navigate to="/settings/branding" replace />} />
         <Route path="/manual" element={<ManualPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

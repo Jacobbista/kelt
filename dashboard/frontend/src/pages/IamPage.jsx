@@ -2,7 +2,9 @@ import { useMemo, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { env } from "../runtime-env";
 import { KEYCLOAK_AUTHORITY } from "../auth/oidc";
+import { Link } from "react-router-dom";
 import { Collapsible } from "../components/ui";
+import { IconArrowLeft } from "../components/icons";
 
 // Conceptual background belongs to the docs site, not to this console: the page
 // states what THIS realm currently is and how to act on it, and links out for
@@ -175,7 +177,10 @@ export default function IamPage() {
   const realmConsoleUrl = useMemo(() => buildRealmConsoleUrl(realmName), [realmName]);
 
   return (
-    <div className="flex flex-col gap-6 pb-8">
+    <div className="svc-fade flex flex-col gap-6 pb-8">
+        <Link to="/settings" className="inline-flex w-fit items-center gap-1 text-xs text-slate-400 hover:text-slate-200">
+          <IconArrowLeft size={14} /> Settings
+        </Link>
       <header className="flex items-center justify-between gap-4">
         <div>
           <h2 className="text-lg font-semibold">Identity &amp; Access</h2>

@@ -123,3 +123,30 @@ export const IconRocket = (p) => (
     <path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5" />
   </Svg>
 );
+
+// Settings hub: identity (shield with a keyhole), branding (paint palette),
+// storage (stacked disks).
+export const IconShield = (p) => (
+  <Svg {...p}>
+    <path d="M12 3l7 3v5c0 4.4-2.9 8.3-7 10-4.1-1.7-7-5.6-7-10V6z" />
+    <circle cx="12" cy="11" r="1.6" />
+    <line x1="12" y1="12.6" x2="12" y2="15" />
+  </Svg>
+);
+
+export const IconPalette = (p) => (
+  <Svg {...p}>
+    <path d="M12 3a9 9 0 100 18 2 2 0 001.6-3.2 2 2 0 011.6-3.2H18a3 3 0 003-3c0-4.8-4-8.6-9-8.6z" />
+    <circle cx="8" cy="10" r="1" />
+    <circle cx="12" cy="7.5" r="1" />
+    <circle cx="16" cy="10" r="1" />
+  </Svg>
+);
+
+export const IconDisk = (p) => (
+  <Svg {...p}>
+    <ellipse cx="12" cy="6" rx="8" ry="3" />
+    <path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6" />
+    <path d="M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6" />
+  </Svg>
+);

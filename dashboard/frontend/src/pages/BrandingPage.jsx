@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { Panel, inputCls, btn } from "../components/ui";
+import { IconArrowLeft } from "../components/icons";
 import { useToast } from "../context/ToastContext";
 import { getBranding, setBranding } from "../api";
 
@@ -93,7 +95,10 @@ export default function BrandingPage() {
         : { display: "inline-flex" };
 
   return (
-    <div className="flex flex-col gap-4 pb-8">
+    <div className="svc-fade flex flex-col gap-4 pb-8">
+        <Link to="/settings" className="inline-flex w-fit items-center gap-1 text-xs text-slate-400 hover:text-slate-200">
+          <IconArrowLeft size={14} /> Settings
+        </Link>
       <header>
         <h2 className="text-lg font-semibold">Branding</h2>
         <p className="text-xs text-slate-400">
