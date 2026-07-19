@@ -5,6 +5,7 @@ import { Panel, btn } from "../components/ui";
 import { IconArrowRight, IconRefresh } from "../components/icons";
 import { env } from "../runtime-env";
 import { getDashboardComponents, updateDashboardComponent } from "../api";
+import { useUpdates } from "../context/UpdateContext";
 
 // Docs base URL. Defaults to the public MkDocs site, but is overridable via
 // VITE_DOCS_URL so a LAN-only / air-gapped deploy can point at a locally served
@@ -90,6 +91,7 @@ export default function ManualPage() {
   const auth = useAuth();
   const isAdmin = auth.roles.includes("dashboard-admin");
   const toast = useToast();
+  const { refresh: refreshUpdates, startUpdate } = useUpdates();
   const [components, setComponents] = useState([]);
   const [busy, setBusy] = useState("");
 
@@ -98,10 +100,19 @@ export default function ManualPage() {
   const load = () => {
     if (!isAdmin) return;
     getDashboardComponents().then(setComponents).catch(() => {});
+    refreshUpdates();
   };
   useEffect(() => { load(); }, [isAdmin]);
 
   const doUpdate = async (name) => {
+    // The frontend replaces the very pod serving this page, so it cannot be
+    // watched from here: hand it to the rollout overlay, which unmounts the app,
+    // expects the requests to fail, and reloads on the new pod. The docs pod is
+    // a different workload, so that one is safe to follow in place.
+    if (name === "dashboard-frontend") {
+      startUpdate(name);
+      return;
+    }
     setBusy(name);
     try {
       await updateDashboardComponent(name);
@@ -121,7 +132,8 @@ export default function ManualPage() {
         if (c && c.state === "up-to-date") { settled = true; break; }
       }
       if (settled) toast.success(`${name}: up to date`);
-      else toast.info(`${name}: still rolling out — use "check" in a moment`);
+      else toast.info(`${name}: still rolling out, use "check" in a moment`);
+      refreshUpdates();
     } catch (e) {
       toast.error(`${name} update failed: ${e.message}`);
     } finally {

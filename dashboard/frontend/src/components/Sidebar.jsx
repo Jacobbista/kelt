@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useLocation } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { useConfirm } from "../context/ConfirmContext";
+import { useUpdates } from "../context/UpdateContext";
 import TimeSyncPopover from "./TimeSyncPopover";
 import DevModeIndicator from "./DevModeIndicator";
 import { env } from "../runtime-env";
@@ -63,6 +64,7 @@ export default function Sidebar({ onNavigate, runtime, serverTime }) {
   const { pathname } = useLocation();
   const auth = useAuth();
   const confirm = useConfirm();
+  const { available } = useUpdates();
   const [showSync, setShowSync] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const clockStr = useServerClock(serverTime);
@@ -131,6 +133,14 @@ export default function Sidebar({ onNavigate, runtime, serverTime }) {
           >
             <span className="text-base">{item.icon}</span>
             {item.label}
+            {/* Stays until the update is applied: a dot that clears itself would
+                be a notification, and this is a state. */}
+            {item.id === "manual" && available.length > 0 && (
+              <span
+                className="ml-auto h-1.5 w-1.5 rounded-full bg-amber-400"
+                title={`${available.length} update available`}
+              />
+            )}
           </button>
         ))}
       </nav>

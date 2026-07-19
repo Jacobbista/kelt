@@ -5,6 +5,7 @@ import { AuthProvider, useAuth } from "./auth/AuthContext";
 import { OperationsProvider } from "./context/OperationsContext";
 import { ToastProvider } from "./context/ToastContext";
 import { ConfirmProvider } from "./context/ConfirmContext";
+import { UpdateProvider } from "./context/UpdateContext";
 import { useBackendHealth } from "./hooks/useBackendHealth";
 import ErrorBoundary from "./components/ErrorBoundary";
 import Layout from "./Layout";
@@ -165,6 +166,7 @@ function AppInner() {
     <ErrorBoundary>
     <ToastProvider>
     <ConfirmProvider>
+    <UpdateProvider>
     <OperationsProvider>
     <Layout
       onNavigate={onNavigate}
@@ -227,6 +229,7 @@ function AppInner() {
       )}
     </Layout>
     </OperationsProvider>
+    </UpdateProvider>
     </ConfirmProvider>
     </ToastProvider>
     </ErrorBoundary>
