@@ -203,7 +203,7 @@ The image must be pushed to the in-cluster local registry first. See
 
 ## IAM
 
-**Area**: Access · admin only
+**Area**: Settings → Identity & Access · admin only
 
 A static reference for the identity model. No write actions; realm changes happen in the Keycloak console.
 
@@ -215,6 +215,39 @@ A static reference for the identity model. No write actions; realm changes happe
 See [security/iam.md](../security/iam.md) for the full role matrix.
 
 ---
+
+## Storage
+
+**Area**: Settings → Storage
+
+Disk state for the worker node, and the actions that reclaim space.
+
+The page leads with a breakdown rather than a percentage, because the intuitive
+culprit is usually the wrong one: nearly all of a node's disk is extracted
+container image layers, while the in-cluster registry (the thing an operator
+tends to blame) holds a fraction of that. Each consumer is listed separately,
+with the registry called out as a subset of the volumes so the relative size is
+visible, and persistent volumes broken down per claim.
+
+Sizes come from walking the filesystem, so they are measured on request and
+cached rather than polled. The filesystem totals are always live.
+
+Reclaim actions, in the order they appear (most effective first):
+
+| Action | Frees | Notes |
+|--------|-------|-------|
+| Prune unused images | GB | Removes image layers no container references |
+| Vacuum journals | MB to GB | Trims systemd logs to the cap phase 01 configures |
+| Registry garbage collect | MB | Unreferenced blobs; offers a dry run first |
+
+Each action shows what it would free before it is run, and is disabled when the
+answer is nothing, so no button is a blind click. Those figures are estimates
+(shared image layers are counted once per image); the amount actually freed is
+measured from the filesystem after the action and reported back.
+
+Reading is open to `dashboard-viewer`; every action requires `dashboard-admin`
+and an explicit confirmation. See [api-reference.md](api-reference.md) for the
+endpoints and [../security/iam.md](../security/iam.md) for the role matrix.
 
 ## Sidebar: Cluster Clock & Time Sync
 

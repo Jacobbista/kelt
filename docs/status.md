@@ -39,8 +39,10 @@ path, `manual`, or `—`.
 | Per-interface VXLAN overlays (N1-N4) on OVS | Supported | manual | on | one VNI per interface |
 | Multus NADs + Whereabouts IPAM | Supported | manual | on | |
 | IAM / Keycloak realm (phase 08) | Supported | manual | on | admin and viewer roles, orthogonal CAMARA role |
-| Dashboard modules: Overview, Kubernetes, 5G Core, Topology, RAN, Subscribers, UE Monitor, Metrics, IAM | Supported | manual | on | image hot-updatable on a running testbed; UE session data from a native Open5GS endpoint |
+| Dashboard modules: cluster, 5G, network, and settings surfaces (listed in [dashboard/modules.md](dashboard/modules.md)) | Supported | manual | on | image hot-updatable on a running testbed; UE session data from a native Open5GS endpoint |
 | Dashboard module: Northbound (positioning/CAMARA service console) | Experimental | — | on | inventory + adapter registry + deploy-from-image + fusion + contract guidance; deploy-from-image gated by `allow_workload_create`; needs e2e against the live stack |
+| Dashboard module: Storage (node disk breakdown + reclaim actions) | Experimental | manual | on | breakdown (containerd layers vs blobs, per-claim volumes, registry, journald) and the estimated saving per action verified live against the worker; the reclaim actions themselves (image prune, journal vacuum, real registry GC) have only been exercised as dry runs |
+| `testbed update` (pull new commits, list phases to re-run) | Experimental | manual | on | fast-forward pull, dirty-tree refusal, and the changed-path to phase mapping verified locally; not yet exercised on a checkout that was actually behind |
 | Node and NF metrics (Prometheus to Metrics module and Overview) | Supported | manual | on | |
 | Physical RAN attach (femtocell) | Supported | manual | on | validated as a working private 5G network, end to end |
 | CAMARA Location + positioning demo (phase 10 northbound) | Supported * | manual: retrieve e2e + make iam | off | thesis core; opt-in via `testbed northbound on`; CAMARA retrieve returns a location end to end (client_credentials token to gateway to engine to mock, HTTP 200), `make iam` green; interactive demo/editor browser login still being exercised |

@@ -107,15 +107,13 @@ Full role model, client list, and the per-route matrix: [security/iam.md](../sec
 The dashboard is installed and started automatically by `vagrant up`. To re-deploy or reconcile:
 
 ```bash
-vagrant ssh ansible
-cd ~/ansible-ro
-ansible-playbook phases/09-dashboard/playbook.yml
+testbed run-phase 09-dashboard
 ```
 
 ### Development mode (live reload)
 
 ```bash
-ansible-playbook phases/09-dashboard/playbook.yml -e dashboard_mode=dev
+testbed run-phase 09-dashboard dashboard_mode=dev
 ```
 
 In `dev` mode, services run from `/vagrant/dashboard` with backend auto-restart and frontend polling for changes. Useful when developing the dashboard itself.
@@ -154,20 +152,23 @@ Copy `dashboard/backend/.env.example` to `dashboard/backend/.env`. The settings 
 
 ## Modules
 
-The dashboard has 10 modules, grouped into four areas:
+Modules are grouped into five areas. Services and Settings are hubs: a card per
+surface, each opening its own sub-page, so the sidebar stays short as surfaces
+are added.
 
 | Area | Modules |
 |------|---------|
 | Cluster | [Overview](modules.md#overview), [Kubernetes](modules.md#kubernetes), [Metrics](modules.md#metrics) |
 | 5G | [5G Core](modules.md#5g-core), [RAN](modules.md#ran), [Subscribers](modules.md#subscribers), [UE Monitor](modules.md#ue-monitor) |
 | Network | [Topology](modules.md#topology), [Diagnostics](modules.md#diagnostics) |
-| Access | [IAM](modules.md#iam) (admin only) |
+| Services | [Northbound](modules.md#northbound), [Edge apps](modules.md#edge-apps) |
+| Settings (admin only) | [IAM](modules.md#iam), Branding, [Storage](modules.md#storage) |
 
 See [Dashboard Modules](modules.md) for full details on each module.
 
 ## Related Documentation
 
-- [Dashboard Modules](modules.md): detailed feature description for each of the 10 modules
+- [Dashboard Modules](modules.md): detailed feature description for each module
 - [API Reference](api-reference.md): full REST and WebSocket endpoint listing
 - [RAN Modes](../deployment/ran-modes-dashboard.md): how to switch between physical and simulated RAN
 - [Deployment Phases](../deployment/phases.md#phase-9-dashboard-control-plane): Phase 9 detail
