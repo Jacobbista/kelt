@@ -312,10 +312,11 @@
     kubeconfig: "{{ kubeconfig_path }}"
   when: dashboard_cluster_enabled | bool
 
-# Best-effort warm-up: the cluster Deployment uses imagePullPolicy: Always and pulls
-# this :latest image itself on the forced rollout below, so a transient registry/DNS
-# blip here must NOT abort the phase. Retry a few times, then carry on regardless.
-- name: Pre-pull dashboard frontend image on worker (best-effort; rollout pulls on Always)
+# Best-effort warm-up: kubelet pulls the pinned image itself when the pod spec
+# changes, so a transient registry/DNS blip here must NOT abort the phase.
+# Retry a few times, then carry on regardless.
+# See reference: a pre-pull must never be the reason a deploy fails.
+- name: Pre-pull dashboard frontend image on worker (best-effort)
   ansible.builtin.command:
     cmd: "k3s ctr -n k8s.io images pull {{ dashboard_frontend_image }}"
   delegate_to: "{{ groups['workers'][0] }}"
@@ -382,18 +383,6 @@
     kubeconfig: "{{ kubeconfig_path }}"
     definition: "{{ lookup('template', role_path + '/templates/dashboard-docs-service.yaml.j2') | from_yaml }}"
   when: dashboard_cluster_enabled | bool and (dashboard_docs_enabled | default(true) | bool)
-
-# Image tag is mutable (:latest) so the Deployment manifest hash does not
-# change when CI publishes a new digest. A rollout restart is required
-# to make kubelet honor imagePullPolicy: Always and pull the fresh image.
-- name: Rollout restart dashboard frontend Deployment
-  ansible.builtin.command:
-    cmd: >-
-      k3s kubectl -n {{ dashboard_namespace }} rollout restart deploy/dashboard-frontend
-  delegate_to: "{{ groups['masters'][0] }}"
-  become: true
-  changed_when: true
-  when: dashboard_cluster_enabled | bool
 
 # Docs use :latest (imagePullPolicy: Always). Docs publish automatically on push
 # (the docs-site workflow rebuilds kelt-docs); this forced rollout makes a phase

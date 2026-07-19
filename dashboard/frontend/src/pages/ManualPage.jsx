@@ -150,15 +150,33 @@ export default function ManualPage() {
               <div key={c.name} className="flex items-center gap-3 py-2 text-xs">
                 <span className="min-w-[150px] font-medium text-slate-200">{c.display}</span>
                 <StateBadge state={busy === c.name ? "rolling" : c.state} />
+                {/* Only the pinned component reports a version; the docs image is
+                    continuously published and has no semver to show. */}
+                {c.deployed_version && (
+                  <span className="font-mono text-[11px] text-slate-400">
+                    {c.deployed_version}
+                    {c.state === "update-available" && c.latest_version && (
+                      <span className="text-sky-300"> → {c.latest_version}</span>
+                    )}
+                  </span>
+                )}
                 <span className="flex-1" />
-                {isAdmin && c.state !== "not-deployed" && (
+                {/* A pinned component with nothing newer has nothing to do: re-pulling
+                    the same tag would change nothing. The continuously published docs
+                    image keeps its re-pull, which is a real action there. */}
+                {isAdmin && c.state !== "not-deployed"
+                  && !(c.deployed_version && c.state === "up-to-date") && (
                   <button
                     type="button"
                     disabled={busy === c.name}
                     onClick={() => doUpdate(c.name)}
                     className={btn.sky}
                   >
-                    {busy === c.name ? "updating…" : (c.state === "update-available" ? "update" : "re-pull")}
+                    {busy === c.name
+                      ? "updating…"
+                      : (c.state === "update-available"
+                          ? (c.latest_version ? `update to ${c.latest_version}` : "update")
+                          : "re-pull")}
                   </button>
                 )}
               </div>

@@ -11,7 +11,7 @@
 # Each role is gated by its own *_enabled flag; the umbrella NORTHBOUND_ENABLED
 # (testbed northbound on) flips them together. Requires phase 08 (Keycloak/IAM).
 # Optional addon, off by default. Run a single piece with, e.g.:
-#   testbed run-phase 10-northbound  (then --tags camara | positioning | placement | demo)
+#   testbed run-phase 10-northbound camara   (or positioning | placement | demo)
 # Images built from the 5g-northbound monorepo and published to GHCR.
 
 - name: "PHASE 10 | Northbound (CAMARA + Positioning)"
@@ -20,6 +20,71 @@
   tags:
     - phase10
     - northbound
+  pre_tasks:
+    # Image versions: the repo states INTENT (northbound_image_tags in all.yml), the
+    # cluster states REALITY. A phase re-run must never silently downgrade an image an
+    # operator rolled forward from the dashboard, so the effective tag is whichever of
+    # the two is newer. An explicit *_TAG env var still wins (that is the dashboard
+    # asking for a specific roll-forward during its own run).
+    # tags: always — pre_tasks otherwise inherit the play tags, so a tag-limited run
+    # (e.g. `testbed run-phase 10-northbound camara`) would skip the guard entirely
+    # and re-apply the baseline over a newer running image.
+    # See docs/development/contributing.md "Component image versions".
+    - name: Read the northbound images currently running in the cluster
+      tags: [always]
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        kubeconfig: "{{ kubeconfig_path }}"
+      register: _nb_deployments
+      changed_when: false
+
+    - name: Note the northbound image tags currently deployed
+      tags: [always]
+      ansible.builtin.set_fact:
+        northbound_running_tags: >-
+          {{ northbound_running_tags | default({})
+             | combine({ (item | regex_replace('^.*/([^:]+):.*$', '\1') | replace('-', '_')):
+                         (item | regex_replace('^.*:', '')) }) }}
+      loop: "{{ _nb_deployments.resources | default([])
+                | map(attribute='spec.template.spec.containers') | flatten
+                | map(attribute='image')
+                | select('search', '^' ~ northbound_image_registry ~ '/') | list }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Resolve the effective northbound tags (a newer running image is kept)
+      tags: [always]
+      ansible.builtin.set_fact:
+        northbound_effective_tags: >-
+          {{ northbound_effective_tags | default({}) | combine({ item.key: _winner }) }}
+      vars:
+        _running: "{{ (northbound_running_tags | default({}))[item.key] | default('', true) }}"
+        _semver: '^[0-9]+(\.[0-9]+)*$'
+        # Equal-length integer lists compare element-wise, which is the semver order.
+        _running_is_newer: >-
+          {{ _running is match(_semver) and item.value is match(_semver)
+             and (_running.split('.') | map('int') | list) > (item.value.split('.') | map('int') | list) }}
+        _winner: "{{ _running if (_running_is_newer | bool) else item.value }}"
+      loop: "{{ northbound_image_tags | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+
+    # Informational only. all.yml is upstream code, not operator configuration, so
+    # the fix for an operator is `testbed update` (which pulls a newer baseline),
+    # never a local edit that a later pull would conflict with. The notice stays
+    # until the baseline catches up, which is the honest state of things.
+    - name: Report the images the cluster keeps ahead of the repo baseline
+      tags: [always]
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.key }} keeps running {{ northbound_effective_tags[item.key] }}, ahead of the
+          {{ item.value }} baseline in this checkout. Nothing is downgraded. Run `testbed update`
+          to pick up a newer baseline once it is published.
+      loop: "{{ northbound_image_tags | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      when: northbound_effective_tags[item.key] != item.value
+
   roles:
     - role: roles/positioning_engine
       when: positioning_enabled | default(true) | bool

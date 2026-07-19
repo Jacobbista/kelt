@@ -23,7 +23,8 @@ spec:
       containers:
         - name: dashboard-frontend
           image: {{ dashboard_frontend_image }}
-          imagePullPolicy: Always
+          # Pinned semver: one tag is one image, so there is nothing to re-pull.
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
               name: http

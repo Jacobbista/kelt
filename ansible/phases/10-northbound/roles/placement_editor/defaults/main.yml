@@ -7,7 +7,7 @@ placement_editor_enabled: "{{ lookup('ansible.builtin.env', 'PLACEMENT_EDITOR_EN
 positioning_namespace: positioning
 # Own release-tag env var (filtered CI); baseline tag from all.yml (northbound_image_tags).
 # See dashboard/backend/app/services/northbound_service.py.
-placement_editor_image: "{{ northbound_image_registry }}/placement-editor:{{ lookup('ansible.builtin.env', 'PLACEMENT_EDITOR_TAG') | default(northbound_image_tags.placement_editor, true) }}"
+placement_editor_image: "{{ northbound_image_registry }}/placement-editor:{{ lookup('ansible.builtin.env', 'PLACEMENT_EDITOR_TAG') | default(northbound_effective_tags['placement_editor'] | default(northbound_image_tags.placement_editor, true), true) }}"
 
 # ── front-door gate parameters (passed to the frontdoor_gate role) ───────────
 # Must match the placement-editor-proxy confidential client in phase 08.

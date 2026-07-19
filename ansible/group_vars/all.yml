@@ -248,10 +248,10 @@ nf_images:
 # image independently, so each carries its OWN tag (no shared release tag). Phase-10
 # role defaults and the dashboard catalog both derive their baseline from here; do
 # not hardcode a northbound tag anywhere else.
-#   Baseline (committed): these values.
-#   Live override (gitignored): .testbed.versions, written by the dashboard "Update
-#   all" so a phase re-run keeps an operator-rolled image instead of downgrading. It
-#   layers ON TOP of this baseline (env override wins); it is not a second source.
+#   The repo states INTENT (these values); the cluster states REALITY. A phase run
+#   reads the running images and keeps whichever tag is newer, so it never silently
+#   downgrades an image rolled forward from the dashboard, and it reports the drift so
+#   these values can be aligned. Nothing else holds a version.
 # Source: https://github.com/Jacobbista/5g-northbound
 northbound_image_registry: "ghcr.io/jacobbista/5g-northbound"
 northbound_image_tags:
@@ -262,6 +262,20 @@ northbound_image_tags:
   positioning_demo:   "0.8.12"
   wifi_positioning:   "0.8.15"
   rest_adapter:       "0.8.18"
+
+# ── Dashboard images ─────────────────────────────────────────────────────────
+# The frontend is application code with a release process: a `dashboard-frontend-v<semver>`
+# git tag triggers CI, which publishes that semver. Pinning it here makes the deployed
+# version explicit, makes `kubectl rollout undo` meaningful, and makes a clean install
+# reproducible. It must always name a tag that EXISTS on ghcr, so it is bumped in the
+# same commit as the `dashboard-frontend-v<semver>` tag that publishes it, never when
+# package.json alone moves (package.json can be ahead while the tag is still pending).
+# The docs image is deliberately NOT pinned: it is continuously published (any push
+# touching docs/** rebuilds it) and carries no semver, so it stays on :latest with
+# imagePullPolicy Always and a forced rollout. See docs/development/contributing.md
+# "Publishing images".
+dashboard_image_registry: "ghcr.io/jacobbista"
+dashboard_frontend_tag: "0.1.8"
 
 # ── CAMARA tenant (single-org testbed) ───────────────────────────────────────
 # The one CAMARA tenant the testbed uses. The gateway scopes an asset's visibility

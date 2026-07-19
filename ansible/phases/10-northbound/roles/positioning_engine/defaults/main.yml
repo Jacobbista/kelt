@@ -3,11 +3,11 @@ positioning_enabled: true
 positioning_namespace: positioning
 
 # Each companion image advances independently (filtered CI), so each reads its OWN
-# release-tag env var, persisted to .testbed.versions by the dashboard "Update all"
+# release-tag env var, set by the dashboard "Update all" for that run only
 # (rolls the running testbed forward). Baseline tag lives in all.yml
 # (northbound_image_tags), the single source of truth; do not hardcode it here.
 # See dashboard/backend/app/services/northbound_service.py.
-positioning_engine_image: "{{ northbound_image_registry }}/positioning-engine:{{ lookup('ansible.builtin.env', 'POSITIONING_ENGINE_TAG') | default(northbound_image_tags.positioning_engine, true) }}"
+positioning_engine_image: "{{ northbound_image_registry }}/positioning-engine:{{ lookup('ansible.builtin.env', 'POSITIONING_ENGINE_TAG') | default(northbound_effective_tags['positioning_engine'] | default(northbound_image_tags.positioning_engine, true), true) }}"
 positioning_engine_nodeport: 31930
 
 # Engine-owned blueprint store (v0.5.0 authority model): only the engine mounts
@@ -45,7 +45,7 @@ engine_websocket_interval_ms: 500
 # Synthetic random-walk adapter deployed alongside the engine so the demo shows
 # live movement out of the box. Room bounds come from the floor_* dims below.
 # Own release-tag env var; baseline from all.yml (see positioning_engine_image note above).
-mock_positioning_image: "{{ northbound_image_registry }}/mock-positioning:{{ lookup('ansible.builtin.env', 'MOCK_POSITIONING_TAG') | default(northbound_image_tags.mock_positioning, true) }}"
+mock_positioning_image: "{{ northbound_image_registry }}/mock-positioning:{{ lookup('ansible.builtin.env', 'MOCK_POSITIONING_TAG') | default(northbound_effective_tags['mock_positioning'] | default(northbound_image_tags.mock_positioning, true), true) }}"
 
 # Floor plan defaults (passed to the engine for mock bounds and to the demo
 # for 3D rendering). Override at deploy time for real room dimensions:

@@ -6,7 +6,7 @@ demo_namespace: mec
 
 # Own release-tag env var (filtered CI); baseline tag from all.yml (northbound_image_tags).
 # See dashboard/backend/app/services/northbound_service.py.
-positioning_demo_image: "{{ northbound_image_registry }}/positioning-demo:{{ lookup('ansible.builtin.env', 'POSITIONING_DEMO_TAG') | default(northbound_image_tags.positioning_demo, true) }}"
+positioning_demo_image: "{{ northbound_image_registry }}/positioning-demo:{{ lookup('ansible.builtin.env', 'POSITIONING_DEMO_TAG') | default(northbound_effective_tags['positioning_demo'] | default(northbound_image_tags.positioning_demo, true), true) }}"
 positioning_demo_nodeport: 31940
 
 # Must match Phase 09 and 10 defaults

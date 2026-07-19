@@ -79,7 +79,9 @@ dashboard_keycloak_client_id: "{{ lookup('ansible.builtin.env', 'DASHBOARD_KEYCL
 dashboard_cluster_enabled: "{{ lookup('ansible.builtin.env', 'DASHBOARD_CLUSTER_ENABLED') | default('true', true) | bool }}"
 dashboard_dev_enabled: "{{ lookup('ansible.builtin.env', 'DASHBOARD_DEV_ENABLED') | default('false', true) | bool }}"
 dashboard_namespace: dashboard
-dashboard_frontend_image: "ghcr.io/jacobbista/dashboard-frontend:latest"
+# Pinned to the committed baseline in all.yml; never hardcode a tag here.
+# DASHBOARD_FRONTEND_TAG overrides it for a single run (dashboard-driven update).
+dashboard_frontend_image: "{{ dashboard_image_registry }}/dashboard-frontend:{{ lookup('ansible.builtin.env', 'DASHBOARD_FRONTEND_TAG') | default(dashboard_frontend_tag, true) }}"
 dashboard_cluster_nodeport: 31573
 
 # In-cluster docs server (MkDocs site, own image/tag built by the docs-site
