@@ -37,6 +37,8 @@ from app.routers.apps import write_router as apps_write_router
 from app.routers.apps import public_router as apps_public_router
 from app.routers.branding import read_router as branding_read_router
 from app.routers.branding import write_router as branding_write_router
+from app.routers.storage import read_router as storage_read_router
+from app.routers.storage import write_router as storage_write_router
 from app.routers.selfupdate import read_router as selfupdate_read_router
 from app.routers.selfupdate import write_router as selfupdate_write_router
 
@@ -110,6 +112,9 @@ app.include_router(logs_ws_router,     dependencies=_viewer)
 app.include_router(topology_router,    dependencies=_viewer)
 app.include_router(network_router,     dependencies=_viewer)
 app.include_router(metrics_router,     dependencies=_viewer)
+# Disk state is diagnostic (viewer); anything that reclaims space is admin.
+app.include_router(storage_read_router,  dependencies=_viewer)
+app.include_router(storage_write_router, dependencies=_admin)
 app.include_router(traffic_router,     dependencies=_viewer)
 app.include_router(ue_router,          dependencies=_viewer)
 app.include_router(time_sync_router,   dependencies=_viewer)

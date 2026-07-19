@@ -508,6 +508,15 @@ export const getDashboardComponents = () => get("/api/v1/dashboard/components");
 export const updateDashboardComponent = (name) =>
   post(`/api/v1/dashboard/components/${encodeURIComponent(name)}/update`, {});
 
+// Node disk usage and reclaim actions. GET viewer, actions admin.
+export const getStorageUsage = (refresh = false) =>
+  get(`/api/v1/storage${refresh ? "?refresh=true" : ""}`);
+export const getStoragePreview = () => get("/api/v1/storage/preview");
+export const pruneImages = () => post("/api/v1/storage/prune-images", {});
+export const vacuumJournal = () => post("/api/v1/storage/vacuum-journal", {});
+export const registryGarbageCollect = (dryRun = true) =>
+  post(`/api/v1/storage/registry-gc?dry_run=${dryRun}`, {});
+
 // Front-door co-branding (welcome page). GET viewer, PUT admin.
 export const getBranding = () => get("/api/v1/branding");
 export const setBranding = (body) => put("/api/v1/branding", body);

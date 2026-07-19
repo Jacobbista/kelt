@@ -158,6 +158,20 @@ Operator-deployed application pods in the `mec` namespace; the local registry li
 
 ---
 
+## Storage
+
+Node disk usage and the reclaim actions. Sizes are measured by walking the filesystem, so they are cached; the filesystem totals are always live. See [modules.md](modules.md#storage).
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/api/v1/storage` | — | Worker disk breakdown: filesystem totals, containerd image layers vs blobs, persistent volumes (total and per claim, with namespace), the in-cluster registry as a subset of those, and journald. `?refresh=true` re-walks instead of using the cache |
+| GET | `/api/v1/storage/preview` | — | Estimated saving per reclaim action: unused image count and bytes, and how far journald sits over its cap. Estimates, not promises: shared image layers are counted once per image, so the real saving is usually a little lower |
+| POST | `/api/v1/storage/prune-images` | ✅ Admin | Remove image layers no container references. Returns bytes freed and free space after |
+| POST | `/api/v1/storage/vacuum-journal` | ✅ Admin | Trim systemd journals to the 500M cap phase 01 configures |
+| POST | `/api/v1/storage/registry-gc` | ✅ Admin | Garbage-collect unreferenced blobs in the in-cluster registry. `?dry_run=true` (default) reports what would go, with the total size of those blobs, without touching the store |
+
+---
+
 ## WebSocket Endpoints
 
 WebSocket connections are made to the same host on port 31880.

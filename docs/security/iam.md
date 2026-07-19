@@ -115,12 +115,14 @@ below.
 
 Routers assigned to the **viewer-or-admin** group:
 `cluster`, `kubernetes`, `pods`, `logs_ws`, `topology`, `network`, `metrics`,
-`traffic`, `ue`, `time_sync`, `experiments`.
+`traffic`, `ue`, `time_sync`, `experiments`, `storage` (read router: disk state
+is diagnostic, the same reasoning as metrics and logs).
 
 Routers assigned to the **admin-only** group:
 `subscribers` (records carry K and OPc), `nf` (image rollout via ansible),
 `ran` (mode switching reconfigures the data plane), `sniffer` (privileged
-packet capture), `exec_ws` (pod shell).
+packet capture), `exec_ws` (pod shell), `storage` (write router: every route
+deletes data from a node).
 
 Admin-only routes on viewer routers (each carries its own `require_admin`
 dependency, so a viewer gets 403 on them):
@@ -174,11 +176,11 @@ Three checkpoints must clear before enforcing auth in production, in order:
 Break-glass fallback (temporary):
 
 ```bash
-ansible-playbook ansible/phases/09-dashboard/playbook.yml \
-  -e dashboard_mode=prod \
-  -e dashboard_auth_enabled=false \
-  -e dashboard_keycloak_external_url=https://dashboard.example.com \
-  -e dashboard_keycloak_path_prefix=/auth
+testbed run-phase 09-dashboard \
+  dashboard_mode=prod \
+  dashboard_auth_enabled=false \
+  dashboard_keycloak_external_url=https://dashboard.example.com \
+  dashboard_keycloak_path_prefix=/auth
 ```
 
 (Omit `dashboard_keycloak_path_prefix` for subdomain layouts. Backend and
@@ -369,7 +371,7 @@ Two recovery paths:
 sudo k3s kubectl -n iam scale deploy/keycloak --replicas=0
 sudo k3s kubectl -n iam scale deploy/keycloak-db --replicas=0
 sudo k3s kubectl -n iam delete pvc keycloak-db-data
-ansible-playbook ansible/phases/08-iam/playbook.yml
+testbed run-phase 08-iam
 ```
 
 The same constraint applies to the bootstrap end-user created by phase 08:
