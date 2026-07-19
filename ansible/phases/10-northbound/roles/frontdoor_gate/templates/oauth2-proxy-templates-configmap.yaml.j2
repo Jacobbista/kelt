@@ -1,0 +1,98 @@
+{#
+  Custom oauth2-proxy pages. The stock ones answer a group-check failure with a
+  bare "403 Forbidden" whose Sign in button replays the identical flow, so an
+  unauthorized user loops without ever learning why. These say which groups the
+  gate admits and offer a way out. Kept generic: the gate role is reused for any
+  service, so the text is composed from gate_name and gate_allowed_groups.
+  See docs/security/external-access.md.
+#}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oauth2-proxy-{{ gate_name }}-templates
+  namespace: {{ gate_namespace }}
+data:
+  error.html: |
+    {{ '{{' }}define "error.html"{{ '}}' }}
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>{{ '{{' }}.Title{{ '}}' }} · KELT</title>
+      <style>
+        :root { color-scheme: dark; }
+        body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+               background:#0f172a; color:#e2e8f0;
+               font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+        .card { width:min(30rem,92vw); border:1px solid #1e293b; border-radius:.75rem;
+                background:#1e293b66; padding:1.75rem; }
+        h1 { margin:0 0 .25rem; font-size:1.125rem; font-weight:600; }
+        p { margin:.5rem 0; font-size:.875rem; color:#94a3b8; line-height:1.5; }
+        code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.8125rem; color:#cbd5e1; }
+        ul { margin:.5rem 0; padding-left:1.1rem; font-size:.8125rem; color:#cbd5e1; }
+        .row { margin-top:1.25rem; display:flex; gap:.5rem; flex-wrap:wrap; }
+        a.btn { text-decoration:none; border-radius:.375rem; padding:.5rem .9rem; font-size:.8125rem; font-weight:500; }
+        .primary { background:#4f46e533; color:#a5b4fc; border:1px solid #4f46e5aa; }
+        .ghost { background:#33415566; color:#cbd5e1; border:1px solid #334155; }
+        .muted { margin-top:1.25rem; font-size:.6875rem; color:#64748b; }
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        {{ '{{' }}if eq .StatusCode 403{{ '}}' }}
+          <h1>Your account is not authorized for this service</h1>
+          <p>The sign-in itself worked. Access to
+             <code>{{ gate_name }}</code> is restricted to members of:</p>
+          <ul>
+{% for group in gate_allowed_groups %}
+            <li><code>{{ group }}</code></li>
+{% endfor %}
+          </ul>
+          <p>Signing in again will land here, since the account is the same. An
+             operator can add you to one of those groups in Keycloak, or you can
+             sign in with a different account.</p>
+        {{ '{{' }}else{{ '}}' }}
+          <h1>{{ '{{' }}.Title{{ '}}' }}</h1>
+          <p>{{ '{{' }}.Message{{ '}}' }}</p>
+        {{ '{{' }}end{{ '}}' }}
+        <div class="row">
+          <a class="primary" href="{{ '{{' }}.ProxyPrefix{{ '}}' }}/sign_out">Sign in as someone else</a>
+          <a class="ghost" href="{{ dashboard_external_origin }}">Back to the dashboard</a>
+        </div>
+        <p class="muted">{{ '{{' }}if .RequestID{{ '}}' }}Request {{ '{{' }}.RequestID{{ '}}' }}{{ '{{' }}end{{ '}}' }}</p>
+      </div>
+    </body>
+    </html>
+    {{ '{{' }}end{{ '}}' }}
+  sign_in.html: |
+    {{ '{{' }}define "sign_in.html"{{ '}}' }}
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>Sign in · KELT</title>
+      <style>
+        :root { color-scheme: dark; }
+        body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+               background:#0f172a; color:#e2e8f0;
+               font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+        .card { width:min(26rem,92vw); border:1px solid #1e293b; border-radius:.75rem;
+                background:#1e293b66; padding:1.75rem; text-align:center; }
+        h1 { margin:0 0 .5rem; font-size:1.125rem; font-weight:600; }
+        p { margin:.5rem 0 1.25rem; font-size:.875rem; color:#94a3b8; }
+        a.btn { display:inline-block; text-decoration:none; border-radius:.375rem;
+                padding:.55rem 1.1rem; font-size:.875rem; font-weight:500;
+                background:#4f46e533; color:#a5b4fc; border:1px solid #4f46e5aa; }
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        <h1>{{ gate_name }}</h1>
+        <p>This service is behind the KELT front door. Sign in with your testbed account to continue.</p>
+        <a class="btn" href="{{ '{{' }}.ProxyPrefix{{ '}}' }}/start?rd={{ '{{' }}.Redirect{{ '}}' }}">Sign in</a>
+      </div>
+    </body>
+    </html>
+    {{ '{{' }}end{{ '}}' }}

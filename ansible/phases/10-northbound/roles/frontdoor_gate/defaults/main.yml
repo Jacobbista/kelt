@@ -29,6 +29,10 @@ gate_client_secret: "changeme"
 # Gate session lifetime. Independent of the Keycloak SSO session, so keep it
 # short and refresh often: the gate re-validates against Keycloak every
 # cookie_refresh, which is what makes a logout or a group change take effect.
+# True when the surface is served over TLS (external_scheme https, i.e. a base
+# domain is configured), false on a plain-HTTP LAN deploy. See the cookie comment
+# in templates/oauth2-proxy-deployment.yaml.j2.
+gate_cookie_secure: "{{ 'true' if (external_base_domain | default('') and external_scheme | default('http') == 'https') else 'false' }}"
 gate_cookie_expire: "8h"
 gate_cookie_refresh: "15m"
 gate_allowed_groups: []                   # full-path groups, e.g. ["/g-dashboard-admins"]

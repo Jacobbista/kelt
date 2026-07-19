@@ -71,10 +71,17 @@ spec:
             # cookie-expire bounds the session even if the browser stays open.
             - --cookie-expire={{ gate_cookie_expire | default('8h') }}
             - --cookie-refresh={{ gate_cookie_refresh | default('15m') }}
+            # Replaces the stock 403 page, which does not say WHY access was refused
+            # and whose Sign in button replays the same failing flow.
+            - --custom-templates-dir=/templates
             - --skip-provider-button=true
             - --reverse-proxy=true
-            # LAN is HTTP; set true (or front with a TLS-terminating tunnel) for prod.
-            - --cookie-secure=false
+            # The gate session cookie carries the tokens themselves (session store is
+            # the cookie, which is why it is split into _oauth2_proxy_0/_1 past 4KB),
+            # so it must not travel in clear. Derived, not hardcoded: true whenever the
+            # front door terminates TLS, false only on a plain-HTTP LAN deploy where a
+            # Secure cookie would never be sent back at all.
+            - --cookie-secure={{ gate_cookie_secure | lower }}
           env:
             - name: OAUTH2_PROXY_CLIENT_SECRET
               valueFrom:
@@ -97,3 +104,11 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
             failureThreshold: 6
+          volumeMounts:
+            - name: templates
+              mountPath: /templates
+              readOnly: true
+      volumes:
+        - name: templates
+          configMap:
+            name: oauth2-proxy-{{ gate_name }}-templates
