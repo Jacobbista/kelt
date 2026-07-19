@@ -984,6 +984,20 @@ do_iam_admin_password() {
 }
 
 do_up() {
+  # Bringing the cluster up is the moment where deploying stale playbooks costs
+  # the most, so offer the pending update first. Declining is always allowed.
+  check_for_updates
+  if [[ -n "$UPDATE_BEHIND" ]]; then
+    gum_or_echo "KELT is ${UPDATE_BEHIND} commit(s) behind" \
+      "Deploying now uses the playbooks in this checkout, not the newer ones."
+    if gum_confirm "Update before deploying?"; then
+      do_update
+      echo ""
+      echo "Re-run 'testbed up' to deploy with the updated playbooks."
+      return 0
+    fi
+  fi
+
   echo "Starting testbed with profile: ${TESTBED_PROFILE}, edge: ${EDGE_ENABLED}"
   if ! gum_confirm "Proceed with vagrant up?"; then
     echo "Cancelled."
@@ -1014,9 +1028,57 @@ do_provision() {
   )
 }
 
+phase_tags() {
+  # Tags a phase playbook declares, both YAML forms: inline "tags: [a, b]" and a
+  # block list under "tags:". The phaseN tags are dropped: they select the whole
+  # phase, which is what running without a tag already does.
+  local playbook="$1"
+  [[ -f "$playbook" ]] || return 0
+  awk '
+    /^[[:space:]]*tags:[[:space:]]*\[/ {
+      line = $0
+      sub(/^[^[]*\[/, "", line); sub(/\].*$/, "", line)
+      n = split(line, parts, ",")
+      for (i = 1; i <= n; i++) { gsub(/[[:space:]"'"'"']/, "", parts[i]); if (parts[i] != "") print parts[i] }
+      next
+    }
+    /^[[:space:]]*tags:[[:space:]]*$/ { inblock = 1; next }
+    inblock && /^[[:space:]]*-[[:space:]]/ {
+      item = $0
+      sub(/^[[:space:]]*-[[:space:]]*/, "", item); gsub(/[[:space:]"'"'"']/, "", item)
+      if (item != "") print item
+      next
+    }
+    { inblock = 0 }
+  ' "$playbook" | grep -Ev '^phase[0-9]*$' | sort -u
+}
+
 do_run_phase() {
   local phase="${1:-}"
   local playbook_rel
+  # Naming the phase on the command line means "run this phase", so no prompt may
+  # follow: a subcommand invocation has to be non-interactive end to end for
+  # scripts and agents. Prompts belong to the menu path, where no phase was named.
+  # See QUICKSTART.md "Two interfaces, one behavior".
+  local interactive_entry=false
+  [[ -z "$phase" ]] && interactive_entry=true
+  shift || true
+
+  # Remaining positional args, in the flagless grammar: a comma list selects
+  # tags, anything shaped key=value becomes an extra var. Without these the only
+  # way to run a subset of a phase was a hand-written ansible-playbook, which
+  # skips the persisted config and secrets.
+  # See QUICKSTART.md "Two interfaces, one behavior".
+  local tags="" extra_vars=""
+  local arg
+  for arg in "$@"; do
+    [[ -z "$arg" ]] && continue
+    if [[ "$arg" == *=* ]]; then
+      extra_vars+=" -e ${arg}"
+    else
+      tags="${tags:+${tags},}${arg}"
+    fi
+  done
 
   if [[ -z "$phase" ]]; then
     if ! $HAS_GUM; then
@@ -1043,7 +1105,18 @@ do_run_phase() {
   fi
 
   playbook_rel="phases/${phase}/playbook.yml"
-  echo "Running single phase: ${playbook_rel}"
+  echo "Running single phase: ${playbook_rel}${tags:+ (tags: ${tags})}"
+
+  # Offer the phase's tags when the operator picked interactively and named none.
+  if $interactive_entry && $HAS_GUM && [[ -z "$tags" ]]; then
+    local available
+    available="$(phase_tags "${SCRIPT_DIR}/ansible/phases/${phase}/playbook.yml")"
+    if [[ -n "$available" ]]; then
+      local picked
+      picked="$(gum_choose_or_cancel "Whole phase" $available)"
+      [[ "$picked" != "Whole phase" && -n "$picked" ]] && tags="$picked"
+    fi
+  fi
 
   # Per-phase pre-prompts. Phase 08 has a guarded reconcile step the
   # operator must opt into each run (or persist the answer). The result
@@ -1059,11 +1132,143 @@ do_run_phase() {
   if [[ "$phase" == 06-ueransim-mec* ]]; then
     phase_extra_args="-e ueransim_enabled=true"
   fi
+  phase_extra_args+="${extra_vars}${tags:+ --tags ${tags}}"
 
   (
     cd "$SCRIPT_DIR"
-    vagrant ssh ansible -c "bash -lc 'set -euo pipefail; cd ~/ansible-ro; set -a; [ -f /vagrant/.testbed.env ] && source /vagrant/.testbed.env; [ -f /vagrant/.testbed.secrets ] && source /vagrant/.testbed.secrets; [ -f /vagrant/.testbed.versions ] && source /vagrant/.testbed.versions; set +a; ${phase_extra_env}ansible-playbook ${playbook_rel} -e dashboard_dev_enabled=${DASHBOARD_DEV_ENABLED} ${phase_extra_args}'"
+    vagrant ssh ansible -c "bash -lc 'set -euo pipefail; cd ~/ansible-ro; set -a; [ -f /vagrant/.testbed.env ] && source /vagrant/.testbed.env; [ -f /vagrant/.testbed.secrets ] && source /vagrant/.testbed.secrets; set +a; ${phase_extra_env}ansible-playbook ${playbook_rel} -e dashboard_dev_enabled=${DASHBOARD_DEV_ENABLED} ${phase_extra_args}'"
   )
+}
+
+# ─── Update ────────────────────────────────────────────────────────────
+# KELT is distributed as a git clone, so updating the testbed is a pull of this
+# repository. Container images are versioned separately: all.yml carries the
+# committed baseline and the cluster carries what actually runs. A phase run
+# keeps whichever is newer and reports the drift, so pulling a newer baseline is
+# what clears that notice. Nothing here edits all.yml, which is upstream code and
+# not operator configuration (that lives in .testbed.env).
+# See docs/development/contributing.md "Component image versions".
+
+git_repo_ready() {
+  # True only when this checkout can actually be updated: a git repo whose
+  # current branch tracks an upstream. A tarball copy silently skips updates.
+  git -C "$SCRIPT_DIR" rev-parse --git-dir >/dev/null 2>&1 || return 1
+  git -C "$SCRIPT_DIR" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1
+}
+
+update_commits_behind() {
+  git -C "$SCRIPT_DIR" rev-list --count 'HEAD..@{u}' 2>/dev/null || true
+}
+
+# Commits available upstream, or empty. Set by check_for_updates, read by the
+# menu banner and by `up`.
+UPDATE_BEHIND=""
+
+check_for_updates() {
+  # Best effort and never fatal: no network, no remote, or a detached HEAD all
+  # mean "no notice", never a blocked CLI. Fetches at most once a day so opening
+  # the menu does not wait on the network every time.
+  UPDATE_BEHIND=""
+  git_repo_ready || return 0
+  local git_dir fetch_head
+  git_dir="$(git -C "$SCRIPT_DIR" rev-parse --git-dir)"
+  fetch_head="${git_dir}/FETCH_HEAD"
+  if [[ ! -f "$fetch_head" ]] || [[ -n "$(find "$fetch_head" -mtime +0 2>/dev/null)" ]]; then
+    timeout 20 git -C "$SCRIPT_DIR" fetch --quiet 2>/dev/null || return 0
+  fi
+  local behind
+  behind="$(update_commits_behind)"
+  [[ -n "$behind" && "$behind" -gt 0 ]] && UPDATE_BEHIND="$behind"
+  return 0
+}
+
+update_suggest_phases() {
+  # Map the paths a pull touched onto the phases worth re-running, so the
+  # operator is not left guessing which part of the deployment moved.
+  local range="$1" changed phases
+  changed="$(git -C "$SCRIPT_DIR" diff --name-only "$range" 2>/dev/null || true)"
+  [[ -z "$changed" ]] && return 0
+
+  phases="$(printf '%s\n' "$changed" \
+    | sed -n 's|^ansible/phases/\([0-9][0-9]-[a-z0-9-]*\)/.*|\1|p' | sort -u)"
+  # The dashboard sources are deployed by phase 09, not by a phase directory.
+  if printf '%s\n' "$changed" | grep -q '^dashboard/'; then
+    phases="$(printf '%s\n09-dashboard\n' "$phases" | sed '/^$/d' | sort -u)"
+  fi
+
+  if [[ -n "$phases" ]]; then
+    echo ""
+    echo "Phases touched by this update:"
+    while read -r phase; do
+      [[ -n "$phase" ]] && echo "  testbed run-phase ${phase}"
+    done <<< "$phases"
+  fi
+  if printf '%s\n' "$changed" | grep -q '^ansible/group_vars/all.yml$'; then
+    echo ""
+    echo "all.yml changed (shared variables, including image baselines):"
+    echo "  a full 'testbed provision' applies it everywhere."
+  fi
+  if printf '%s\n' "$changed" | grep -q '^Vagrantfile$'; then
+    echo ""
+    echo "The Vagrantfile changed: VM definitions only take effect on"
+    echo "  vagrant reload  (or a fresh 'testbed up')."
+  fi
+}
+
+do_update() {
+  if ! git_repo_ready; then
+    gum_or_echo "Cannot update automatically" \
+      "This directory is not a git checkout with an upstream branch," \
+      "so there is nothing to pull. Re-clone KELT to get updates."
+    return 0
+  fi
+
+  echo "Checking for updates..."
+  if ! timeout 30 git -C "$SCRIPT_DIR" fetch --quiet; then
+    echo "Could not reach the remote. Nothing changed."
+    return 0
+  fi
+
+  local behind
+  behind="$(update_commits_behind)"
+  if [[ -z "$behind" || "$behind" -eq 0 ]]; then
+    gum_or_echo "KELT is up to date" "No new commits upstream."
+    return 0
+  fi
+
+  echo ""
+  echo "${behind} new commit(s) upstream:"
+  git -C "$SCRIPT_DIR" log --oneline --no-decorate 'HEAD..@{u}' | head -20
+  echo ""
+
+  # A dirty tree is the normal state for whoever develops KELT, so this warns
+  # and stops rather than stashing or discarding anything.
+  if [[ -n "$(git -C "$SCRIPT_DIR" status --porcelain)" ]]; then
+    gum_or_echo "Local changes present" \
+      "This checkout has uncommitted changes, so the update stops here." \
+      "Commit or stash them, then run 'testbed update' again."
+    return 0
+  fi
+
+  if ! gum_confirm "Pull ${behind} commit(s) now?"; then
+    echo "Cancelled."
+    return 0
+  fi
+
+  local before
+  before="$(git -C "$SCRIPT_DIR" rev-parse HEAD)"
+  # --ff-only: an update must never produce a merge commit in an operator's
+  # checkout. A diverged branch is a decision for whoever made it.
+  if ! git -C "$SCRIPT_DIR" merge --ff-only '@{u}'; then
+    gum_or_echo "Update stopped" \
+      "This branch has diverged from upstream and cannot fast-forward." \
+      "Resolve it with git, then run 'testbed update' again."
+    return 0
+  fi
+
+  echo ""
+  echo "Updated to $(git -C "$SCRIPT_DIR" rev-parse --short HEAD)."
+  update_suggest_phases "${before}..HEAD"
 }
 
 # ─── Tests ─────────────────────────────────────────────────────────────
@@ -1222,6 +1427,12 @@ menu_secrets() {
 }
 
 interactive_menu() {
+  # Checked once per menu entry, not per redraw: check_for_updates only hits the
+  # network at most once a day, but the count itself is cheap to keep.
+  check_for_updates
+  local update_item="Update KELT"
+  [[ -n "$UPDATE_BEHIND" ]] && update_item="Update KELT (${UPDATE_BEHIND} available)"
+
   while true; do
     show_status
     local items=(
@@ -1234,6 +1445,7 @@ interactive_menu() {
       "Show service endpoints"
       "Re-run onboarding checks"
       "Install CLI alias + completion"
+      "${update_item}"
       "Help"
       "Exit"
     )
@@ -1249,6 +1461,13 @@ interactive_menu() {
       "Show service endpoints")         do_endpoints ;;
       "Re-run onboarding checks")       do_onboarding ;;
       "Install CLI alias + completion") do_install_cli ;;
+      "Update KELT"*)
+        do_update
+        # The label carries the pending count, so refresh it after a pull.
+        check_for_updates
+        update_item="Update KELT"
+        [[ -n "$UPDATE_BEHIND" ]] && update_item="Update KELT (${UPDATE_BEHIND} available)"
+        ;;
       "Help")                           print_help ;;
       "Exit")                           break ;;
       "")
@@ -1552,10 +1771,13 @@ _testbed_complete() {
   prev="${COMP_WORDS[COMP_CWORD-1]}"
   opts="show endpoints set-profile edge ran northbound apps dev-hooks auth-network dashboard-dev dashboard-auth \
 iam iam-admin-password secrets run-phase tests up provision env install onboarding \
-autostart help"
+autostart update help"
   case "$prev" in
     set-profile)        COMPREPLY=( $(compgen -W "laptop server" -- "$cur") ); return ;;
     run-phase)          COMPREPLY=( $(compgen -W "$(ls -d ansible/phases/[0-9][0-9]-*/ 2>/dev/null | xargs -n1 basename 2>/dev/null)" -- "$cur") ); return ;;
+    # Second arg after run-phase: offer that phase's tags.
+    [0-9][0-9]-*)
+      COMPREPLY=( $(compgen -W "$(awk '/^[[:space:]]*tags:[[:space:]]*\[/{l=$0;sub(/^[^[]*\[/,"",l);sub(/\].*/,"",l);n=split(l,a,",");for(i=1;i<=n;i++){gsub(/[[:space:]]/,"",a[i]);if(a[i]!="")print a[i]}next}/^[[:space:]]*tags:[[:space:]]*$/{b=1;next}b&&/^[[:space:]]*-[[:space:]]/{t=$0;sub(/^[[:space:]]*-[[:space:]]*/,"",t);gsub(/[[:space:]]/,"",t);if(t!="")print t;next}{b=0}' "ansible/phases/${prev}/playbook.yml" 2>/dev/null | grep -Ev '^phase[0-9]*$' | sort -u)" -- "$cur") ); return ;;
     edge|dashboard-dev|northbound|apps) COMPREPLY=( $(compgen -W "true false on off" -- "$cur") ); return ;;
     dev-hooks)          COMPREPLY=( $(compgen -W "on off status release" -- "$cur") ); return ;;
     dashboard-auth)     COMPREPLY=( $(compgen -W "enabled disabled" -- "$cur") ); return ;;
@@ -1740,11 +1962,19 @@ SETUP
                                  automatically on the very first invocation.
     install                      Install 'testbed' alias + bash completion
                                  in ~/.bashrc (offers to apt-install gum).
+    update                       Pull new KELT commits (fast-forward only) and
+                                 list the phases worth re-running. Offered
+                                 automatically before 'up' when behind.
 
 DEPLOY
     up                           vagrant up with current config
     provision                    Full ansible provision (vagrant provision ansible)
-    run-phase [phase-dir]        Run one ansible phase playbook standalone
+    run-phase [phase-dir] [tags] [key=value ...]
+                                 Run one ansible phase standalone. Extra
+                                 positional args select tags (comma list or
+                                 repeated) and set extra vars, e.g.
+                                   testbed run-phase 10-northbound camara
+                                   testbed run-phase 07-observability deploy_traffic_capture=true
     autostart [on|off|status]    Toggle systemd unit that runs 'vagrant up' on
                                  boot (system-wide, requires sudo).
 
@@ -1839,7 +2069,8 @@ main() {
     dashboard-auth)
       do_set_dashboard_auth "${2:-}" ;;
     run-phase)
-      do_run_phase "${2:-}" ;;
+      shift
+      do_run_phase "$@" ;;
     tests)
       shift
       do_tests "$@" ;;
@@ -1875,6 +2106,8 @@ main() {
       echo "#   DASHBOARD_READONLY_SECRET"
       echo "#   APPS_REGISTRY_PASSWORD"
       ;;
+    update)
+      do_update ;;
     install)
       do_install_cli ;;
     endpoints)

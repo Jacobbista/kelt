@@ -62,15 +62,17 @@ DEPLOY_MODE=core_only vagrant up
 ### Specific Phases
 
 ```bash
-vagrant ssh ansible
-cd ~/ansible-ro
+# Run a specific phase
+testbed run-phase 02-kubernetes
 
-# Run specific phase
-ansible-playbook phases/02-kubernetes/playbook.yml
-
-# Run phases with tags
-ansible-playbook phases/00-main-playbook.yml --tags phase4,phase5
+# Run part of a phase by tag
+testbed run-phase 04-overlay-network overlay
 ```
+
+`testbed run-phase` runs from the host and loads the persisted configuration and
+secrets, which a hand-run `ansible-playbook` inside the VM does not. Extra
+positional arguments select tags and set variables; see
+[QUICKSTART](https://github.com/Jacobbista/kelt/blob/main/QUICKSTART.md#two-interfaces-one-behavior).
 
 ---
 
@@ -288,14 +290,11 @@ sudo k3s kubectl logs -n 5g deploy/amf -c amf | grep -i "registered"
 ### Deploy
 
 ```bash
-vagrant ssh ansible
-cd ~/ansible-ro
-
 # Deploy observability stack
-ansible-playbook phases/07-observability/playbook.yml
+testbed run-phase 07-observability
 
 # With traffic capture enabled
-ansible-playbook phases/07-observability/playbook.yml -e deploy_traffic_capture=true
+testbed run-phase 07-observability deploy_traffic_capture=true
 ```
 
 ### Access
@@ -351,19 +350,14 @@ See [security/iam.md](../security/iam.md) for the realm structure and role matri
 ### Deploy / Reconcile
 
 ```bash
-vagrant ssh ansible
-cd ~/ansible-ro
-
 # Prepare dashboard workspace and dependencies
-ansible-playbook phases/09-dashboard/playbook.yml
+testbed run-phase 09-dashboard
 ```
 
 ### Development mode (live reload)
 
 ```bash
-vagrant ssh ansible
-cd ~/ansible-ro
-ansible-playbook phases/09-dashboard/playbook.yml -e dashboard_mode=dev
+testbed run-phase 09-dashboard dashboard_mode=dev
 ```
 
 ### What it does
@@ -409,7 +403,7 @@ Roles under this phase:
 Run a single piece with a tag:
 
 ```bash
-ansible-playbook phases/10-northbound/playbook.yml --tags camara
+testbed run-phase 10-northbound camara
 ```
 
 See [architecture/positioning-adapters.md](../architecture/positioning-adapters.md).
@@ -421,20 +415,24 @@ See [architecture/positioning-adapters.md](../architecture/positioning-adapters.
 ### Re-run a Phase
 
 ```bash
-vagrant ssh ansible
-cd ~/ansible-ro
-ansible-playbook phases/04-overlay-network/playbook.yml
+testbed run-phase 04-overlay-network
 ```
 
 ### Skip Phases
 
-```bash
-ansible-playbook phases/00-main-playbook.yml --skip-tags phase6
-```
+A phase is skipped by turning off its feature flag rather than by skipping a tag,
+so the choice persists across runs: see the toggles above and `testbed help`.
 
 ### Debug Mode
 
+Verbose output needs the playbook run directly, which is the one case where the
+manual invocation is still the right tool. Export the secrets first so the run
+behaves like a normal one:
+
 ```bash
+vagrant ssh ansible
+cd ~/ansible-ro
+set -a; . /vagrant/.testbed.env; . /vagrant/.testbed.secrets; set +a
 ansible-playbook phases/05-5g-core/playbook.yml -vvv
 ```
 

@@ -102,15 +102,13 @@ The dashboard is deployed and started automatically by Phase 9.
 ### Prepare/reconcile via dedicated phase
 
 ```bash
-cd ~/ansible-ro
-ansible-playbook phases/09-dashboard/playbook.yml
+testbed run-phase 09-dashboard
 ```
 
 ### Development mode (Vite HMR on ansible VM)
 
 ```bash
-cd ~/ansible-ro
-ansible-playbook phases/09-dashboard/playbook.yml -e dashboard_dev_enabled=true
+testbed run-phase 09-dashboard dashboard_dev_enabled=true
 ```
 
 Targets:

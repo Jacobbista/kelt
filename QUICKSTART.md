@@ -1,7 +1,7 @@
 # KELT Quickstart
 
 End-user and agent operations guide. For development and contribution
-conventions, see [CLAUDE.md](CLAUDE.md).
+conventions, see [AGENTS.md](AGENTS.md).
 
 ---
 
@@ -12,6 +12,11 @@ git clone <repo-url>
 cd kelt
 ./testbed-config
 ```
+
+KELT is distributed as a git checkout, so updating it later is `testbed update`:
+it fast-forwards this clone and lists the phases worth re-running. It is offered
+automatically before `testbed up` when the checkout is behind, and it is also how
+newer container image baselines arrive, since those are pinned in the repo.
 
 Tested on Ubuntu 24.04 LTS (Server and Desktop). Auto-fixes use `apt`; on other
 distributions install the missing packages with your package manager. macOS and
@@ -55,6 +60,25 @@ the menu. Re-run the wizard any time with `testbed onboarding`.
 ---
 
 ## 2. Daily operation
+
+### Two interfaces, one behavior
+
+`testbed` exposes the same functionality two ways, and both are first-class.
+
+The **interactive TUI** (`testbed` with no arguments) is the intended way to use
+the testbed. It shows current state before asking anything, names the
+consequence of each choice, and confirms destructive actions, so it is the safer
+surface when the next step is not already decided.
+
+The **positional subcommands** are for direct terminal control, for scripting and
+CI, and for agents that read the repository and operate on their own. They take
+no flags, every value is positional, and each one maps to a menu action, so an
+agent never has to drive a prompt to reach a capability. Section 5 lists them.
+
+Parity is a guarantee, not a coincidence: every interactive flow has a matching
+subcommand, and a capability that exists only behind a prompt is considered a
+bug. The two paths share the same functions and the same persisted state, so
+mixing them within one session is safe.
 
 After onboarding, the `testbed` alias works from any directory.
 
@@ -169,8 +193,11 @@ client's `insecure-registries`. Push over Tailscale/LAN. See
 
 ## 5. Agent reference (non-interactive)
 
-Every menu action has a subcommand. Agents and CI scripts use these
-directly; no flags are required, all values are positional.
+Every menu action has a subcommand, by design (see
+[Two interfaces](#two-interfaces-one-behavior)). Agents and CI scripts use these
+directly; no flags are required, all values are positional. Prefer them over
+driving `vagrant` and `ansible-playbook` by hand: they load the persisted
+configuration and secrets, which a raw playbook run does not.
 
 ### Setup
 
@@ -178,6 +205,7 @@ directly; no flags are required, all values are positional.
 |---|---|---|
 | `testbed onboarding` | — | Re-run wizard, idempotent |
 | `testbed install` | — | Install alias + completion (asks for gum if missing) |
+| `testbed update` | — | Pull new KELT commits and list the phases to re-run |
 
 ### Deploy
 
@@ -251,7 +279,7 @@ the SPA. Full reference: [docs/security/iam.md](docs/security/iam.md).
 | `gum` install fails behind a proxy | Manual: `sudo apt-get install -y gum` after adding the Charm repo (see install_gum_apt in `testbed-config`) |
 | Want to switch domain | `testbed auth-network preset-cloudflare newdomain.com && testbed run-phase 08-iam` |
 | Dev frontend reloads in a loop, splash flashes | Vite HMR WebSocket blocked by the tunnel. Either disable HMR (`DASHBOARD_DEV_HMR_ENABLED=false`) or add a Zero-Trust bypass for `<dev-host>/__vite_hmr*` (the path is baked in by phase 09). Reference: `docs/deployment/external-tunnel.md`. |
-| Browser console: `Invalid hook call ... more than one copy of React` | Vite pre-bundle cache rotated mid-session, leaving two chunk generations live in the tab. Hard-refresh (`Ctrl+Shift+R`). Persistent occurrence means a task ran `npm install` unconditionally; see CLAUDE.md "Dashboard frontend" for the mtime gate. |
+| Browser console: `Invalid hook call ... more than one copy of React` | Vite pre-bundle cache rotated mid-session, leaving two chunk generations live in the tab. Hard-refresh (`Ctrl+Shift+R`). Persistent occurrence means a task ran `npm install` unconditionally; see docs/development/contributing.md "Dashboard frontend" for the mtime gate. |
 | Sidebar mode badge shows the wrong environment (e.g. `PROD` on the dev URL) | Bundle stale. Hard-refresh; if it persists after, ship a new bundle with `testbed run-phase 09-dashboard` and tag a new `dashboard-frontend-v*`. |
 
 ---

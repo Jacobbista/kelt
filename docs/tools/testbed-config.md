@@ -2,6 +2,8 @@
 
 `testbed-config` is an interactive CLI tool for configuring the testbed before deployment. It manages deployment profiles, edge VM toggle, physical RAN bridge selection, IAM/CAMARA secret material, and other parameters, persisting non-secret values to `.testbed.env` and secrets to `.testbed.secrets`.
 
+It carries two interfaces over one implementation: an interactive TUI, which is the intended way to operate the testbed, and positional subcommands for direct terminal control, CI, and agents. Every menu action has a matching subcommand. See [Two interfaces](https://github.com/Jacobbista/kelt/blob/main/QUICKSTART.md#two-interfaces-one-behavior), which owns that model and the subcommand reference.
+
 > **Optional dependency**: Install [gum](https://github.com/charmbracelet/gum) (Charm) for a polished TUI experience with styled menus and confirmations. Without gum, the tool falls back to basic `select`/`read` prompts.
 
 ## What It Does
@@ -106,7 +108,7 @@ Launches a TUI menu (with gum) or a numbered menu (without gum):
 | `dashboard-auth` | `enabled` \| `disabled` | Set `DASHBOARD_AUTH_ENABLED` persisted in `.testbed.env`. |
 | `iam-admin-password` | `[password]` \| `--clear` | Set or clear Keycloak admin bootstrap password stored in `.testbed.secrets`. With gum and no args, opens a guided chooser (`auto-generate`, `manual`, `clear`). |
 | `secrets` | `generate-missing` \| `manual` \| `rotate` \| `status` \| `clear` | Manage IAM/CAMARA secrets in `.testbed.secrets`. With gum and no args, opens a guided wizard. |
-| `run-phase` | `[phase-dir]` | Run a single phase playbook (`phases/<phase-dir>/playbook.yml`) via the ansible VM. Automatically loads `/vagrant/.testbed.env` and `/vagrant/.testbed.secrets` before execution. |
+| `run-phase` | `[phase-dir] [tags] [key=value ...]` | Run a single phase playbook (`phases/<phase-dir>/playbook.yml`) via the ansible VM. Automatically loads `/vagrant/.testbed.env` and `/vagrant/.testbed.secrets` before execution. Extra positional arguments select tags and set extra vars. |
 | `up` | — | Run `vagrant up` with current configuration (confirms first) |
 | `provision` | — | Run `vagrant provision ansible` (confirms first) |
 | `env` | — | Print `export` commands for current config (for `eval`) |

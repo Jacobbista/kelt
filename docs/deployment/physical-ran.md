@@ -158,14 +158,11 @@ vagrant reload worker
 ### Step 3: Apply Overlay + Core Changes
 
 ```bash
-vagrant ssh ansible
-cd ~/ansible-ro
-
 # Re-deploy the OVS DaemonSet (creates br-ran, patch ports, gateway IPs)
-ansible-playbook phases/04-overlay-network/playbook.yml --tags overlay
+testbed run-phase 04-overlay-network overlay
 
 # Re-deploy 5G Core (adds n2-physical NAD to AMF, PHYSICAL_RAN_SUBNET to UPF)
-ansible-playbook phases/05-5g-core/playbook.yml --tags deployments
+testbed run-phase 05-5g-core nfs
 ```
 
 ---
@@ -311,11 +308,9 @@ ran_bridge_mode: disabled
 ```
 
 ```bash
-vagrant ssh ansible
-cd ~/ansible-ro
-ansible-playbook phases/04-overlay-network/playbook.yml --tags overlay
-ansible-playbook phases/05-5g-core/playbook.yml --tags deployments
-ansible-playbook phases/06-ueransim-mec/playbook.yml
+testbed run-phase 04-overlay-network overlay
+testbed run-phase 05-5g-core nfs
+testbed run-phase 06-ueransim-mec
 ```
 
 ---
@@ -330,8 +325,8 @@ ansible-playbook phases/06-ueransim-mec/playbook.yml
 | AMF doesn't see gNB                     | PLMN mismatch or SCTP issue                   | Check MCC/MNC/TAC; `sudo modprobe sctp` on worker                                                                                                                                               |
 | `failed to find bridge br-ran`          | NAD / AMF reference `br-ran` but OVS never created it | Worker needs RAN NIC + overlay applied; restart `ds-net-setup-worker` on worker. Same root cause as a skipped physical-RAN configuration (table *OVS DaemonSet vs NAD*).                            |
 | Physical RAN is skipped during deploy   | `physical_ran_enabled` true, `br-ran` missing on worker | Apply `PHYSICAL_RAN_BRIDGE` to the worker VM (`testbed-config provision` now reloads the worker automatically when needed, or run `vagrant reload worker`), then re-run overlay/core or enable later from the dashboard. |
-| br-ran persists after Disable           | DS pod restarted before teardown; old script  | Fixed: ovs-setup.sh now tears down br-ran when RAN_BRIDGE_MODE=disabled. Re-run Disable or `ansible-playbook phases/04-overlay-network/playbook.yml --tags overlay -e ran_bridge_mode=disabled` |
-| NAD n2-physical persists after Disable  | Playbook only skipped creation, never deleted | Fixed: multus_install now deletes the NAD when physical_ran_enabled=false. Re-run `ansible-playbook phases/04-overlay-network/playbook.yml --tags nad -e physical_ran_enabled=false`            |
+| br-ran persists after Disable           | DS pod restarted before teardown; old script  | Fixed: ovs-setup.sh now tears down br-ran when RAN_BRIDGE_MODE=disabled. Re-run Disable or `testbed run-phase 04-overlay-network overlay ran_bridge_mode=disabled` |
+| NAD n2-physical persists after Disable  | Playbook only skipped creation, never deleted | Fixed: multus_install now deletes the NAD when physical_ran_enabled=false. Re-run `testbed run-phase 04-overlay-network nad physical_ran_enabled=false`            |
 | `macvlan: device or resource busy`      | n2-physical NAD misconfigured                 | Ensure NAD uses `type: ovs, bridge: br-ran`                                                                                                                                                     |
 | UE authenticated but no data            | PDU session fails at PFCP                     | Check SMF→UPF N4 connectivity; check UPF logs                                                                                                                                                   |
 

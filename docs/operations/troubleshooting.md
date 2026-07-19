@@ -78,7 +78,8 @@ vagrant ssh ansible
 ssh worker 'echo OK'
 ssh edge 'echo OK'
 
-# Re-run with verbose
+# Re-run with verbose (secrets sourced, as testbed run-phase does)
+set -a; . /vagrant/.testbed.env; . /vagrant/.testbed.secrets; set +a
 ansible-playbook phases/XX/playbook.yml -i inventory.ini -vvv
 ```
 

@@ -184,15 +184,16 @@ interactive helper:
 
 The preset writes `EXTERNAL_BASE_DOMAIN` (and clears any per-service overrides)
 into `.testbed.env`, which subsequent `run-phase` and `provision` invocations
-source automatically. Direct invocation for ad-hoc tuning sets just the base:
+source automatically. Ad-hoc tuning sets just the base, passing the secrets
+explicitly because they are not being read from `.testbed.secrets` here:
 
 ```bash
-ansible-playbook ansible/phases/08-iam/playbook.yml \
-  -e external_base_domain=example.com \
-  -e keycloak_admin_password='<strong-secret>' \
-  -e keycloak_db_password='<strong-secret>' \
-  -e camara_client_secret='<strong-secret>' \
-  -e dashboard_readonly_secret='<strong-secret>'
+testbed run-phase 08-iam \
+  external_base_domain=example.com \
+  keycloak_admin_password='<strong-secret>' \
+  keycloak_db_password='<strong-secret>' \
+  camara_client_secret='<strong-secret>' \
+  dashboard_readonly_secret='<strong-secret>'
 ```
 
 A single surface can still be pinned to a one-off hostname by setting its
