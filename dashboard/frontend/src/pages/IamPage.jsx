@@ -105,12 +105,29 @@ function CurlSnippet({ clientId, tokenNote }) {
   const [copied, setCopied] = useState(false);
   const [secret, setSecret] = useState(null);
   const [secretErr, setSecretErr] = useState("");
+  const [lang, setLang] = useState("curl");
   if (!tokenUrl) return null;
   const secretField = secret ? secret : "<paste-from-.testbed.secrets>";
-  const snippet = `curl -s -X POST ${tokenUrl} \\
+  const snippets = {
+    curl: `curl -s -X POST ${tokenUrl} \\
   --data-urlencode grant_type=client_credentials \\
   --data-urlencode client_id=${clientId} \\
-  --data-urlencode client_secret=${secretField}`;
+  --data-urlencode 'client_secret=${secretField}'`,
+    powershell: `$r = Invoke-RestMethod -Method Post -Uri "${tokenUrl}" -Body @{
+  grant_type    = 'client_credentials';
+  client_id     = '${clientId}';
+  client_secret = '${secretField}'
+}
+$r.access_token`,
+    python: `import requests
+r = requests.post("${tokenUrl}", data={
+    "grant_type": "client_credentials",
+    "client_id": "${clientId}",
+    "client_secret": "${secretField}",
+})
+print(r.json()["access_token"])`,
+  };
+  const snippet = snippets[lang];
   const reveal = async () => {
     setSecretErr("");
     try {
@@ -133,6 +150,18 @@ function CurlSnippet({ clientId, tokenNote }) {
   };
   return (
     <div className="mt-1 rounded border border-slate-800 bg-slate-950 p-2 text-[11px] font-mono text-slate-300">
+      <div className="mb-1 flex gap-1">
+        {[["curl", "curl"], ["powershell", "PowerShell"], ["python", "Python"]].map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setLang(id)}
+            className={`rounded px-2 py-0.5 text-[10px] ${lang === id ? "bg-slate-700 text-slate-100" : "bg-slate-900 text-slate-400 hover:bg-slate-800"}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
       <pre className="whitespace-pre-wrap break-all">{snippet}</pre>
       <button
         type="button"
