@@ -27,7 +27,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib/common.sh"
 CASES_DIR="${1:?usage: G3_conformance.sh <cases-dir>}"
 [ -d "$CASES_DIR" ] || die "cases dir not found: $CASES_DIR"
 GW="$(gateway_url)"
-RETRIEVE_PATH="${KELT_RETRIEVE_PATH:-/location-retrieval/v3/retrieve}"  # confirm via /docs
+RETRIEVE_PATH="${KELT_RETRIEVE_PATH:-/location-retrieval/v0.5/retrieve}"  # gateway serves v0.5; confirm via /docs
 VALID_TOKEN="${KELT_CAMARA_TOKEN:-}"          # required for cases whose meta says token=valid
 CROSS_TOKEN="${KELT_CAMARA_TOKEN_CROSS:-}"    # a token from another org, for cross_tenant
 

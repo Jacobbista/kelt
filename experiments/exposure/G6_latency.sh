@@ -30,7 +30,7 @@ COUNT="${2:-1000}"
 RATE="${3:-5}"
 GW="$(gateway_url)"
 TOKEN="${KELT_CAMARA_TOKEN:?set KELT_CAMARA_TOKEN to a valid CAMARA access token (do not commit it)}"
-RETRIEVE_PATH="${KELT_RETRIEVE_PATH:-/location-retrieval/v3/retrieve}"  # confirm via /docs
+RETRIEVE_PATH="${KELT_RETRIEVE_PATH:-/location-retrieval/v0.5/retrieve}"  # gateway serves v0.5; confirm via /docs
 BODY_FILE="${KELT_RETRIEVE_BODY:?set KELT_RETRIEVE_BODY to a JSON body (asset + maxAge for this condition)}"
 
 [ -f "$BODY_FILE" ] || die "retrieve body file not found: $BODY_FILE"
