@@ -286,13 +286,13 @@ northbound_image_names:
   vendor_adapter:     vendor-adapter
   location_app:       location-app
 northbound_image_tags:
-  positioning_engine: "0.9.0"
-  camara_gateway:     "0.9.1"
+  positioning_engine: "0.10.0"
+  camara_gateway:     "0.10.0"
   placement_editor:   "0.9.0"
   synthetic_adapter:  "0.9.0"
   wifi_adapter:       "0.9.0"
-  vendor_adapter:     "0.9.1"
-  location_app:       "0.9.0"
+  vendor_adapter:     "0.10.0"
+  location_app:       "0.10.0"
 
 # ── Dashboard images ─────────────────────────────────────────────────────────
 # The frontend is application code with a release process: a `dashboard-frontend-v<semver>`
