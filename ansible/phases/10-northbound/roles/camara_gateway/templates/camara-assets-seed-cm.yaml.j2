@@ -6,21 +6,22 @@ metadata:
 data:
   # Cold-start seed for the Asset Identity Map, consumed once via ASSET_SEED_FILE
   # when the camara-assets store is empty (then persisted to ASSET_STORE_FILE).
-  # Conforms to schema/asset.schema.json (v2). The demo asset maps to the engine's
+  # Conforms to schema/asset.schema.json (v3): an asset carries N capabilities the
+  # gateway fuses. The demo asset has one synthetic capability mapping to the engine's
   # synthetic device (engine_device_ids in the positioning_engine role). Author real
   # assets at runtime via GET/PUT /assets (dashboard), not by editing this seed.
   assets.seed.json: |
     {
-      "version": 2,
+      "version": 3,
       "assets": [
         {
           "asset_id": "demo-asset-01",
-          "positioning_id": "demo-001",
           "kind": "asset",
-          "source": "synthetic",
           "org": "demo",
           "label": "Synthetic demo asset",
-          "simulated": true
+          "capabilities": [
+            { "source": "synthetic", "positioning_id": "demo-001" }
+          ]
         }
       ]
     }

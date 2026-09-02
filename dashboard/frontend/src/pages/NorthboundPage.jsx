@@ -2,10 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { IconArrowLeft, IconRefresh, IconTrash } from "../components/icons";
-import { Panel, Collapsible, Modal, Banner, Tabs, Field, Toggle, inputCls, btn } from "../components/ui";
+import { Panel, Collapsible, Modal, Banner, Tabs, Field, inputCls, btn } from "../components/ui";
 import { useToast } from "../context/ToastContext";
 import { useConfirm } from "../context/ConfirmContext";
 import { env } from "../runtime-env";
+import { KEYCLOAK_AUTHORITY } from "../auth/oidc";
 import LogViewer from "../components/LogViewer";
 
 const TABS = [
@@ -36,6 +37,7 @@ import {
   setNorthboundAssets,
   getNorthboundDiscoverable,
   getNorthboundDiscoverRaw,
+  getClientSecret,
 } from "../api";
 
 // Generic adapters published by 5g-northbound that an operator can deploy on
@@ -136,22 +138,185 @@ function publicUrl(s) {
 // model + enums mirror the upstream schema/asset.schema.json (v2); the gateway
 // validates authoritatively. The gateway serves no asset-schema endpoint, so the
 // HELP copy below is a hand-kept mirror of that schema's field descriptions.
+// Copy-paste retrieval: the CAMARA retrieve call as a ready snippet for the
+// operator's OWN terminal (curl / PowerShell / Python), the same pattern as the
+// IAM token block. It does NOT fire from the browser; it assumes $TOKEN is
+// already set (mint it from Settings -> IAM, camara-api-demo). The gateway URL is
+// derived from the dashboard hostname, matching the kelt-camara.<base> route.
+// Self-contained: mints a token (camara-api-demo, the tenant-scoped reference
+// consumer) AND runs the retrieve in one paste, so the operator does not need a
+// token beforehand. "insert secret" inlines the client secret (audit-logged,
+// same as the IAM page); without it the snippet keeps the .testbed.secrets
+// placeholder so nothing leaks by default.
+function RetrieveSnippet({ assets }) {
+  const [lang, setLang] = useState("curl");
+  const [assetId, setAssetId] = useState("");
+  const [maxAge, setMaxAge] = useState("0");
+  const [copied, setCopied] = useState(false);
+  const [secret, setSecret] = useState(null);
+  const [secretErr, setSecretErr] = useState("");
+
+  const { protocol, hostname } = window.location;
+  const isIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) || hostname === "localhost";
+  const labels = hostname.split(".");
+  const base = labels.slice(1).join(".");
+  const prefix = labels[0].replace(/-(dashboard|dev)$/, "");
+  const url = (!isIp && base && prefix)
+    ? `${protocol}//${prefix}-camara.${base}/location-retrieval/v0.5/retrieve`
+    : "https://<prefix>-camara.<base>/location-retrieval/v0.5/retrieve";
+  const tokenUrl = KEYCLOAK_AUTHORITY
+    ? `${KEYCLOAK_AUTHORITY.replace(/\/$/, "")}/protocol/openid-connect/token`
+    : "https://<keycloak>/realms/<realm>/protocol/openid-connect/token";
+
+  const list = Array.isArray(assets) ? assets : [];
+  const asset = assetId.trim() || "<asset_id>";
+  const age = String(maxAge).trim() || "0";
+  const bodyJson = `{"device":{"assetId":"${asset}"},"maxAge":${age}}`;
+  const secretField = secret || "<paste-from-.testbed.secrets>";
+
+  const snippets = {
+    curl: `TOKEN=$(curl -s -X POST ${tokenUrl} \\
+  --data-urlencode grant_type=client_credentials \\
+  --data-urlencode client_id=camara-api-demo \\
+  --data-urlencode 'client_secret=${secretField}' \\
+  | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+echo "$TOKEN"
+
+curl -s -i -X POST ${url} \\
+  -H "Authorization: Bearer $TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '${bodyJson}'`,
+    powershell: `$token = (Invoke-RestMethod -Method Post -Uri "${tokenUrl}" -Body @{
+  grant_type    = 'client_credentials';
+  client_id     = 'camara-api-demo';
+  client_secret = '${secretField}'
+}).access_token
+$token
+
+$r = Invoke-WebRequest -Method Post -Uri "${url}" -Headers @{ Authorization = "Bearer $token" } -ContentType 'application/json' -Body '${bodyJson}'
+$r.Headers['x-correlator']; $r.Content`,
+    python: `import requests
+
+tok = requests.post("${tokenUrl}", data={
+    "grant_type": "client_credentials",
+    "client_id": "camara-api-demo",
+    "client_secret": "${secretField}",
+}).json()["access_token"]
+print(tok)
+
+r = requests.post("${url}",
+    headers={"Authorization": f"Bearer {tok}"},
+    json={"device": {"assetId": "${asset}"}, "maxAge": ${age}})
+print(r.status_code, r.headers.get("x-correlator"))
+print(r.json())`,
+  };
+  const snippet = snippets[lang];
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(snippet);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch { /* restrictive clipboard context: user selects manually */ }
+  };
+  const reveal = async () => {
+    setSecretErr("");
+    try {
+      const res = await getClientSecret("camara-api-demo");
+      if (res.found) setSecret(res.secret);
+      else setSecretErr(`${res.env_key} is not in .testbed.secrets on the host (realm has the changeme default)`);
+    } catch (e) {
+      setSecretErr(e?.message || "could not read the secret");
+    }
+  };
+
+  return (
+    <Panel title="Test retrieval" hint="The full CAMARA retrieve, ready to paste into your own terminal: it mints a token (camara-api-demo) and runs the retrieve in one go. Pick an onboarded asset, insert the secret, copy, and run.">
+      <div className="flex flex-wrap items-end gap-6">
+        <label className="flex flex-col gap-1.5 text-[11px] text-slate-400">
+          asset
+          <select className={`${inputCls} w-64`} value={assetId} disabled={!list.length}
+            onChange={(e) => setAssetId(e.target.value)}>
+            <option value="">{assets == null ? "loading…" : list.length ? "select an asset…" : "no assets onboarded"}</option>
+            {list.map((a) => (
+              <option key={a.asset_id} value={a.asset_id}>{a.asset_id}{a.org ? ` · ${a.org}` : ""}</option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1.5 text-[11px] text-slate-400">
+          maxAge (s)
+          <input className={`${inputCls} w-24`} value={maxAge} onChange={(e) => setMaxAge(e.target.value)} />
+        </label>
+      </div>
+      <div className="mt-5 rounded-lg border border-slate-800 bg-slate-950 p-3.5 text-[11px] font-mono text-slate-300">
+        <div className="mb-2.5 flex gap-1.5">
+          {[["curl", "curl"], ["powershell", "PowerShell"], ["python", "Python"]].map(([id, label]) => (
+            <button key={id} type="button" onClick={() => setLang(id)}
+              className={`rounded px-2.5 py-1 text-[10px] ${lang === id ? "bg-slate-700 text-slate-100" : "bg-slate-900 text-slate-400 hover:bg-slate-800"}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <pre className="whitespace-pre-wrap break-all leading-relaxed">{snippet}</pre>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <button type="button" onClick={copy}
+            className="rounded bg-slate-800 px-2.5 py-1 text-[10px] text-slate-300 hover:bg-slate-700">
+            {copied ? "copied" : "copy"}
+          </button>
+          <button type="button" onClick={secret ? () => setSecret(null) : reveal}
+            className="rounded bg-slate-800 px-2.5 py-1 text-[10px] text-slate-300 hover:bg-slate-700">
+            {secret ? "hide secret" : "insert secret"}
+          </button>
+          <span className="text-[10px] text-slate-500">maxAge 0 = bypass cache · -i shows x-correlator</span>
+          {secretErr && <span className="text-[10px] text-amber-400">{secretErr}</span>}
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
 const ASSET_KINDS = ["uwb-tag", "tool", "pallet", "forklift", "asset", "ue"];
-const ASSET_SOURCES = ["wittra", "wifi", "fiveg", "gnss", "mock"];
+const ASSET_SOURCES = ["wittra", "wifi", "fiveg", "gnss", "synthetic"];
 // org defaults to the testbed's CAMARA tenant (camara_org, injected as VITE_CAMARA_ORG)
 // so onboarded assets land in the one tenant instead of starting blank. See docs/security/iam.md.
-const EMPTY_ASSET = { asset_id: "", positioning_id: "", kind: "asset", source: "mock", org: env("VITE_CAMARA_ORG", "demo"), label: "", simulated: false, metadata: {} };
+// Asset Identity Map v3: an asset carries N capabilities (a source + the id that source
+// fetches it by), and the gateway fuses them into one fix. A robot with a UWB tag AND a
+// WiFi radio is one asset with two capabilities. See schema/asset.schema.json (v3).
+const EMPTY_CAP = { source: "synthetic", positioning_id: "" };
+const EMPTY_ASSET = { asset_id: "", kind: "asset", org: env("VITE_CAMARA_ORG", "demo"), label: "", metadata: {}, capabilities: [{ ...EMPTY_CAP }] };
 const ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
 const ORG_RE = /^[a-z0-9-]{1,64}$/;
+
+// Normalise a stored asset to the canonical v3 shape (capabilities[]). The live cutover
+// is v3-only (the gateway rejects a v2 flat map), so the PVC is migrated in the deploy
+// window and reads come back v3 already; this stays as defensive normalisation and to
+// lift a hand-written or legacy-exported v2 file on import.
+function assetCapabilities(a) {
+  if (Array.isArray(a?.capabilities) && a.capabilities.length) {
+    return a.capabilities.map((c) => ({
+      source: (c?.source || "").trim(),
+      positioning_id: (c?.positioning_id || "").trim(),
+    }));
+  }
+  if (a?.source || a?.positioning_id) {
+    return [{ source: (a.source || "").trim(), positioning_id: (a.positioning_id || "").trim() }];
+  }
+  return [];
+}
+function normalizeAsset(a) {
+  const { source, positioning_id, simulated, ...rest } = a || {};
+  return { ...rest, capabilities: assetCapabilities(a) };
+}
+// A synthetic-sourced asset is not real hardware; surfaced as a badge (mirrors location-app,
+// which derives the same from source==="synthetic"). No stored `simulated` flag in v3.
+const isSynthetic = (a) => (a?.capabilities || []).some((c) => c?.source === "synthetic");
 // One-line guidance per field, condensed from the upstream asset.schema.json
 // descriptions. The assetId -> positioning_id indirection is the part operators trip on.
 const HELP = {
   asset_id: "Public CAMARA handle the consumer queries by (device.assetId). A business id like pkg-4471, not a phone number.",
-  positioning_id: "The id the chosen adapter fetches this device by: the vendor-native device id (used verbatim in the adapter's API call), or the engine track id for a mock source.",
+  positioning_id: "The id the chosen adapter fetches this device by: the vendor-native device id (used verbatim in the adapter's API call), or the engine track id for a synthetic source.",
   kind: "Entity class, surfaced in the CAMARA profile so a consumer knows what it is tracking.",
   source: "Routes the asset: the engine serves it from the registered adapter whose name equals this (?source=). Pick a deployed adapter.",
   org: "Tenant. The gateway matches it against the token org claim, so a consumer sees only its own org's assets.",
-  simulated: "Wired to a synthetic/demo source (mock). Shows a MOCK badge; does not change routing.",
 };
 
 // Guided editor for one asset. Self-contained form state (including free-form
@@ -170,34 +335,34 @@ function AssetModal({ initial, isNew, busy, onSave, onClose }) {
     getNorthboundAdapters().then((a) => setAdapters(Array.isArray(a) ? a : [])).catch(() => {});
   }, []);
   const set = (patch) => setForm((f) => ({ ...f, ...patch }));
-
-  // A mock adapter feeds synthetic data; pre-tick simulated (still editable) so the
-  // MOCK badge matches reality without a second manual step.
-  const onSource = (source) => set({ source, simulated: source.startsWith("mock") ? true : form.simulated });
+  // Capabilities are a list: add/edit/remove a { source, positioning_id } row.
+  const caps = form.capabilities || [];
+  const setCap = (i, patch) => set({ capabilities: caps.map((c, j) => (j === i ? { ...c, ...patch } : c)) });
+  const addCap = () => set({ capabilities: [...caps, { ...EMPTY_CAP }] });
+  const removeCap = (i) => set({ capabilities: caps.filter((_, j) => j !== i) });
 
   // Options = live adapter names (the routing key). Keep the current value selectable
   // even if its adapter is offline, and fall back to the known modalities when nothing
   // is registered yet so the form stays usable in a cold stack.
   const liveNames = adapters.map((a) => a.name).filter(Boolean);
   const stateOf = Object.fromEntries(adapters.map((a) => [a.name, a.state]));
-  const sourceOptions = Array.from(new Set([...(liveNames.length ? liveNames : ASSET_SOURCES), form.source].filter(Boolean)));
-  const sourceRouted = liveNames.includes(form.source) && stateOf[form.source] === "live";
-  const sourceHint = liveNames.length
-    ? (liveNames.includes(form.source)
-        ? `Routes to adapter "${form.source}"${stateOf[form.source] && stateOf[form.source] !== "live" ? ` (${stateOf[form.source]})` : " · live"}.`
-        : `No registered adapter named "${form.source}". Deploy one (Build your own) or pick a live source.`)
+  const capSourceOptions = (source) => Array.from(new Set([...(liveNames.length ? liveNames : ASSET_SOURCES), source].filter(Boolean)));
+  const capHint = (source) => liveNames.length
+    ? (liveNames.includes(source)
+        ? `Routes to adapter "${source}"${stateOf[source] && stateOf[source] !== "live" ? ` (${stateOf[source]})` : " · live"}.`
+        : `No registered adapter named "${source}". Deploy one (Build your own) or pick a live source.`)
     : "No adapters registered yet. Deploy one in Build your own; the values below are known modalities.";
 
-  // Progressive steps: identity → routing → tenant/details. Each step gates the next
-  // (Next disabled until valid) so the operator cannot skip the assetId→positioning_id
-  // indirection or commit a malformed org; the whole thing is a guided flow, not one
-  // long field dump.
+  // Progressive steps: identity → capabilities → tenant/details. Each step gates the next
+  // (Next disabled until valid) so the operator cannot skip a source's positioning_id or
+  // commit a malformed org; the whole thing is a guided flow, not one long field dump.
   const idOk = ID_RE.test((form.asset_id || "").trim());
-  const pidOk = ID_RE.test((form.positioning_id || "").trim());
+  const capValid = (c) => !!(c?.source || "").trim() && ID_RE.test((c?.positioning_id || "").trim());
+  const capsOk = caps.length >= 1 && caps.every(capValid);
   const orgOk = ORG_RE.test((form.org || "").trim());
   const STEPS = [
-    { id: "identity", label: "Identity", valid: idOk && pidOk },
-    { id: "routing", label: "Routing", valid: true },
+    { id: "identity", label: "Identity", valid: idOk },
+    { id: "capabilities", label: "Capabilities", valid: capsOk },
     { id: "details", label: "Details", valid: orgOk },
   ];
   const last = STEPS.length - 1;
@@ -207,7 +372,11 @@ function AssetModal({ initial, isNew, busy, onSave, onClose }) {
   const submit = () => {
     const metadata = {};
     for (const { k, v } of meta) { const key = k.trim(); if (key) metadata[key] = v; }
-    onSave({ ...form, metadata });
+    const capabilities = caps.map((c) => ({
+      source: (c.source || "").trim(),
+      positioning_id: (c.positioning_id || "").trim(),
+    }));
+    onSave({ ...form, capabilities, metadata });
   };
 
   return (
@@ -247,40 +416,52 @@ function AssetModal({ initial, isNew, busy, onSave, onClose }) {
 
         {step === 0 && (
           <div className="flex flex-col gap-3">
-            <p className="text-[11px] text-slate-500">Who this device is publicly, and the id its source fetches it by.</p>
+            <p className="text-[11px] text-slate-500">Who this device is publicly, and what it is.</p>
             <Field label="assetId" hint={HELP.asset_id}>
               <input className={inputCls} placeholder="pkg-4471" value={form.asset_id}
                 disabled={!isNew} onChange={(e) => set({ asset_id: e.target.value })} />
               {form.asset_id && !idOk && <span className="text-[10px] text-rose-400">letters / digits / . _ : - (1-128)</span>}
-            </Field>
-            <Field label="positioning_id" hint={HELP.positioning_id}>
-              <div className="flex items-center gap-2">
-                <input className={`${inputCls} flex-1`} placeholder="vendor device id (mock: engine track id)"
-                  value={form.positioning_id} onChange={(e) => set({ positioning_id: e.target.value })} />
-                <button type="button" className={btn.ghost} disabled={!form.asset_id}
-                  onClick={() => set({ positioning_id: form.asset_id })}>= assetId</button>
-              </div>
-              {form.positioning_id && !pidOk && <span className="text-[10px] text-rose-400">letters / digits / . _ : - (1-128)</span>}
-            </Field>
-          </div>
-        )}
-
-        {step === 1 && (
-          <div className="flex flex-col gap-3">
-            <p className="text-[11px] text-slate-500">Which deployed adapter serves this asset, and what it is.</p>
-            <Field label="source" hint={HELP.source}>
-              <select className={inputCls} value={form.source} onChange={(e) => onSource(e.target.value)}>
-                {sourceOptions.map((s) => (
-                  <option key={s} value={s}>{s}{stateOf[s] && stateOf[s] !== "live" ? ` (${stateOf[s]})` : ""}</option>
-                ))}
-              </select>
-              <span className={`text-[10px] ${sourceRouted ? "text-emerald-500" : "text-amber-500"}`}>{sourceHint}</span>
             </Field>
             <Field label="kind" hint={HELP.kind}>
               <select className={inputCls} value={form.kind} onChange={(e) => set({ kind: e.target.value })}>
                 {ASSET_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
               </select>
             </Field>
+          </div>
+        )}
+
+        {step === 1 && (
+          <div className="flex flex-col gap-3">
+            <p className="text-[11px] text-slate-500">How this asset is located. Add one capability per source it is tracked by (a UWB tag AND a WiFi radio = two rows); the gateway fuses them into one fix.</p>
+            {caps.map((c, i) => (
+              <div key={i} className="rounded border border-slate-800 bg-slate-950/40 p-2">
+                <div className="mb-1.5 flex items-center justify-between">
+                  <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500">capability {i + 1}</span>
+                  {caps.length > 1 && (
+                    <button type="button" className="px-1 text-rose-400 hover:text-rose-300"
+                      onClick={() => removeCap(i)} aria-label="Remove capability">✕</button>
+                  )}
+                </div>
+                <Field label="source" hint={HELP.source}>
+                  <select className={inputCls} value={c.source} onChange={(e) => setCap(i, { source: e.target.value })}>
+                    {capSourceOptions(c.source).map((s) => (
+                      <option key={s} value={s}>{s}{stateOf[s] && stateOf[s] !== "live" ? ` (${stateOf[s]})` : ""}</option>
+                    ))}
+                  </select>
+                  <span className={`text-[10px] ${liveNames.includes(c.source) && stateOf[c.source] === "live" ? "text-emerald-500" : "text-amber-500"}`}>{capHint(c.source)}</span>
+                </Field>
+                <Field label="positioning_id" hint={HELP.positioning_id}>
+                  <div className="flex items-center gap-2">
+                    <input className={`${inputCls} flex-1`} placeholder="vendor device id (synthetic: engine track id)"
+                      value={c.positioning_id} onChange={(e) => setCap(i, { positioning_id: e.target.value })} />
+                    <button type="button" className={btn.ghost} disabled={!form.asset_id}
+                      onClick={() => setCap(i, { positioning_id: form.asset_id })}>= assetId</button>
+                  </div>
+                  {c.positioning_id && !ID_RE.test(c.positioning_id.trim()) && <span className="text-[10px] text-rose-400">letters / digits / . _ : - (1-128)</span>}
+                </Field>
+              </div>
+            ))}
+            <button type="button" className={btn.ghost} onClick={addCap}>+ capability</button>
           </div>
         )}
 
@@ -294,8 +475,6 @@ function AssetModal({ initial, isNew, busy, onSave, onClose }) {
             <Field label="label (optional)" hint="Human-readable name shown in UIs.">
               <input className={inputCls} placeholder="Forklift 7 (bay A)" value={form.label} onChange={(e) => set({ label: e.target.value })} />
             </Field>
-            <Toggle checked={!!form.simulated} onChange={(v) => set({ simulated: v })}
-              label="simulated" hint={HELP.simulated} />
             {/* Advanced: free-form metadata (schema additionalProperties), e.g. floor, bay. */}
             <div className="rounded border border-slate-800 bg-slate-950/40 p-2">
               <div className="mb-1 flex items-center justify-between">
@@ -338,30 +517,34 @@ function AssetModal({ initial, isNew, busy, onSave, onClose }) {
   );
 }
 
-// Validate a parsed asset array before a replace-all import: mirrors the per-asset
-// rules (assetId/positioning_id/org patterns) plus duplicate detection, and normalises
-// optional fields to defaults so a terse hand-written file still imports. The gateway
-// validates authoritatively on PUT; this just catches obvious errors before we replace
-// the whole store.
+// Validate a parsed asset array before a replace-all import: mirrors the per-asset rules
+// (assetId/org patterns, at least one capability with a source + valid positioning_id)
+// plus duplicate detection, and lifts a still-v2 flat entry to capabilities[] so an older
+// hand-written or exported file still imports. The gateway validates authoritatively on
+// PUT; this just catches obvious errors before we replace the whole store.
 function validateImportedAssets(arr) {
   const errors = [];
   const seen = new Set();
   const clean = arr.map((a, i) => {
     const id = (a?.asset_id || "").trim();
-    const pid = (a?.positioning_id || "").trim();
     const org = (a?.org || "").trim();
     const where = id || `#${i + 1}`;
+    const capabilities = assetCapabilities(a);
     if (!ID_RE.test(id)) errors.push(`${where}: bad asset_id`);
     else if (seen.has(id)) errors.push(`${where}: duplicate asset_id`);
-    if (!ID_RE.test(pid)) errors.push(`${where}: bad positioning_id`);
     if (!ORG_RE.test(org)) errors.push(`${where}: bad org`);
+    if (capabilities.length === 0) errors.push(`${where}: no capabilities`);
+    else capabilities.forEach((c, j) => {
+      if (!c.source) errors.push(`${where}: capability ${j + 1} has no source`);
+      if (!ID_RE.test(c.positioning_id)) errors.push(`${where}: capability ${j + 1} bad positioning_id`);
+    });
     if (id) seen.add(id);
+    const { source, positioning_id, simulated, ...rest } = a || {};
     return {
-      ...a, asset_id: id, positioning_id: pid, org,
+      ...rest, asset_id: id, org,
       kind: a?.kind || "asset",
-      source: a?.source || "mock",
       label: (a?.label || "").trim(),
-      simulated: !!a?.simulated,
+      capabilities: capabilities.map((c) => ({ source: c.source, positioning_id: c.positioning_id })),
       metadata: (a && typeof a.metadata === "object" && a.metadata) || {},
     };
   });
@@ -485,18 +668,19 @@ function AssetsTab({ toast }) {
   const [discoverOpen, setDiscoverOpen] = useState(false);
   const fileRef = useRef(null);
 
-  // Onboard a discovered device: open the Add-asset wizard PREFILLED from the candidate
-  // (asset_id defaults to the device id but stays editable, positioning_id = the id the
-  // adapter fetches by, source from the candidate). The operator confirms org/kind and
-  // saves — onboarding is never silent.
+  // Onboard a discovered device: open the Add-asset wizard PREFILLED from the candidate as
+  // a single capability (source from the candidate, positioning_id = the id the adapter
+  // fetches by, both editable). The operator confirms org/kind and can add more sources
+  // before saving — onboarding is never silent.
   const onboardCandidate = (c) => {
     setDiscoverOpen(false);
     setEditing({
       ...EMPTY_ASSET,
       asset_id: c.id || "",
-      positioning_id: c.id || "",
-      source: c.source || "mock",
-      simulated: (c.source || "").startsWith("mock"),
+      capabilities: [{
+        source: c.source || "synthetic",
+        positioning_id: c.id || "",
+      }],
       label: c.label || "",
       // Carry the classification as provenance (no hardcoded source_class/device_type →
       // asset-kind mapping; the operator picks kind in the wizard). No-op until present.
@@ -508,10 +692,12 @@ function AssetsTab({ toast }) {
     setIsNew(true);
   };
 
+  // Read-tolerant: normalise every entry to capabilities[] so the table and editor render
+  // whether the gateway returns v3 or a still-v2 flat store (migrated to v3 on next save).
   const load = useCallback(() => {
     setErr("");
     getNorthboundAssets()
-      .then((d) => setAssets(Array.isArray(d?.assets) ? d.assets : []))
+      .then((d) => setAssets(Array.isArray(d?.assets) ? d.assets.map(normalizeAsset) : []))
       .catch((e) => { setErr(e.message || "could not load /assets"); setAssets([]); });
   }, []);
   useEffect(() => { load(); }, [load]);
@@ -519,7 +705,7 @@ function AssetsTab({ toast }) {
   const saveAll = async (next) => {
     setBusy(true);
     try {
-      await setNorthboundAssets({ version: 2, assets: next });
+      await setNorthboundAssets({ version: 3, assets: next });
       setAssets(next);
       toast.success("Assets saved — gateway store updated");
     } catch (e) { toast.error(`Save failed: ${e.message}`); throw e; }
@@ -528,12 +714,16 @@ function AssetsTab({ toast }) {
 
   const upsert = async (a) => {
     const id = (a.asset_id || "").trim();
-    const pid = (a.positioning_id || "").trim();
     const org = (a.org || "").trim();
+    const caps = a.capabilities || [];
     if (!ID_RE.test(id)) return toast.error("asset_id: letters/digits/._:- (1-128)");
-    if (!ID_RE.test(pid)) return toast.error("positioning_id: letters/digits/._:- (1-128)");
     if (!ORG_RE.test(org)) return toast.error("org: lowercase letters/digits/- (1-64)");
-    const clean = { ...a, asset_id: id, positioning_id: pid, org, label: (a.label || "").trim() };
+    if (caps.length === 0) return toast.error("add at least one capability");
+    for (const c of caps) {
+      if (!(c.source || "").trim()) return toast.error("every capability needs a source");
+      if (!ID_RE.test((c.positioning_id || "").trim())) return toast.error("positioning_id: letters/digits/._:- (1-128)");
+    }
+    const clean = { ...a, asset_id: id, org, label: (a.label || "").trim() };
     const next = [...(assets || []).filter((x) => x.asset_id !== id), clean];
     try { await saveAll(next); setEditing(null); } catch { /* toast shown */ }
   };
@@ -545,7 +735,7 @@ function AssetsTab({ toast }) {
   // Export the current map as assets.json (same shape as the companion seed file, so
   // it doubles as a backup and a seed template). Client-side blob, no round-trip.
   const doExport = () => {
-    const body = JSON.stringify({ version: 2, assets: assets || [] }, null, 2);
+    const body = JSON.stringify({ version: 3, assets: assets || [] }, null, 2);
     const url = URL.createObjectURL(new Blob([body], { type: "application/json" }));
     const a = document.createElement("a");
     a.href = url; a.download = "assets.json";
@@ -579,6 +769,7 @@ function AssetsTab({ toast }) {
   };
 
   return (
+    <div className="flex flex-col gap-4">
     <Panel title="Asset Identity Map" hint="CAMARA private-asset profile: assetId → positioning source. The gateway is the authority (GET/PUT /assets). The engine broadcasts each device from its adapter's capability, so an onboarded asset goes live as soon as its adapter reports it.">
       {assets === null ? (
         <p className="text-xs text-slate-500">Loading…</p>
@@ -603,14 +794,24 @@ function AssetsTab({ toast }) {
           ) : (
             <table className="w-full text-xs">
               <thead><tr className="text-left text-slate-400">
-                <th className="py-1">assetId</th><th>kind</th><th>source</th><th>org</th><th>positioning_id</th><th></th>
+                <th className="py-1">assetId</th><th>kind</th><th>org</th><th>capabilities</th><th></th>
               </tr></thead>
               <tbody>
                 {assets.map((a) => (
-                  <tr key={a.asset_id} className="border-t border-slate-800">
-                    <td className="py-1 font-mono text-slate-200">{a.asset_id}{a.simulated && <span className="ml-1 rounded bg-amber-500/20 px-1 text-[9px] text-amber-300">MOCK</span>}</td>
-                    <td>{a.kind}</td><td>{a.source}</td><td>{a.org}</td>
-                    <td className="font-mono text-slate-400">{a.positioning_id}</td>
+                  <tr key={a.asset_id} className="border-t border-slate-800 align-top">
+                    <td className="py-1 font-mono text-slate-200">{a.asset_id}{isSynthetic(a) && <span className="ml-1 rounded bg-amber-500/20 px-1 text-[9px] text-amber-300" title="Synthetic source, not real hardware">SYNTHETIC</span>}</td>
+                    <td>{a.kind}</td><td>{a.org}</td>
+                    <td>
+                      <div className="flex flex-wrap gap-1">
+                        {(a.capabilities || []).map((c, i) => (
+                          <span key={i} className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px]">
+                            <span className="text-slate-300">{c.source}</span>
+                            <span className="text-slate-500"> · </span>
+                            <span className="font-mono text-slate-400">{c.positioning_id}</span>
+                          </span>
+                        ))}
+                      </div>
+                    </td>
                     <td className="text-right">
                       <button type="button" className="mr-3 text-sky-400 hover:underline" onClick={() => { setEditing({ ...EMPTY_ASSET, ...a }); setIsNew(false); }}>edit</button>
                       <button type="button" className="text-rose-400 hover:underline disabled:opacity-40" disabled={busy} onClick={() => remove(a.asset_id)}>delete</button>
@@ -641,6 +842,8 @@ function AssetsTab({ toast }) {
         </Modal>
       )}
     </Panel>
+    <RetrieveSnippet assets={assets} />
+    </div>
   );
 }
 

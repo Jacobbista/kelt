@@ -195,10 +195,11 @@ class ServiceFileRequest(BaseModel):
 
 
 class AssetStoreRequest(BaseModel):
-    # Full Asset Identity Map store (asset.schema.json v2). The gateway PUT /assets
-    # replaces the store, so the dashboard sends the complete set (load-all, edit,
-    # save-all); the gateway validates each entry against the upstream schema. The
-    # editor is admin-only and the caller's Bearer (dashboard-admin, composite with
-    # camara-location-read) is forwarded to the gateway.
-    version: int = 2
+    # Full Asset Identity Map store (asset.schema.json v3: an asset carries N
+    # capabilities the gateway fuses). The gateway PUT /assets replaces the store, so
+    # the dashboard sends the complete set (load-all, edit, save-all); the gateway
+    # validates each entry against the upstream schema. The editor is admin-only and the
+    # caller's Bearer (dashboard-admin, composite with camara-location-read) is forwarded
+    # to the gateway. The store is a pass-through: shape is validated upstream, not here.
+    version: int = 3
     assets: list[dict[str, Any]] = Field(default_factory=list)
