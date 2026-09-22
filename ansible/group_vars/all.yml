@@ -306,7 +306,7 @@ northbound_image_tags:
 # imagePullPolicy Always and a forced rollout. See docs/development/contributing.md
 # "Publishing images".
 dashboard_image_registry: "ghcr.io/jacobbista"
-dashboard_frontend_tag: "0.2.1"
+dashboard_frontend_tag: "0.3.0"
 
 # ── CAMARA tenant (single-org testbed) ───────────────────────────────────────
 # The one CAMARA tenant the testbed uses. The gateway scopes an asset's visibility
