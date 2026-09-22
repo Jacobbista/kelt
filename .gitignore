@@ -66,3 +66,6 @@ venv/
 # Local scratch (not committed)
 kelt-logo-prompt.md
 kelt-todo.md
+
+# Agent skills installed locally (reference material, not app code)
+.claude/skills/
