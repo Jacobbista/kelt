@@ -16,11 +16,14 @@ from fastapi import APIRouter, Depends
 from app.auth import require_admin
 
 from app.config import settings
+from app.services.k8s_service import K8sService, get_k8s_service
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/time", tags=["time-sync"])
 
-_SSH_HOSTS = ["master", "worker", "edge"]
+# Any of these that isn't a registered k3s node isn't part of this deployment
+# (e.g. "edge" on a profile with edge_enabled=false) and shouldn't be SSHed to.
+_KNOWN_SSH_HOSTS = {"master", "worker", "edge"}
 _SSH_BASE = [
     "ssh",
     "-o", "StrictHostKeyChecking=accept-new",
@@ -103,9 +106,17 @@ def _parse_iso(ts: str) -> datetime | None:
         return None
 
 
-@router.get("/sync")
-def time_sync() -> dict[str, Any]:
-    """Check time synchronization across all testbed VMs."""
+def _deployed_ssh_hosts(k8s: K8sService) -> list[str]:
+    """Which of master/worker/edge are actually registered k3s nodes right now."""
+    try:
+        live = {n.name for n in k8s.list_nodes()}
+    except Exception as exc:
+        log.warning("Failed to list nodes for time-sync host discovery: %s", exc)
+        return ["master", "worker"]  # always present in every profile
+    return [h for h in _KNOWN_SSH_HOSTS if h in live]
+
+
+def _time_sync(hosts: list[str]) -> dict[str, Any]:
     ref_now = datetime.now(timezone.utc)
 
     nodes: dict[str, dict[str, Any]] = {
@@ -119,8 +130,8 @@ def time_sync() -> dict[str, Any]:
 
     # Run SSH calls in parallel to minimize total wait time
     max_drift = 0
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        futures = {pool.submit(_get_remote_time_with_rtt, host): host for host in _SSH_HOSTS}
+    with ThreadPoolExecutor(max_workers=max(1, len(hosts))) as pool:
+        futures = {pool.submit(_get_remote_time_with_rtt, host): host for host in hosts}
         for future in as_completed(futures):
             result = future.result()
             host = result["host"]
@@ -138,11 +149,19 @@ def time_sync() -> dict[str, Any]:
     }
 
 
+@router.get("/sync")
+def time_sync(k8s: K8sService = Depends(get_k8s_service)) -> dict[str, Any]:
+    """Check time synchronization across all testbed VMs actually deployed."""
+    return _time_sync(_deployed_ssh_hosts(k8s))
+
+
 # Steps the clock on every VM, so it is admin-only even though the rest of this
 # router is read-only diagnostics. See docs/security/iam.md.
 @router.post("/force-sync", dependencies=[Depends(require_admin)])
-def force_sync() -> dict[str, Any]:
+def force_sync(k8s: K8sService = Depends(get_k8s_service)) -> dict[str, Any]:
     """Force chrony makestep on all VMs, then re-check time sync."""
+    hosts = _deployed_ssh_hosts(k8s)
+
     # Step 1: force sync on local (ansible) node
     local_result = {"host": "ansible", "success": False, "output": ""}
     try:
@@ -157,13 +176,13 @@ def force_sync() -> dict[str, Any]:
 
     # Step 2: force sync on remote hosts in parallel
     results = [local_result]
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        futures = [pool.submit(_force_sync_host, host) for host in _SSH_HOSTS]
+    with ThreadPoolExecutor(max_workers=max(1, len(hosts))) as pool:
+        futures = [pool.submit(_force_sync_host, host) for host in hosts]
         for future in as_completed(futures):
             results.append(future.result())
 
     # Step 3: re-read time sync status after correction
-    updated = time_sync()
+    updated = _time_sync(hosts)
 
     return {
         "sync_results": results,

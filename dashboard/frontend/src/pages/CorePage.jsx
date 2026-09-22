@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from "react";
 import { useAuth } from "../auth/AuthContext";
+import { useToast } from "../context/ToastContext";
 import { getNfStatus, getAmfCniAlert, restartDeployment, scaleAmfController, getNfVersions, getNfUpdateStreamUrl } from "../api";
 import Loader from "../components/Loader";
 import NfCard from "../components/NfCard";
@@ -14,10 +15,11 @@ const SECTIONS = [
 
 export default function CorePage({ onOpenLogs, onOpenTerminal, onOpenIperf3Logs, expandNfType }) {
   const auth = useAuth();
+  const toast = useToast();
   // Restart, exec and image rollout all sit behind admin-only routers.
   const canWrite = !auth.enabled || auth.roles.includes("dashboard-admin");
   const [nfStatus, setNfStatus] = useState(null);
-  const [error, setError] = useState("");
+  const lastPollErrorRef = useRef(null);
   const [expandedPod, setExpandedPod] = useState(null);
   const [restartingDeps, setRestartingDeps] = useState(new Set());
   const [amfCniAlert, setAmfCniAlert] = useState(null);
@@ -33,6 +35,7 @@ export default function CorePage({ onOpenLogs, onOpenTerminal, onOpenIperf3Logs,
     try {
       const data = await getNfStatus();
       setNfStatus(data);
+      lastPollErrorRef.current = null;
 
       const allRunning = [
         ...(data.control_plane || []),
@@ -51,9 +54,17 @@ export default function CorePage({ onOpenLogs, onOpenTerminal, onOpenIperf3Logs,
         return next;
       });
     } catch (err) {
-      setError(String(err.message || err));
+      // The k3s apiserver on the single-master node can 503 for a few
+      // seconds during a rollout's pod churn; the next 3s poll usually
+      // recovers on its own. Toast once per distinct failure, not every
+      // tick, so a sustained outage doesn't spam the stack.
+      const msg = String(err.message || err);
+      if (lastPollErrorRef.current !== msg) {
+        lastPollErrorRef.current = msg;
+        toast.error(msg);
+      }
     }
-  }, []);
+  }, [toast]);
 
   useEffect(() => {
     refresh();
@@ -119,14 +130,13 @@ export default function CorePage({ onOpenLogs, onOpenTerminal, onOpenIperf3Logs,
       setTimeout(refresh, 1000);
       setTimeout(refreshAmfAlert, 1200);
     } catch (err) {
-      setError(String(err?.message || err));
+      toast.error(String(err?.message || err));
     }
   }
 
   async function handleRestart(nf) {
     if (!nf.deployment) return;
     try {
-      setError("");
       setRestartingDeps((prev) => new Set(prev).add(nf.deployment));
       await restartDeployment("5g", nf.deployment);
       setTimeout(refresh, 1500);
@@ -136,7 +146,7 @@ export default function CorePage({ onOpenLogs, onOpenTerminal, onOpenIperf3Logs,
         next.delete(nf.deployment);
         return next;
       });
-      setError(String(err.message || err));
+      toast.error(String(err.message || err));
     }
   }
 
@@ -242,19 +252,6 @@ export default function CorePage({ onOpenLogs, onOpenTerminal, onOpenIperf3Logs,
             className="rounded bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-500 transition-colors"
           >
             Manage
-          </button>
-        </div>
-      )}
-
-      {error && (
-        <div className="mb-4 flex items-center justify-between rounded border border-rose-700 bg-rose-950/50 p-3 text-sm text-rose-300">
-          <span>{error}</span>
-          <button
-            type="button"
-            onClick={() => setError("")}
-            className="ml-3 text-rose-400 hover:text-white"
-          >
-            &#x2715;
           </button>
         </div>
       )}

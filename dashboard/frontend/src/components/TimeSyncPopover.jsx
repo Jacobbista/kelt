@@ -1,4 +1,5 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useLayoutEffect, useState, useRef } from "react";
+import { createPortal } from "react-dom";
 import { getTimeSync, forceTimeSync } from "../api";
 
 const VM_ORDER = ["ansible", "master", "worker", "edge"];
@@ -43,7 +44,7 @@ function SkeletonRow() {
   );
 }
 
-export default function TimeSyncPopover({ onClose }) {
+export default function TimeSyncPopover({ onClose, anchorRef }) {
   const [data, setData] = useState(cachedData);
   const [fetchedAt, setFetchedAt] = useState(cachedAt || Date.now());
   const [loading, setLoading] = useState(!cachedData);
@@ -51,6 +52,18 @@ export default function TimeSyncPopover({ onClose }) {
   const [now, setNow] = useState(Date.now());
   const autoSyncedRef = useRef(false);
   const ref = useRef(null);
+  const [pos, setPos] = useState(null);
+
+  // The sidebar's page-fade animation on every route gives its content its
+  // own stacking context (fill-mode: both never lets go), which then beats
+  // the sidebar's plain `position: fixed` on DOM order alone — same root
+  // cause as the Modal in ui.jsx, same fix: portal past it and position from
+  // the trigger's own on-screen rect instead of an ancestor-relative offset.
+  useLayoutEffect(() => {
+    if (!anchorRef?.current) return;
+    const r = anchorRef.current.getBoundingClientRect();
+    setPos({ left: r.left, bottom: window.innerHeight - r.top + 4 });
+  }, [anchorRef]);
 
   // Tick every second so displayed times advance live
   useEffect(() => {
@@ -107,18 +120,24 @@ export default function TimeSyncPopover({ onClose }) {
 
   useEffect(() => {
     function handleClick(e) {
-      if (ref.current && !ref.current.contains(e.target)) onClose();
+      if (ref.current?.contains(e.target)) return;
+      // The trigger button's own onClick already toggles open/closed; closing
+      // here too on the same mousedown just reopens it on the click that follows.
+      if (anchorRef?.current?.contains(e.target)) return;
+      onClose();
     }
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
-  }, [onClose]);
+  }, [onClose, anchorRef]);
 
   const busy = loading || syncing;
+  if (!pos) return null; // first-frame guard until the anchor rect is measured
 
-  return (
+  return createPortal(
     <div
       ref={ref}
-      className="absolute bottom-12 left-2 z-50 w-72 rounded-lg border border-slate-700 bg-slate-900 shadow-xl p-3"
+      style={{ left: pos.left, bottom: pos.bottom }}
+      className="fixed z-50 w-72 rounded-lg border border-slate-700 bg-slate-900 shadow-xl p-3"
     >
       <div className="flex items-center justify-between mb-2">
         <h4 className="text-xs font-medium text-slate-300">Cluster Time Sync</h4>
@@ -190,6 +209,7 @@ export default function TimeSyncPopover({ onClose }) {
           </span>
         </div>
       )}
-    </div>
+    </div>,
+    document.body
   );
 }

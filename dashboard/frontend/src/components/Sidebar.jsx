@@ -66,6 +66,7 @@ export default function Sidebar({ onNavigate, runtime, serverTime }) {
   const confirm = useConfirm();
   const { available } = useUpdates();
   const [showSync, setShowSync] = useState(false);
+  const syncTriggerRef = useRef(null);
   const [loggingOut, setLoggingOut] = useState(false);
   const clockStr = useServerClock(serverTime);
   const toggleSync = useCallback(() => setShowSync((v) => !v), []);
@@ -147,6 +148,7 @@ export default function Sidebar({ onNavigate, runtime, serverTime }) {
 
       <div className="relative border-t border-slate-800 px-3 py-3">
         <button
+          ref={syncTriggerRef}
           type="button"
           onClick={toggleSync}
           className="mb-2 flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition-colors"
@@ -159,7 +161,7 @@ export default function Sidebar({ onNavigate, runtime, serverTime }) {
           <span className="text-[9px] text-slate-600">{_tzAbbr}</span>
         </button>
 
-        {showSync && <TimeSyncPopover onClose={closeSync} />}
+        {showSync && <TimeSyncPopover onClose={closeSync} anchorRef={syncTriggerRef} />}
 
         <a
           href="http://192.168.56.11:30300"
