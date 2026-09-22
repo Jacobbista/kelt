@@ -150,3 +150,74 @@ export const IconDisk = (p) => (
     <path d="M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6" />
   </Svg>
 );
+
+// Sidebar navigation set (same lucide-style grammar as above, one per page).
+export const IconDashboard = (p) => (
+  <Svg {...p}>
+    <rect x="3" y="3" width="7" height="9" rx="1" />
+    <rect x="14" y="3" width="7" height="5" rx="1" />
+    <rect x="14" y="12" width="7" height="9" rx="1" />
+    <rect x="3" y="16" width="7" height="5" rx="1" />
+  </Svg>
+);
+export const IconLayers = (p) => (
+  <Svg {...p}>
+    <path d="M12 2 2 7l10 5 10-5-10-5z" />
+    <path d="m2 17 10 5 10-5" />
+    <path d="m2 12 10 5 10-5" />
+  </Svg>
+);
+export const IconHexagon = (p) => (
+  <Svg {...p}>
+    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+  </Svg>
+);
+export const IconRadio = (p) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="2" />
+    <path d="M4.93 19.07a10 10 0 0 1 0-14.14" />
+    <path d="M7.76 16.24a6 6 0 0 1 0-8.49" />
+    <path d="M16.24 7.76a6 6 0 0 1 0 8.49" />
+    <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+  </Svg>
+);
+export const IconSim = (p) => (
+  <Svg {...p}>
+    <path d="M6 2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" />
+    <rect x="8" y="11" width="8" height="7" rx="1" />
+    <path d="M12 11v7" />
+  </Svg>
+);
+export const IconPhone = (p) => (
+  <Svg {...p}>
+    <rect x="6" y="2" width="12" height="20" rx="2" />
+    <path d="M11 18h2" />
+  </Svg>
+);
+export const IconStethoscope = (p) => (
+  <Svg {...p}>
+    <path d="M4.8 2.3A.3.3 0 1 0 5 2H4a2 2 0 0 0-2 2v5a6 6 0 0 0 6 6 6 6 0 0 0 6-6V4a2 2 0 0 0-2-2h-1a.2.2 0 1 0 .3.3" />
+    <path d="M8 15v1a6 6 0 0 0 6 6 6 6 0 0 0 6-6v-4" />
+    <circle cx="20" cy="10" r="2" />
+  </Svg>
+);
+export const IconBars = (p) => (
+  <Svg {...p}>
+    <path d="M3 3v18h18" />
+    <rect x="7" y="10" width="3" height="8" rx="0.5" />
+    <rect x="12" y="6" width="3" height="12" rx="0.5" />
+    <rect x="17" y="13" width="3" height="5" rx="0.5" />
+  </Svg>
+);
+export const IconSliders = (p) => (
+  <Svg {...p}>
+    <path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3" />
+    <path d="M1 14h6M9 8h6M17 16h6" />
+  </Svg>
+);
+export const IconBook = (p) => (
+  <Svg {...p}>
+    <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
+    <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+  </Svg>
+);

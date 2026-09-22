@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import { IconDashboard, IconLayers, IconHexagon, IconNetwork, IconRadio, IconSim, IconPhone, IconStethoscope, IconBars, IconGrid, IconSliders, IconBook } from "./icons";
 import { useLocation } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { useConfirm } from "../context/ConfirmContext";
@@ -8,25 +9,25 @@ import DevModeIndicator from "./DevModeIndicator";
 import { env } from "../runtime-env";
 
 const NAV_ITEMS = [
-  { id: "overview",      label: "Overview",    icon: "\u25A3", path: "/"           },
-  { id: "kubernetes",    label: "Kubernetes",  icon: "\u2638", path: "/kubernetes" },
-  { id: "core",          label: "5G Core",     icon: "\u2B22", path: "/core"       },
-  { id: "topology",      label: "Topology",    icon: "\u2B95", path: "/topology"   },
+  { id: "overview",      label: "Overview",    icon: IconDashboard, path: "/"           },
+  { id: "kubernetes",    label: "Kubernetes",  icon: IconLayers, path: "/kubernetes" },
+  { id: "core",          label: "5G Core",     icon: IconHexagon, path: "/core"       },
+  { id: "topology",      label: "Topology",    icon: IconNetwork, path: "/topology"   },
   // RAN and Subscribers are backed by admin-only routers end to end (mode
   // switching, K/OPc). Showing them to a viewer only produced 403 banners.
-  { id: "ran",           label: "RAN",         icon: "\u2699", path: "/ran",        adminOnly: true },
-  { id: "subscribers",   label: "Subscribers", icon: "\u2263", path: "/subscribers", adminOnly: true },
-  { id: "ue-monitoring", label: "UE Monitor",  icon: "\u25C9", path: "/ue-monitor" },
-  { id: "diagnostics",   label: "Diagnostics", icon: "\u2295", path: "/diagnostics"},
-  { id: "metrics",       label: "Metrics",     icon: "\u2261", path: "/metrics"    },
+  { id: "ran",           label: "RAN",         icon: IconRadio, path: "/ran",        adminOnly: true },
+  { id: "subscribers",   label: "Subscribers", icon: IconSim, path: "/subscribers", adminOnly: true },
+  { id: "ue-monitoring", label: "UE Monitor",  icon: IconPhone, path: "/ue-monitor" },
+  { id: "diagnostics",   label: "Diagnostics", icon: IconStethoscope, path: "/diagnostics"},
+  { id: "metrics",       label: "Metrics",     icon: IconBars, path: "/metrics"    },
   // Services hub (positioning/CAMARA now; NEF/MEC later). Visible to viewers
   // (read-only); write controls inside each page are gated on dashboard-admin.
-  { id: "services",      label: "Services",    icon: "\u25a6", path: "/services"   },
+  { id: "services",      label: "Services",    icon: IconGrid, path: "/services"   },
   // Settings (admin only): identity reference + front-door branding as tabs, so
   // these config surfaces share one sidebar entry instead of two.
-  { id: "settings",      label: "Settings",    icon: "\uD83C\uDF9B\uFE0F", path: "/settings",   adminOnly: true },
+  { id: "settings",      label: "Settings",    icon: IconSliders, path: "/settings",   adminOnly: true },
   // Manual + Learn: docs links into the live site + short in-app concept notes.
-  { id: "manual",        label: "Manual",      icon: "\u24D8", path: "/manual"     },
+  { id: "manual",        label: "Manual",      icon: IconBook, path: "/manual"     },
 ];
 
 const _localFmt = new Intl.DateTimeFormat(undefined, {
@@ -132,7 +133,7 @@ export default function Sidebar({ onNavigate, runtime, serverTime }) {
                 : "text-slate-300 hover:bg-slate-800 hover:text-white"
             }`}
           >
-            <span className="text-base">{item.icon}</span>
+            <item.icon size={18} className="shrink-0 text-current opacity-90" />
             {item.label}
             {/* Stays until the update is applied: a dot that clears itself would
                 be a notification, and this is a state. */}
