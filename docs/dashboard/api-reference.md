@@ -135,8 +135,6 @@ See [RAN Modes](../deployment/ran-modes-dashboard.md) for the full workflow.
 | PUT | `/api/v1/northbound/assets` | ✅ Admin | Replace the Asset Map (`PUT /assets`); Bearer forwarded. The engine broadcasts each device from its adapter's capability, so onboarded assets go live without a track-list sync |
 | GET | `/api/v1/northbound/assets/discoverable` | ✅ Admin | Gateway discoverable candidates (not yet onboarded) |
 | GET | `/api/v1/northbound/assets/{asset_id}/details` | ✅ Admin | Gateway per-asset details |
-| PUT | `/api/v1/northbound/fusion` | ✅ Admin | Update engine fusion config. Body: `{strategy?, compare?, device_map?}` |
-| POST | `/api/v1/northbound/managed/{deployment}/image` | ✅ Admin | Retarget a managed deployment (gateway/engine/demo) to a new image. Body: `{image}` |
 
 ---
 

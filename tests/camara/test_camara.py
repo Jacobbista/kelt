@@ -159,8 +159,8 @@ class CamaraTestSuite:
             self.logger.error(f"/capabilities HTTP {r.status_code}: {r.text[:200]}")
             return False
         caps = r.json()
-        if "mock" not in caps.get("sources", []):
-            self.logger.error(f"/capabilities should aggregate the mock adapter; got sources={caps.get('sources')}")
+        if "synthetic" not in caps.get("sources", []):
+            self.logger.error(f"/capabilities should aggregate the synthetic adapter; got sources={caps.get('sources')}")
             return False
         self.logger.success(f"/capabilities profile={caps.get('profile')} sources={caps.get('sources')} kinds={caps.get('kinds')}")
         return True
@@ -196,7 +196,7 @@ class CamaraTestSuite:
         if r.status_code != 200:
             self.logger.error(f"/assets HTTP {r.status_code}: {r.text[:200]}")
             return False
-        ids = [a.get("asset_id") for a in (r.json() or {}).get("assets", [])]
+        ids = [a.get("assetId") for a in (r.json() or {}).get("assets", [])]
         if self.demo_asset_id not in ids:
             self.logger.error(f"/assets missing seed {self.demo_asset_id}; got {ids}")
             return False
@@ -221,19 +221,19 @@ class CamaraTestSuite:
         if r.status_code != 200:
             self.logger.error(f"consumer /assets HTTP {r.status_code}: {r.text[:200]}")
             return False
-        if self.demo_asset_id not in [a.get("asset_id") for a in (r.json() or {}).get("assets", [])]:
+        if self.demo_asset_id not in [a.get("assetId") for a in (r.json() or {}).get("assets", [])]:
             self.logger.error(f"consumer (org=demo) should see {self.demo_asset_id}")
             return False
 
         cur = requests.get(f"{self.gw}/assets", headers=self._bearer(op), timeout=self.timeout)
-        original = cur.json() if cur.status_code == 200 else {"version": 2, "assets": []}
+        original = cur.json() if cur.status_code == 200 else {"version": 4, "assets": []}
         foreign_id = "zzz-isolation-test"
         modified = copy.deepcopy(original)
         modified.setdefault("assets", [])
-        modified["assets"] = [a for a in modified["assets"] if a.get("asset_id") != foreign_id]
+        modified["assets"] = [a for a in modified["assets"] if a.get("assetId") != foreign_id]
         modified["assets"].append({
-            "asset_id": foreign_id, "positioning_id": foreign_id,
-            "kind": "asset", "source": "mock", "org": "zzz-foreign", "label": "isolation test",
+            "assetId": foreign_id, "kind": "asset", "org": "zzz-foreign", "label": "isolation test",
+            "capabilities": [{"source": "synthetic", "positioningId": foreign_id}],
         })
         try:
             put = requests.put(
@@ -242,11 +242,11 @@ class CamaraTestSuite:
             if put.status_code not in (200, 204):
                 self.logger.error(f"could not stage foreign asset: HTTP {put.status_code}: {put.text[:200]}")
                 return False
-            seen = [a.get("asset_id") for a in (requests.get(f"{self.gw}/assets", headers=self._bearer(consumer), timeout=self.timeout).json() or {}).get("assets", [])]
+            seen = [a.get("assetId") for a in (requests.get(f"{self.gw}/assets", headers=self._bearer(consumer), timeout=self.timeout).json() or {}).get("assets", [])]
             if foreign_id in seen:
                 self.logger.error(f"ISOLATION LEAK: consumer (org=demo) sees foreign-org asset {foreign_id}; got {seen}")
                 return False
-            op_seen = [a.get("asset_id") for a in (requests.get(f"{self.gw}/assets", headers=self._bearer(op), timeout=self.timeout).json() or {}).get("assets", [])]
+            op_seen = [a.get("assetId") for a in (requests.get(f"{self.gw}/assets", headers=self._bearer(op), timeout=self.timeout).json() or {}).get("assets", [])]
             if foreign_id not in op_seen:
                 self.logger.error(f"operator (org-less bypass) should see all assets incl {foreign_id}; got {op_seen}")
                 return False

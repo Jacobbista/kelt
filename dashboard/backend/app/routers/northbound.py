@@ -3,7 +3,7 @@
 Two routers share the /api/v1/northbound prefix:
   - read_router  : GET inventory/adapters/contract     -> included under _viewer
   - write_router : adapter registry, deploy-from-image,
-                   fusion config, managed image rollout -> included under _admin
+                   service config through its contract -> included under _admin
 
 The split mirrors the role model in docs/security/iam.md (GET = viewer+admin,
 writes = admin only) at router-include time in app/main.py.
@@ -22,11 +22,10 @@ from app.config import settings
 from app.models import (
     AdapterUpgradeRequest,
     AssetStoreRequest,
-    CoreImageRequest,
     DeployImageRequest,
-    FusionConfigPayload,
     ServiceConfigRequest,
     ServiceFileRequest,
+    ServiceBindingRequest,
     WorkloadDeployRequest,
 )
 from app.services.audit import write_audit
@@ -110,9 +109,17 @@ def versions(nb: NorthboundService = Depends(_get_nb)) -> dict[str, Any]:
 @read_router.get("/adapters")
 def list_adapters(nb: NorthboundService = Depends(_get_nb)) -> list[dict[str, Any]]:
     # Live registry from the engine: entries carry mixed-typed fields
-    # (last_seen_s_ago float, fail_count int, in_cooldown bool), so the value type
+    # (lastSeenSAgo float, failCount int, inCooldown bool), so the value type
     # is Any, not str.
     return nb.list_adapters()
+
+
+@read_router.get("/log-health")
+def log_health(nb: NorthboundService = Depends(_get_nb)) -> dict[str, Any]:
+    # Per deployment name: {has_errors, sample} when its pod's recent log tail
+    # matches an error keyword. Poll this far slower than the rest of the
+    # console (real per-pod log reads); see log_health()'s own docstring.
+    return nb.log_health()
 
 
 @read_router.get("/contract")
@@ -221,6 +228,43 @@ def discover_raw(
         raise HTTPException(status_code=exc.status, detail=exc.detail[:300])
 
 
+# JSON Schema of an adapter's mapping document (proxied /contract/schema), so the guided
+# mapping builder reads the grammar at runtime. Admin-only, same as discover-raw.
+@write_router.get("/services/{name}/contract-schema")
+def contract_schema(
+    name: str,
+    nb: NorthboundService = Depends(_get_nb),
+) -> dict[str, Any]:
+    try:
+        return nb.contract_schema(name)
+    except GatewayError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail[:300])
+
+
+# The gateway's published core diagnostics vocabulary (no-auth contract). The builder
+# reads the core targets/units/tiers from here instead of hardcoding them.
+@write_router.get("/vocabulary/diagnostics")
+def diagnostics_vocabulary(
+    nb: NorthboundService = Depends(_get_nb),
+) -> dict[str, Any]:
+    try:
+        return nb.diagnostics_vocabulary()
+    except GatewayError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail[:300])
+
+
+# The gateway's published accuracy-class bands (no-auth contract, 0.17.0+); the
+# capabilities editor offers accuracy_class from here.
+@write_router.get("/vocabulary/accuracy-classes")
+def accuracy_class_vocabulary(
+    nb: NorthboundService = Depends(_get_nb),
+) -> dict[str, Any]:
+    try:
+        return nb.accuracy_class_vocabulary()
+    except GatewayError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail[:300])
+
+
 @write_router.put("/assets")
 def put_assets(
     body: AssetStoreRequest,
@@ -285,7 +329,6 @@ def deploy_image(
         "name": req.name,
         "image": req.image,
         "port": req.port,
-        "kind": req.kind,
         "pull_secret": bool(req.image_pull_secret),
     })
     return result
@@ -337,6 +380,23 @@ def apply_service_config(
     return result
 
 
+@write_router.put("/bindings/{service}")
+def set_service_binding(
+    service: str,
+    req: ServiceBindingRequest,
+    nb: NorthboundService = Depends(_get_nb),
+) -> dict[str, Any]:
+    # One runtime choice the adapter image declares in its /contract (a list plus
+    # the active value), written through the adapter's own PUT /bindings. Effective
+    # on the next scan, no restart; the previous value is the rollback.
+    try:
+        result = _gateway_call(lambda: nb.set_binding(service, req.key, req.value))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    write_audit("northbound.binding.set", {"service": service, "key": req.key, "value": req.value})
+    return result
+
+
 @write_router.put("/files/{service}")
 def apply_service_file(
     service: str,
@@ -351,28 +411,4 @@ def apply_service_file(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     write_audit("northbound.file.apply", {"service": service, "path": req.path})
-    return result
-
-
-@write_router.put("/fusion")
-def set_fusion(
-    payload: FusionConfigPayload,
-    nb: NorthboundService = Depends(_get_nb),
-) -> dict[str, Any]:
-    result = nb.set_fusion(payload)
-    write_audit("northbound.fusion", payload.model_dump(exclude_none=True))
-    return result
-
-
-@write_router.post("/managed/{deployment}/image")
-def set_managed_image(
-    deployment: str,
-    req: CoreImageRequest,
-    nb: NorthboundService = Depends(_get_nb),
-) -> dict[str, Any]:
-    try:
-        result = nb.set_managed_image(deployment, req.image)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    write_audit("northbound.managed.image", {"deployment": deployment, "image": req.image})
     return result

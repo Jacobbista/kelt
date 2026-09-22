@@ -47,16 +47,49 @@
   until: prepull_synthetic.rc == 0
   failed_when: false   # best-effort warm-up; Deployment pulls on demand (no hard-fail on a registry/DNS blip)
 
-- name: Apply positioning-config ConfigMap
+- name: Apply positioning-engine-wiring ConfigMap (role-owned, rewritten every run)
   kubernetes.core.k8s:
     state: present
     apply: true
     force: true
     kubeconfig: "{{ kubeconfig_path }}"
-    definition: "{{ lookup('template', role_path + '/templates/positioning-config.yaml.j2') | from_yaml }}"
+    definition: "{{ lookup('template', role_path + '/templates/positioning-engine-wiring.yaml.j2') | from_yaml }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
   register: pos_config_apply
+
+- name: Retire the pre-split positioning-config ConfigMap
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: ConfigMap
+    name: positioning-config
+    namespace: "{{ positioning_namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Look up the operator ConfigMap positioning-engine-config
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ConfigMap
+    name: positioning-engine-config
+    namespace: "{{ positioning_namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  register: positioning_engine_config_cm
+
+# Seeded once: from then on the dashboard owns it (Configure form), so a re-run
+# must not put the operator's fusion settings back to the defaults.
+- name: Seed positioning-engine-config ConfigMap (operator-owned after the first run)
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/positioning-engine-config.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: positioning_engine_config_cm.resources | length == 0
 
 # Engine-owned blueprint store (v0.5.0): only the engine mounts this PVC (RW at
 # /app/data). The editor PUTs and consumers GET the blueprint over HTTP, so there

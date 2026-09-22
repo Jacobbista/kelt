@@ -5,6 +5,10 @@ metadata:
   namespace: {{ positioning_namespace }}
   labels:
     app: placement-editor
+    kelt.io/role: tool
+  annotations:
+    kelt.io/subtitle: "blueprint editor"
+    kelt.io/description: "operator blueprint + calibration"
 spec:
   replicas: 1
   selector:

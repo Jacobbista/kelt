@@ -16,7 +16,7 @@ positioning_blueprint_pvc_size: "100Mi"
 
 # v0.6.0: adapters SELF-REGISTER with the engine (POST /adapters + heartbeat); the
 # engine is the registry authority. The baseline synthetic adapter self-registers
-# (see its deployment env), so no static ADAPTER_URLS is rendered into positioning-config.
+# (see its deployment env), so no static ADAPTER_URLS is rendered into positioning-engine-wiring.
 # This var is an OPTIONAL cold-start seed (engine reads it once on an empty
 # registry) for off-cluster adapters that cannot self-register; empty by default.
 # Real cluster adapters (wifi-adapter, vendor-adapter) self-register when deployed
@@ -47,6 +47,10 @@ engine_websocket_interval_ms: 500
 # first-class synthetic source, not a mock). Room bounds come from the floor_*
 # dims below. Own release-tag env var; baseline from all.yml.
 synthetic_adapter_image: "{{ northbound_image_registry }}/{{ northbound_image_names.synthetic_adapter }}:{{ lookup('ansible.builtin.env', 'SYNTHETIC_ADAPTER_TAG') | default(northbound_effective_tags['synthetic_adapter'] | default(northbound_image_tags.synthetic_adapter, true), true) }}"
+# Whether a synthetic device reports only after an operator places it on the
+# floor plan (and stops when the placement is removed). Off, every device walks
+# from boot. The adapter serves no /contract yet, so this is the only knob.
+synthetic_spawn_required: true
 
 # Floor plan defaults (passed to the engine for the synthetic-adapter bounds and to
 # the demo for 3D rendering). Override at deploy time for real room dimensions:

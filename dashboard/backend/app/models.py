@@ -14,6 +14,13 @@ class PodSummary(BaseModel):
     deployment: str | None = None
     containers: list[str] = Field(default_factory=list)
     labels: dict[str, str] = Field(default_factory=dict)
+    # Container truth, not just the pod phase: a crashlooping pod stays phase=Running,
+    # so `ready` and `waiting_reason` are what actually distinguishes healthy from stuck.
+    # `image` is the image the pod really runs, which can differ from the deployment spec
+    # during a failed rollout (old pod still serving while the new one crashes).
+    ready: bool = False
+    waiting_reason: str | None = None
+    image: str | None = None
 
 
 class NodeSummary(BaseModel):
@@ -124,25 +131,14 @@ class DeployEnvVar(BaseModel):
 class DeployImageRequest(BaseModel):
     # Deploy a custom adapter image into the positioning namespace. v0.6.0: the
     # adapter self-registers with the engine (the deploy injects the registration
-    # env), so there is no manual register step. `kind` sets ADAPTER_KIND (the
-    # positioning modality the engine/demo show, e.g. wifi/uwb/mock).
+    # env), so there is no manual register step. What the adapter IS (its family,
+    # its source) is declared by the image and by ADAPTER_CAPABILITIES afterwards,
+    # never chosen here (ADAPTER_KIND was removed upstream in 0.17.1).
     name: str
     image: str
     port: int = Field(default=8080, ge=1, le=65535)
     env: list[DeployEnvVar] = Field(default_factory=list)
     image_pull_secret: str | None = None  # name of a pre-created dockerconfigjson Secret
-    kind: str = ""  # ADAPTER_KIND override; empty keeps the image's own default
-
-
-class FusionConfigPayload(BaseModel):
-    strategy: str | None = None
-    compare: str | None = None
-    device_map: str | None = None
-
-
-class CoreImageRequest(BaseModel):
-    # Retarget a managed northbound deployment (gateway/engine/demo) to a new image.
-    image: str
 
 
 class WorkloadDeployRequest(BaseModel):
@@ -185,6 +181,13 @@ class ServiceConfigRequest(BaseModel):
     # name not in the contract. A value of null UNSETS the var (deletes the key),
     # e.g. clearing an inline override so a file-backed value takes effect.
     values: dict[str, str | None] = Field(default_factory=dict)
+
+
+class ServiceBindingRequest(BaseModel):
+    # One runtime choice on an adapter (e.g. motion_model), from the set its
+    # /contract declares. The backend checks the set before calling the pod.
+    key: str
+    value: str
 
 
 class ServiceFileRequest(BaseModel):

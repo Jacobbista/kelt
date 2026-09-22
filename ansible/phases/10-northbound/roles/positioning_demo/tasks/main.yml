@@ -14,15 +14,63 @@
   until: prepull_demo.rc == 0
   failed_when: false   # best-effort warm-up; Deployment pulls on demand (no hard-fail on a registry/DNS blip)
 
-- name: Apply location-app-config ConfigMap (browser env for envFrom)
+- name: Apply location-app-wiring ConfigMap (role-owned, rewritten every run)
   kubernetes.core.k8s:
     state: present
     apply: true
     force: true
     kubeconfig: "{{ kubeconfig_path }}"
-    definition: "{{ lookup('template', role_path + '/templates/demo-config.yaml.j2') | from_yaml }}"
+    definition: "{{ lookup('template', role_path + '/templates/location-app-wiring.yaml.j2') | from_yaml }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
+
+- name: Look up the operator ConfigMap location-app-config
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ConfigMap
+    name: location-app-config
+    namespace: "{{ demo_namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  register: location_app_config_cm
+
+# Before the wiring/operator split this name held the whole env. Wiring keys left
+# in it would override location-app-wiring (a later envFrom source wins) with
+# stale values on a base-domain change, so strip them once (merge patch: null
+# deletes the key).
+- name: Strip wiring keys from a pre-split location-app-config
+  kubernetes.core.k8s:
+    state: present
+    merge_type: merge
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: location-app-config
+        namespace: "{{ demo_namespace }}"
+      data:
+        VITE_CAMARA_API_BASE: null
+        VITE_KEYCLOAK_URL: null
+        VITE_KEYCLOAK_REALM: null
+        VITE_KEYCLOAK_CLIENT_ID: null
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when:
+    - location_app_config_cm.resources | length > 0
+    - "'VITE_KEYCLOAK_URL' in (location_app_config_cm.resources[0].data | default({}))"
+
+# Seeded once: from then on the dashboard owns it (Configure form), so a re-run
+# must not put the operator's site parameters back to the defaults.
+- name: Seed location-app-config ConfigMap (operator-owned after the first run)
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/location-app-config.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: location_app_config_cm.resources | length == 0
 
 - name: Apply location-app-nginx ConfigMap (reverse-proxy + /contract route)
   kubernetes.core.k8s:

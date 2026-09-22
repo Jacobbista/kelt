@@ -22,6 +22,7 @@ import KubernetesPage from "./pages/KubernetesPage";
 import LoggedOutPage from "./pages/LoggedOutPage";
 import MetricsPage from "./pages/MetricsPage";
 import NorthboundPage from "./pages/NorthboundPage";
+import NorthboundAssetsPage from "./pages/NorthboundAssetsPage";
 import OverviewPage from "./pages/OverviewPage";
 import ServicesPage from "./pages/ServicesPage";
 import CustomWorkloadPage from "./pages/CustomWorkloadPage";
@@ -192,6 +193,7 @@ function AppInner() {
         <Route path="/metrics" element={<MetricsPage />} />
         <Route path="/services" element={<ServicesPage />} />
         <Route path="/services/northbound" element={<NorthboundPage />} />
+        <Route path="/services/northbound/assets" element={<AdminOnly><NorthboundAssetsPage /></AdminOnly>} />
         <Route path="/services/custom" element={<CustomWorkloadPage />} />
         <Route path="/services/apps" element={<AppsPage />} />
         <Route path="/northbound" element={<Navigate to="/services/northbound" replace />} />

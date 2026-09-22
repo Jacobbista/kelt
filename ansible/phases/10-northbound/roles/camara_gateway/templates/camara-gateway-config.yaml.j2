@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: camara-gateway-config
+  namespace: {{ camara_namespace }}
+data:
+  # Operator settings, seeded once: after the first run the dashboard Configure
+  # form owns this ConfigMap and the role never rewrites it. Listed after the
+  # wiring ConfigMap in envFrom, so a key here wins.
+  # Internal URL of the catalog wifi-adapter; when set, the gateway proxies
+  # GET /anchors/calibration so the demo reads real per-AP RF. Empty disables it.
+  WIFI_ADAPTER_URL: "{{ camara_wifi_adapter_url }}"

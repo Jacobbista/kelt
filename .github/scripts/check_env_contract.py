@@ -17,18 +17,24 @@ from pathlib import Path
 
 import yaml
 
-# Service -> where we provide its env in this repo. `configmap` is the Jinja2
-# ConfigMap template whose `data:` keys we parse; `inline` lists keys provided
-# directly as Deployment env (not in the ConfigMap).
+# Service -> where we provide its env in this repo. `configmaps` are the Jinja2
+# ConfigMap templates whose `data:` keys we parse (the role-owned wiring plus the
+# operator seed); `inline` lists keys provided directly as Deployment env.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PHASES = REPO_ROOT / "ansible" / "phases"
 MAP = {
     "camara-gateway": {
-        "configmap": PHASES / "10-northbound/roles/camara_gateway/templates/camara-config.yaml.j2",
+        "configmaps": [
+            PHASES / "10-northbound/roles/camara_gateway/templates/camara-gateway-wiring.yaml.j2",
+            PHASES / "10-northbound/roles/camara_gateway/templates/camara-gateway-config.yaml.j2",
+        ],
         "inline": {"CAMARA_CLIENT_SECRET"},
     },
     "positioning-engine": {
-        "configmap": PHASES / "10-northbound/roles/positioning_engine/templates/positioning-config.yaml.j2",
+        "configmaps": [
+            PHASES / "10-northbound/roles/positioning_engine/templates/positioning-engine-wiring.yaml.j2",
+            PHASES / "10-northbound/roles/positioning_engine/templates/positioning-engine-config.yaml.j2",
+        ],
         "inline": set(),
     },
 }
@@ -75,11 +81,13 @@ def main() -> int:
         if not contract.exists():
             failures.append(f"{svc}: contract not found at {contract} (upstream layout changed?)")
             continue
-        template = where["configmap"]
-        if not template.exists():
-            failures.append(f"{svc}: testbed ConfigMap template not found at {template}")
+        missing_tpl = [t for t in where["configmaps"] if not t.exists()]
+        if missing_tpl:
+            failures.append(f"{svc}: testbed ConfigMap template not found at {missing_tpl}")
             continue
-        provided = configmap_keys(template) | where["inline"]
+        provided = set(where["inline"])
+        for template in where["configmaps"]:
+            provided |= configmap_keys(template)
         missing = [r for r in required_vars(contract) if r not in provided]
         if missing:
             failures.append(f"{svc}: ConfigMap missing required keys {missing} (provided: {sorted(provided)})")

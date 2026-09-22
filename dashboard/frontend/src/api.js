@@ -376,6 +376,9 @@ export const getNfUpdateStreamUrl = () => "/api/v1/nf/update/stream";
 // Northbound (positioning/CAMARA) service-management console
 export const getNorthboundServices = () => get("/api/v1/northbound/services");
 export const getNorthboundAdapters = () => get("/api/v1/northbound/adapters");
+// Per deployment name: {has_errors, sample}. Real per-pod log reads on the
+// backend; poll this far slower than the rest of the console.
+export const getNorthboundLogHealth = () => get("/api/v1/northbound/log-health");
 export const getNorthboundContract = () => get("/api/v1/northbound/contract");
 export const getNorthboundBindings = () => get("/api/v1/northbound/bindings");
 export const getNorthboundReadiness = () => get("/api/v1/northbound/readiness");
@@ -420,6 +423,8 @@ export const getNorthboundServiceConfig = (service) =>
   get(`/api/v1/northbound/config/${encodeURIComponent(service)}`);
 export const applyNorthboundServiceConfig = (service, values) =>
   put(`/api/v1/northbound/config/${encodeURIComponent(service)}`, { values });
+export const setNorthboundServiceBinding = (service, key, value) =>
+  put(`/api/v1/northbound/bindings/${encodeURIComponent(service)}`, { key, value });
 export const getNorthboundServiceFile = (service, path) =>
   get(`/api/v1/northbound/files/${encodeURIComponent(service)}?path=${encodeURIComponent(path)}`);
 export const applyNorthboundServiceFile = (service, path, content) =>
@@ -433,6 +438,16 @@ export const getNorthboundDiscoverable = () => get("/api/v1/northbound/assets/di
 // guided classify builder. Payload can carry vendor secrets — never persist client-side.
 export const getNorthboundDiscoverRaw = (service) =>
   get(`/api/v1/northbound/services/${encodeURIComponent(service)}/discover-raw`);
+// JSON Schema of an adapter's mapping document (proxied /contract/schema): the grammar
+// the guided mapping builder reads at runtime (PathSpec/ConstSpec, transforms, diagnostics).
+export const getNorthboundContractSchema = (service) =>
+  get(`/api/v1/northbound/services/${encodeURIComponent(service)}/contract-schema`);
+// The gateway's published core diagnostics vocabulary (targets/units/tiers). Read, not hardcoded.
+export const getNorthboundDiagnosticsVocabulary = () =>
+  get(`/api/v1/northbound/vocabulary/diagnostics`);
+// The gateway's published accuracy-class bands (sub-metre/metre/coarse + bounds). Read, not hardcoded.
+export const getNorthboundAccuracyClassVocabulary = () =>
+  get(`/api/v1/northbound/vocabulary/accuracy-classes`);
 export const getNorthboundAssetDetails = (id) =>
   get(`/api/v1/northbound/assets/${encodeURIComponent(id)}/details`);
 // Adapters self-register with the engine (v0.6.0); there is no manual register.
@@ -449,9 +464,6 @@ export const deployNorthboundImage = (body) => post("/api/v1/northbound/deploy",
 export const deployNorthboundWorkload = (body) => post("/api/v1/northbound/workloads", body);
 export const deleteNorthboundWorkload = (name) =>
   del(`/api/v1/northbound/workloads/${encodeURIComponent(name)}`);
-export const setNorthboundFusion = (body) => put("/api/v1/northbound/fusion", body);
-export const rolloutNorthboundManaged = (deployment, image) =>
-  post(`/api/v1/northbound/managed/${encodeURIComponent(deployment)}/image`, { image });
 
 // Edge apps platform (phase 12). GET viewer; deploy/delete admin + workload policy.
 export const getApps = () => get("/api/v1/apps");

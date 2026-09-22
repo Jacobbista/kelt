@@ -5,6 +5,10 @@ metadata:
   namespace: {{ demo_namespace }}
   labels:
     app: location-app
+    kelt.io/role: app
+  annotations:
+    kelt.io/subtitle: "consumer demo"
+    kelt.io/description: "3D asset-location view"
 spec:
   replicas: 1
   selector:
@@ -15,7 +19,7 @@ spec:
       labels:
         app: location-app
       annotations:
-        checksum/config: "{{ (lookup('template', role_path + '/templates/demo-config.yaml.j2') ~ lookup('template', role_path + '/templates/demo-nginx-configmap.yaml.j2')) | hash('sha256') }}"
+        checksum/wiring: "{{ (lookup('template', role_path + '/templates/location-app-wiring.yaml.j2') ~ lookup('template', role_path + '/templates/demo-nginx-configmap.yaml.j2')) | hash('sha256') }}"
     spec:
       nodeSelector:
         kubernetes.io/hostname: worker
@@ -30,7 +34,13 @@ spec:
               protocol: TCP
           # Browser config as pod env; the image entrypoint renders env-config.js
           # from it. optional so a degraded pod still boots and serves /contract.
+          # Order matters: a later source wins, so the operator ConfigMap overrides
+          # the wiring. location-app-wiring is rewritten by this role;
+          # location-app-config is written by the dashboard Configure form.
           envFrom:
+            - configMapRef:
+                name: location-app-wiring
+                optional: true
             - configMapRef:
                 name: location-app-config
                 optional: true

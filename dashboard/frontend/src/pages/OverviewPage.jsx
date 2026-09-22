@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Area, AreaChart, ResponsiveContainer } from "recharts";
-import { getClusterSummary, getMetricsOverview, getNfStatus, getNodeMetrics, getNodeMetricsRange } from "../api";
+import { useNavigate } from "react-router-dom";
+import { getApps, getClusterSummary, getMetricsOverview, getNfStatus, getNodeMetrics, getNodeMetricsRange, getNorthboundServices } from "../api";
 import Loader from "../components/Loader";
 import NodeCard from "../components/NodeCard";
 
@@ -56,6 +57,11 @@ export default function OverviewPage({ onNavigateToNf }) {
   const [cpuMini, setCpuMini] = useState([]);
   const [memMini, setMemMini] = useState([]);
   const [error, setError] = useState("");
+  // Optional layers: absent (not deployed, or the caller may not read them)
+  // simply hides the section, the overview never errors on them.
+  const [exposure, setExposure] = useState([]);
+  const [apps, setApps] = useState([]);
+  const navigate = useNavigate();
 
   async function refresh() {
     try {
@@ -63,6 +69,8 @@ export default function OverviewPage({ onNavigateToNf }) {
       const [c, nf] = await Promise.all([getClusterSummary(), getNfStatus()]);
       setCluster(c);
       setNfStatus(nf);
+      getNorthboundServices().then((r) => setExposure(r.services || [])).catch(() => setExposure([]));
+      getApps().then((r) => setApps(r.apps || [])).catch(() => setApps([]));
 
       const [mo, nm, range] = await Promise.all([
         getMetricsOverview().catch(() => null),
@@ -180,7 +188,74 @@ export default function OverviewPage({ onNavigateToNf }) {
           </button>
         ))}
       </div>
+
+      {exposure.length > 0 && (
+        <>
+          <h3 className="mb-3 mt-6 text-sm font-medium text-slate-400 uppercase tracking-wide">Exposure stack</h3>
+          <div className="grid grid-cols-4 gap-3 xl:grid-cols-6">
+            {exposure.map((svc) => (
+              <WorkloadCard
+                key={svc.name}
+                name={svc.name}
+                caption={svc.subtitle || svc.role}
+                pods={svc.pods}
+                replicas={svc.replicas}
+                readyReplicas={svc.ready_replicas}
+                onClick={() => navigate("/services")}
+              />
+            ))}
+          </div>
+        </>
+      )}
+
+      {apps.length > 0 && (
+        <>
+          <h3 className="mb-3 mt-6 text-sm font-medium text-slate-400 uppercase tracking-wide">Edge apps</h3>
+          <div className="grid grid-cols-4 gap-3 xl:grid-cols-6">
+            {apps.map((app) => (
+              <WorkloadCard
+                key={app.name}
+                name={app.name}
+                caption={[app.mec_attached ? `n6m ${app.mec_ip || ""}`.trim() : null, app.exposed ? "exposed" : null].filter(Boolean).join(" · ") || "internal"}
+                pods={app.pods}
+                replicas={app.replicas}
+                readyReplicas={app.ready_replicas}
+                onClick={() => navigate("/services/apps")}
+              />
+            ))}
+          </div>
+        </>
+      )}
     </div>
+  );
+}
+
+// One deployment as a card, in the same idiom as the network-function cards:
+// status dot from the first pod's phase, restarts flagged when recent, the node
+// line replaced by what the layer knows (role, n6m address, exposure).
+function WorkloadCard({ name, caption, pods, replicas, readyReplicas, onClick }) {
+  const pod = (pods || [])[0];
+  const phase = pod?.phase || (replicas === 0 ? "Scaled to 0" : "Pending");
+  const ready = replicas > 0 && readyReplicas === replicas;
+  const restarts = (pods || []).reduce((n, p) => n + (p.restarts || 0), 0);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="group rounded-lg border border-slate-700 bg-slate-900 p-3 text-left transition-colors hover:border-indigo-600/50 hover:bg-slate-800"
+    >
+      <div className="flex items-center gap-2">
+        <span className={`h-2 w-2 rounded-full ${replicas === 0 ? "bg-slate-500" : ready ? statusColor(phase) : "bg-amber-400 animate-pulse"}`} />
+        <span className="truncate text-xs font-semibold text-white">{name}</span>
+      </div>
+      <div className="mt-2 text-[10px] text-slate-500">
+        <span className={ready ? "text-emerald-400" : replicas === 0 ? "text-slate-500" : "text-amber-400"}>
+          {replicas === 0 ? "Scaled to 0" : ready ? "Running" : `${readyReplicas ?? 0}/${replicas} ready`}
+        </span>
+        {restarts > 0 && <span className="ml-2 text-slate-500">{restarts} restarts</span>}
+      </div>
+      <div className="mt-1 truncate text-[10px] text-slate-600 font-mono">{caption || ""}</div>
+    </button>
   );
 }
 

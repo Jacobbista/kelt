@@ -27,15 +27,48 @@
   until: prepull_camara.rc == 0
   failed_when: false   # best-effort warm-up; Deployment pulls on demand (no hard-fail on a registry/DNS blip)
 
-- name: Apply camara-config ConfigMap
+- name: Apply camara-gateway-wiring ConfigMap (role-owned, rewritten every run)
   kubernetes.core.k8s:
     state: present
     apply: true
     force: true
     kubeconfig: "{{ kubeconfig_path }}"
-    definition: "{{ lookup('template', role_path + '/templates/camara-config.yaml.j2') | from_yaml }}"
+    definition: "{{ lookup('template', role_path + '/templates/camara-gateway-wiring.yaml.j2') | from_yaml }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
+
+- name: Retire the pre-split camara-config ConfigMap
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: ConfigMap
+    name: camara-config
+    namespace: "{{ camara_namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Look up the operator ConfigMap camara-gateway-config
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ConfigMap
+    name: camara-gateway-config
+    namespace: "{{ camara_namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  register: camara_gateway_config_cm
+
+# Seeded once: from then on the dashboard owns it (Configure form), so a re-run
+# must not put the operator's settings back to the defaults.
+- name: Seed camara-gateway-config ConfigMap (operator-owned after the first run)
+  kubernetes.core.k8s:
+    state: present
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ lookup('template', role_path + '/templates/camara-gateway-config.yaml.j2') | from_yaml }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when: camara_gateway_config_cm.resources | length == 0
 
 - name: Apply camara-assets PVC (Asset Identity Map store)
   kubernetes.core.k8s:

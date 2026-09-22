@@ -1,9 +1,12 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: camara-config
+  name: camara-gateway-wiring
   namespace: {{ camara_namespace }}
 data:
+  # Deployment wiring: owned by this role, rewritten on every run from all.yml.
+  # Operator settings live in camara-gateway-config (seeded once, then owned by
+  # the dashboard). See docs/architecture/positioning-adapters.md.
   POSITIONING_ENGINE_URL: "{{ positioning_engine_url }}"
   KEYCLOAK_URL: "http://keycloak.{{ iam_namespace }}.svc.cluster.local:8080{{ keycloak_path_prefix }}"
   KEYCLOAK_REALM: "{{ keycloak_realm }}"
@@ -13,15 +16,9 @@ data:
   SKIP_AUTH: "{{ camara_skip_auth | string | lower }}"
   # Asset Identity Map: the gateway is the network authority (GET/PUT /assets),
   # persisting to the camara-assets PVC at /app/data. ASSET_SEED_FILE seeds the
-  # store once on first boot when it is empty (asset.schema.json v2). The store
-  # content is Tier-1 (org/asset inventory); the path itself is not sensitive.
-  # See docs/architecture/positioning-adapters.md.
+  # store once on first boot when it is empty. Both paths match the volume mounts.
   ASSET_STORE_FILE: "{{ camara_asset_store_file }}"
   ASSET_SEED_FILE: "{{ camara_asset_seed_file }}"
-  # Optional: internal URL of the catalog wifi-adapter. When set, the gateway
-  # proxies GET /anchors/calibration so the demo reads real per-AP RF.
-  # Empty disables the extension.
-  WIFI_ADAPTER_URL: "{{ camara_wifi_adapter_url }}"
   # Reachability metadata only (the gateway does not read this); the deploy portal
   # tracks the gateway public origin under this name.
   CAMARA_GATEWAY_EXTERNAL_ORIGIN: "{{ camara_gateway_external_origin }}"

@@ -220,6 +220,8 @@ The `flannel.1` VXLAN device present on every node belongs to the primary cluste
 
 VXLAN adds 50 bytes of header (14 outer Ethernet + 20 IP + 8 UDP + 8 VXLAN) to every frame, so overlay interfaces (`n1`…`n6m`) use `overlay_mtu: 1450` (defined in `ansible/group_vars/all.yml`) instead of the 1500 default of the underlying `eth1`.
 
+The host-only adapter between the host and the VMs is a separate case: its MSS is right, but the host's segmentation offload bypasses it on the first burst of a connection and the VM drops the oversized frame. See [../known-issues/virtualbox-hostonly-tso.md](../known-issues/virtualbox-hostonly-tso.md).
+
 The N6 cloud bridge (`br-n6c`) and NAD `n6c-net` use `n6_data_mtu: 1400` so host and pod TCP stacks on the decapsulated data network match the UPF `ogstun` MTU (`1400`). **N3 bridges stay at `overlay_mtu` (1450);** that outer budget must still fit GTP-U encapsulation on the RAN path.
 
 The user plane adds a second layer of encapsulation on top of that. Packets leaving the UPF on `ogstun` are re-encapsulated by `open5gs-upfd` in GTP-U (~40 bytes of outer IP + UDP + GTP header) before being emitted on `n3` towards the gNB. Without MTU adjustment the chain is:

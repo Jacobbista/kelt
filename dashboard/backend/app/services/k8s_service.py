@@ -527,6 +527,17 @@ class K8sService:
         restarts = sum((s.restart_count or 0) for s in statuses)
         containers = [c.name for c in (pod.spec.containers or [])]
 
+        # Container-level truth. A pod is ready only when every container is ready; a
+        # crashlooping container reports a waiting reason (CrashLoopBackOff) while the
+        # pod phase stays Running. `image` is the running image (status), not the spec.
+        ready = bool(statuses) and all(bool(s.ready) for s in statuses)
+        waiting_reason = next(
+            (s.state.waiting.reason for s in statuses
+             if s.state and s.state.waiting and s.state.waiting.reason),
+            None,
+        )
+        running_image = statuses[0].image if statuses else None
+
         phase = pod.status.phase
         if pod.metadata.deletion_timestamp is not None:
             phase = "Terminating"
@@ -549,6 +560,9 @@ class K8sService:
             deployment=deployment,
             containers=containers,
             labels=pod.metadata.labels or {},
+            ready=ready,
+            waiting_reason=waiting_reason,
+            image=running_image,
         )
 
     def get_pod_resource_metrics(self, namespace: str) -> dict[str, list]:

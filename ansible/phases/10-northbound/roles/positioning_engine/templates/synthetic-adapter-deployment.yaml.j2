@@ -5,6 +5,10 @@ metadata:
   namespace: {{ positioning_namespace }}
   labels:
     app: synthetic-adapter
+    kelt.io/role: adapter
+  annotations:
+    kelt.io/subtitle: "synthetic"
+    kelt.io/description: "engine-driven demo track"
 spec:
   replicas: 1
   selector:
@@ -39,14 +43,12 @@ spec:
               value: "synthetic"
             - name: ADAPTER_BASE_URL
               value: "http://synthetic-adapter.{{ positioning_namespace }}.svc.cluster.local:8080"
-            - name: ADAPTER_KIND
-              value: "synthetic"
             # v0.7.0 capabilities: the adapter advertises what it can locate so the
             # gateway aggregates it into GET /capabilities. JSON form of the adapter's
             # adapter.contract.yaml (kept in sync; `make positioning-check` asserts
             # they agree). See docs/architecture/positioning-adapters.md.
             - name: ADAPTER_CAPABILITIES
-              value: '{"source":"synthetic","kinds":["forklift","asset"],"frame":"local","streaming":false,"z":true,"accuracy_class":"coarse"}'
+              value: '{"source":"synthetic","kinds":["forklift","asset"],"frame":"local","streaming":false,"z":true,"devices":true,"placement":true,"accuracy_class":"metre"}'
             # v0.8.19 broadcast-from-capability: the engine derives the live broadcast set
             # (and each device's source) from the adapters' `devices` capability, not from
             # its own DEVICE_IDS (now seed-only, suppressed when any adapter advertises).
@@ -62,6 +64,8 @@ spec:
               value: "{{ floor_depth_m }}"
             - name: HEIGHT_M
               value: "{{ floor_height_m }}"
+            - name: SPAWN_REQUIRED
+              value: "{{ synthetic_spawn_required | bool | lower }}"
           readinessProbe:
             httpGet:
               path: /health

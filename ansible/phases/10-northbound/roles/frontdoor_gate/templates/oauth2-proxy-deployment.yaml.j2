@@ -9,6 +9,9 @@ metadata:
   namespace: {{ gate_namespace }}
   labels:
     app: oauth2-proxy-{{ gate_name }}
+    kelt.io/role: proxy
+  annotations:
+    kelt.io/subtitle: "auth for {{ gate_name }}"
 spec:
   replicas: 1
   selector:

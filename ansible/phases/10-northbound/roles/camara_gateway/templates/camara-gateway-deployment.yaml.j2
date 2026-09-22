@@ -5,6 +5,10 @@ metadata:
   namespace: {{ camara_namespace }}
   labels:
     app: camara-gateway
+    kelt.io/role: gateway
+  annotations:
+    kelt.io/subtitle: "CAMARA Location API"
+    kelt.io/description: "the consumer-facing API, org-scoped"
 spec:
   replicas: 1
   selector:
@@ -15,7 +19,7 @@ spec:
       labels:
         app: camara-gateway
       annotations:
-        checksum/config: "{{ lookup('template', role_path + '/templates/camara-config.yaml.j2') | hash('sha256') }}"
+        checksum/wiring: "{{ lookup('template', role_path + '/templates/camara-gateway-wiring.yaml.j2') | hash('sha256') }}"
         checksum/assets-seed: "{{ lookup('template', role_path + '/templates/camara-assets-seed-cm.yaml.j2') | hash('sha256') }}"
     spec:
       # Pinned to the worker: the gateway is the sole mounter of the RWO assets PVC
@@ -35,17 +39,23 @@ spec:
             - containerPort: 8080
               name: http
               protocol: TCP
-          # Single config mechanism: pod env from a ConfigMap (non-sensitive) and a
-          # Secret (sensitive), both optional so a degraded pod still boots and serves
-          # /contract. The dashboard guided setup writes these by the contract's
-          # `sensitive` flag. See docs/dashboard/modules.md (guided setup).
+          # Pod env from ConfigMaps + Secret, all optional so a degraded pod still
+          # boots and serves /contract. Order matters: a later source wins, so the
+          # operator ConfigMap overrides the wiring. camara-gateway-wiring is rewritten
+          # by this role; camara-gateway-config / -secrets are written by the dashboard
+          # Configure form. See docs/dashboard/modules.md (guided setup).
           envFrom:
             - configMapRef:
-                name: camara-config
+                name: camara-gateway-wiring
+                optional: true
+            - configMapRef:
+                name: camara-gateway-config
                 optional: true
             - secretRef:
                 name: camara-gateway-secrets
                 optional: true
+          # Deployment wiring: the confidential client secret from the operator's
+          # secrets file. Inline env beats envFrom, so Configure cannot shadow it.
           env:
             - name: CAMARA_CLIENT_SECRET
               value: "{{ camara_client_secret }}"

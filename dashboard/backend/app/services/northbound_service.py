@@ -1,7 +1,7 @@
 """Business logic for the Northbound (positioning/CAMARA) service-management
 console. Wraps K8sService to: inventory the northbound services, read the
 engine's adapter registry, deploy custom adapter images (they self-register),
-edit the fusion config, and retarget managed images.
+and configure a service through its contract.
 
 v0.6.0 adapter model: the engine is the adapter-registry authority. Adapters
 SELF-REGISTER (POST /adapters + heartbeat) and the engine evicts dead ones on
@@ -10,6 +10,7 @@ engine (GET /adapters via the API-server service proxy) and can force-remove a
 stale entry (DELETE /adapters/{name}). See docs/architecture/positioning-adapters.md.
 """
 
+import base64
 import json
 import os
 import re
@@ -19,9 +20,10 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from kubernetes.client.exceptions import ApiException
 
 from app.config import settings
-from app.models import DeployEnvVar, DeployImageRequest, FusionConfigPayload
+from app.models import DeployEnvVar, DeployImageRequest
 from app.services.k8s_service import K8sService
 from app.services.nf_service import ANSIBLE_CFG, ANSIBLE_DIR, ANSIBLE_PLAYBOOK_BIN
 
@@ -70,8 +72,6 @@ class GatewayError(Exception):
 # Namespaces the console manages. Used as a strict allow-list for any create.
 NORTHBOUND_NAMESPACES = ["camara", "positioning", "mec"]
 POSITIONING_NS = "positioning"
-ENGINE_DEPLOYMENT = "positioning-engine"
-ENGINE_CONFIGMAP = "positioning-config"
 ENGINE_SERVICE = "positioning-engine"
 ENGINE_PORT = 8080
 CAMARA_NS = "camara"
@@ -83,8 +83,8 @@ GATEWAY_PORT = 8080
 # the image changes.
 _CONTRACT_META: dict[tuple, dict] = {}
 
-# Managed deployments that core image rollout may retarget (deployment -> namespace).
-# Container name equals the deployment name in every northbound manifest.
+# Deployments phase 10 owns (deployment -> namespace): their image and wiring come
+# from all.yml, so "Update all" re-runs the phase instead of patching them here.
 MANAGED_DEPLOYMENTS = {
     "camara-gateway": "camara",
     "positioning-engine": "positioning",
@@ -99,12 +99,158 @@ _ADAPTER_BINDINGS = {
         {"field": "VENDOR_ADAPTER_URL", "kind": "vendor-adapter"},
         {"field": "WIFI_ADAPTER_URL", "kind": "wifi-adapter"},
     ],
+    "camara-gateway": [
+        {"field": "WIFI_ADAPTER_URL", "kind": "wifi-adapter"},
+    ],
 }
+
+
+# Runtime choices an adapter image declares in its /contract as `<name>s` (the
+# set it implements) next to `<name>` (the one active now), and accepts on
+# `PUT /bindings {<name>: value}` with a 422 for anything outside the set.
+# `transport` follows the same shape but is chosen by the schema document, so it
+# is reported elsewhere and excluded here.
+_BINDING_KEYS = ("motion_model", "algorithm")
+
+
+def _contract_choices(contract: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for key in _BINDING_KEYS:
+        options = contract.get(key + "s")
+        if isinstance(options, list) and options:
+            out[key] = {"options": [str(o) for o in options], "active": contract.get(key)}
+    return out
+
+
+def _kelt_wiring(name: str, port: int) -> dict[str, str]:
+    """The registration env KELT writes so an adapter reaches the engine and
+    announces who it is: POSITIONING_ENGINE_URL and ADAPTER_BASE_URL are derived
+    from cluster facts (an adapter image cannot know its own Service URL), and
+    ADAPTER_NAME is the deployment's own identity (baked into ADAPTER_BASE_URL and
+    into what the engine's DEVICE_MAP must match), so none of the three is something
+    the operator revisits without redeploying. What the adapter IS comes from the
+    image (its adapter.contract.yaml `adapter:` family, read at registration since
+    0.17.1) and from ADAPTER_CAPABILITIES (the bound source), never from here.
+
+    Single owner for the deploy path, the upgrade merge and the config report, so
+    the three locked vars cannot drift.
+    """
+    return {
+        "POSITIONING_ENGINE_URL": f"http://{ENGINE_SERVICE}.{POSITIONING_NS}.svc.cluster.local:{ENGINE_PORT}",
+        "ADAPTER_NAME": name,
+        "ADAPTER_BASE_URL": f"http://{name}.{POSITIONING_NS}.svc.cluster.local:{port}",
+    }
+
+
+# Env the config UI hides as deploy-settled identity: renaming or re-pointing any of
+# these is effectively redeploying the adapter, not adjusting a setting.
+KELT_WIRED_ENV = ("POSITIONING_ENGINE_URL", "ADAPTER_NAME", "ADAPTER_BASE_URL")
+# Removed upstream in 0.17.1 (no consumer; the image declares its own family). An
+# adapter deployed earlier may still carry it in <name>-config; the upgrade drops it
+# so the contract validator does not flag a dead variable.
+_RETIRED_ADAPTER_ENV = ("ADAPTER_KIND",)
+
+# Env the northbound adapter model reads but an adapter's own /contract does not
+# declare. vendor-adapter 0.17.0 documented ADAPTER_CAPABILITIES as the deploy-time
+# channel for the bound source's traits without listing it in env.contract.yaml;
+# 0.17.1 declares it (type: json), at which point this entry is skipped because
+# _kelt_declared_env only adds what the contract lacks. Kept for an adapter still
+# on 0.17.0, marked `declared_by: kelt`, adapter role only. Drop once none remains.
+_KELT_DECLARED_ENV: dict[str, list[dict[str, Any]]] = {
+    "adapter": [{
+        "name": "ADAPTER_CAPABILITIES",
+        "type": "json",
+        "default": "",
+        "sensitive": False,
+        "writable": True,
+        "declared_by": "kelt",
+        "description": (
+            "Traits of the source this adapter is bound to, as JSON, merged over the "
+            "image's baked adapter.contract.yaml and sent to the engine on every "
+            "heartbeat: source, kinds, frame, z, accuracy_class (band the technology "
+            "nominally delivers) and nominalAccuracy (metres; used when a fix reports "
+            "no radius). A generic image such as vendor-adapter holds none of these, so "
+            "without this an adapter reports no source and its fixes are dropped."
+        ),
+    }],
+}
+
+
+def _kelt_declared_env(role: str, contract: dict[str, Any]) -> list[dict[str, Any]]:
+    """KELT-declared entries for this role that the service's /contract does not
+    already name. Empty for every non-adapter role."""
+    declared = {
+        e.get("name")
+        for grp in ("required", "recommended", "optional")
+        for e in (contract.get("env", {}).get(grp) or [])
+    }
+    return [dict(e) for e in _KELT_DECLARED_ENV.get(role, []) if e["name"] not in declared]
 
 
 def _image_basename(image: str | None) -> str:
     """ghcr.io/jacobbista/5g-northbound/vendor-adapter:0.8.6 -> vendor-adapter."""
     return (image or "").rsplit("/", 1)[-1].split("@")[0].split(":")[0]
+
+
+# Where a service sits in the data path, for the Services view. `role` is declared at
+# deploy time as the `kelt.io/role` label (playbook for phase-managed services, dashboard
+# for catalog adapters); the name heuristic is only a fallback until every workload carries
+# the label. `lane` groups roles into the south -> core -> north flow.
+_LANE_BY_ROLE = {"adapter": "south", "engine": "core", "gateway": "north", "app": "north", "tool": "north", "proxy": "north"}
+
+
+def _role_of(name: str, labels: dict) -> str:
+    role = (labels or {}).get("kelt.io/role")
+    if role:
+        return role
+    if (labels or {}).get("app.kubernetes.io/managed-by") == "dashboard-northbound":
+        return "adapter"
+    n = (name or "").lower()
+    if "engine" in n:
+        return "engine"
+    if "gateway" in n:
+        return "gateway"
+    if "oauth2-proxy" in n or n.endswith("-proxy"):
+        return "proxy"
+    if "adapter" in n:
+        return "adapter"
+    if "placement" in n:
+        return "tool"
+    return "app"
+
+
+# An adapter's subtitle is not a fallback string: the Services view composes it live
+# from the engine registry (image family, declared source) and the contract
+# (transport), so the role default stays empty until the adapter registers.
+_SUBTITLE_BY_ROLE = {"gateway": "CAMARA API", "engine": "fusion", "adapter": "", "app": "app", "tool": "tool", "proxy": "front-door auth"}
+# KELT's own catalog adapters carry no annotation until re-deployed, so their copy falls
+# back by name. A vendor's own adapter (deployed by the operator) is NOT hardcoded here:
+# it declares its subtitle from the adapter kind at deploy time, else this generic default.
+_ADAPTER_COPY = {
+    "wifi": ("wifi", "RSSI trilateration"),
+    "synthetic": ("synthetic", "engine-driven demo track"),
+}
+
+
+def _copy_of(name: str, role: str, annotations: dict) -> tuple[str, str]:
+    """A short subtitle for the role chip and a one-line description for the row. Both are
+    declared at deploy time (kelt.io/subtitle, kelt.io/description); the fallback keeps a
+    sensible label until the annotation lands."""
+    ann = annotations or {}
+    subtitle = ann.get("kelt.io/subtitle")
+    description = ann.get("kelt.io/description")
+    if subtitle is None or description is None:
+        n = (name or "").lower()
+        fb_sub, fb_desc = _SUBTITLE_BY_ROLE.get(role, role), ""
+        for key, (s, d) in _ADAPTER_COPY.items():
+            if key in n:
+                fb_sub, fb_desc = s, d
+                break
+        if subtitle is None:
+            subtitle = fb_sub
+        if description is None:
+            description = fb_desc
+    return subtitle, (description or "")
 
 
 def _adapter_probes(port: int) -> dict[str, Any]:
@@ -201,6 +347,12 @@ def _is_file_field(name: str | None, path: str | None) -> bool:
 _NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 # image[:tag] or image@sha256:...; rejects spaces and shell metacharacters.
 _IMAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-/:@]{0,255}$")
+# A keyword match on a log line, for log_health(). Deliberately loose (a "go look"
+# signal, not a diagnosis): the case that motivated this is a pod reporting
+# Ready, registered, serving every OTHER request fine, while silently 500ing on
+# one specific asset (the engine's ZeroDivisionError on a zero-accuracy fusion,
+# 2026-09-11) - nothing in its health/rollout state hinted at that.
+_LOG_ERROR_RE = re.compile(r"error|exception|traceback", re.IGNORECASE)
 
 # The static adapter HTTP contract surfaced in the UI's guidance panel.
 MEASUREMENT_SCHEMA = {
@@ -209,7 +361,7 @@ MEASUREMENT_SCHEMA = {
     "x": 11.5,
     "y": 0.0,
     "z": 10.3,
-    "accuracy_m": 6.6,
+    "accuracy": 6.6,
     "confidence": 0.85,
     "timestamp": 1700000000.0,
 }
@@ -222,7 +374,7 @@ class Measurement(BaseModel):
     source: str = "my-source"
     frame: str = "local"
     x: float; y: float = 0.0; z: float
-    accuracy_m: float
+    accuracy: float
     confidence: float
     timestamp: Optional[float] = None
 
@@ -287,13 +439,38 @@ class NorthboundService:
                 if labels.get("app.kubernetes.io/managed-by") == "dashboard-apps":
                     continue
                 containers = dep.spec.template.spec.containers or []
-                image = containers[0].image if containers else None
-                # Pods whose name starts with the deployment name (rough but adequate).
-                dep_pods = [
-                    {"name": n, "phase": p.phase, "restarts": p.restarts}
-                    for n, p in pods.items()
-                    if n.startswith(name)
-                ]
+                image = containers[0].image if containers else None  # deployment SPEC image (intent)
+                # The deployment's pods (by ReplicaSet owner, not a name-prefix guess).
+                # Each pod carries the image it ACTUALLY runs and whether it is ready or
+                # crashlooping — the truth that the spec image and ready_replicas hide.
+                dep_pods = [p for p in pods.values() if p.deployment == name]
+                # A pod running the CURRENT spec image is the target of this rollout; one on
+                # a different image is an old pod being torn down. Only the TARGET failing is
+                # "degraded" — an old crashlooping pod on its way out, or the old pod still
+                # serving while the new one comes up cleanly, is a transient "progressing"
+                # (so a healthy upgrade clears the red promptly instead of lingering).
+                st = dep.status
+                desired = dep.spec.replicas or 0
+                current_pods = [p for p in dep_pods if p.image == image]
+                current_ready = [p for p in current_pods if p.ready]
+                current_bad = [p for p in current_pods
+                               if p.waiting_reason in ("CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull")
+                               or (not p.ready and p.restarts > 0)]
+                # Serving image = a ready target-image pod once the rollout lands, else
+                # whatever ready pod is still up (the old one, mid-transition or failed).
+                ready_pods = [p for p in dep_pods if p.ready]
+                running_image = (current_ready[0].image if current_ready
+                                 else ready_pods[0].image if ready_pods else None)
+                progress_failed = any(
+                    c.type == "Progressing" and c.status == "False"
+                    for c in (st.conditions or [])
+                )
+                if current_bad or progress_failed:
+                    rollout = "degraded"          # the image being deployed is failing
+                elif len(current_ready) < desired:
+                    rollout = "progressing"       # target pods still coming up (old may still serve)
+                else:
+                    rollout = "complete"
                 # Contract metadata (kind + configurable) so the UI can show where a
                 # surface is served (api / ui / internal) and only offer Configure to
                 # services that actually expose a /contract. Cached by (name, image).
@@ -310,10 +487,13 @@ class NorthboundService:
                             # field `subdomain`); null until the upstream contracts add it.
                             # The UI derives <subdomain>.<base> and infers a default when null.
                             "subdomain": contract.get("subdomain"),
+                            # A vendor-payload adapter declares a mapping grammar (the contract
+                            # points at /contract/schema); that gets the field-mapping studio.
+                            "has_mapping": bool(contract.get("schema")),
                         }
                         _CONTRACT_META[(name, image)] = meta
                     else:
-                        meta = {"kind": None, "configurable": False, "subdomain": None}
+                        meta = {"kind": None, "configurable": False, "subdomain": None, "has_mapping": False}
                         # Cache the "no contract" result only once the pod is Ready:
                         # a ready pod that still has no /contract genuinely has none,
                         # so stop re-probing it every poll (avoids a slow inventory).
@@ -332,21 +512,32 @@ class NorthboundService:
                         for m in (dep.spec.template.spec.containers[0].volume_mounts or []))
                     if stateful else None
                 )
+                role = _role_of(name, labels)
+                subtitle, description = _copy_of(name, role, dep.metadata.annotations or {})
                 services.append({
                     "name": name,
                     "namespace": ns,
-                    "image": image,
-                    "replicas": dep.spec.replicas or 0,
-                    "ready_replicas": dep.status.ready_replicas or 0,
+                    "image": image,               # deployment spec (intent)
+                    "running_image": running_image,  # what a ready pod actually runs (reality)
+                    "rollout": rollout,           # complete | progressing | degraded
+                    "replicas": desired,
+                    "ready_replicas": st.ready_replicas or 0,
                     "managed": name in MANAGED_DEPLOYMENTS,
                     "labels": labels,
+                    "role": role,
+                    "lane": _LANE_BY_ROLE.get(role, "north"),
+                    "subtitle": subtitle,
+                    "description": description,
                     "node_port": node_ports.get(name),
                     "kind": meta["kind"],
                     "configurable": meta["configurable"],
+                    "has_mapping": meta["has_mapping"],
                     "subdomain": meta["subdomain"],
                     "stateful": stateful,
                     "persistent": persistent,
-                    "pods": dep_pods,
+                    "pods": [{"name": p.name, "phase": p.phase, "restarts": p.restarts,
+                              "ready": p.ready, "waiting_reason": p.waiting_reason, "image": p.image}
+                             for p in dep_pods],
                     # Push adapters carry a reserved n6m address: the 5G-reachable
                     # ingest an edge scanner POSTs to. Bare IP (no mask), present
                     # only when configured.
@@ -354,12 +545,40 @@ class NorthboundService:
                 })
         return {"services": services}
 
+    # ── Log health (best-effort "go look" signal, not a diagnosis) ─────────────
+    def log_health(self) -> dict[str, Any]:
+        """Per deployment, whether its pod's recent log tail contains an error
+        keyword. Ready/rollout state alone misses a pod that is up, registered,
+        and serving most requests fine while silently 500ing on one - a caught
+        exception fails a request, not a liveness probe. Meant to be polled far
+        slower than inventory() (log reads are real calls per pod); the UI marks
+        `logs` on a hit instead of adding a whole new poll surface to watch."""
+        out: dict[str, Any] = {}
+        for ns in NORTHBOUND_NAMESPACES:
+            try:
+                pods = self.k8s.list_pods(ns)
+            except Exception:
+                continue
+            seen: set[str] = set()
+            for p in pods:
+                if not p.deployment or p.deployment in seen:
+                    continue
+                seen.add(p.deployment)
+                try:
+                    text = self.k8s.pod_logs(ns, p.name, tail_lines=100)
+                except Exception:
+                    continue
+                hit = next((line for line in text.splitlines() if _LOG_ERROR_RE.search(line)), None)
+                if hit:
+                    out[p.deployment] = {"has_errors": True, "sample": hit.strip()[:200]}
+        return out
+
     # ── Adapter registry (engine = authority; adapters self-register) ──────────
     def list_adapters(self) -> list[dict[str, Any]]:
         """The live registry from the engine (GET /adapters via the API-server
         service proxy). Each entry carries membership + reachability: name, kind,
-        base_url, registered_via (self|seed|manual), last_seen_s_ago, fail_count /
-        in_cooldown, and a derived state (live|unreachable|stale). Degrades to an
+        baseUrl, registeredVia (self|seed|manual), lastSeenSAgo, failCount /
+        inCooldown, and a derived state (live|unreachable|stale). Degrades to an
         empty list when the engine is briefly unreachable (e.g. mid-rollout)."""
         try:
             raw = self.k8s.service_proxy_get(POSITIONING_NS, ENGINE_SERVICE, ENGINE_PORT, "adapters")
@@ -468,10 +687,14 @@ class NorthboundService:
             data = dict((self.k8s.get_configmap(POSITIONING_NS, cm_name).get("data") or {}))
         except Exception:
             data = {}
-        data.setdefault("POSITIONING_ENGINE_URL", f"http://{ENGINE_SERVICE}.{POSITIONING_NS}.svc.cluster.local:{ENGINE_PORT}")
-        data.setdefault("ADAPTER_NAME", name)
-        data.setdefault("ADAPTER_BASE_URL", f"http://{name}.{POSITIONING_NS}.svc.cluster.local:{port}")
+        for k, v in _kelt_wiring(name, port).items():
+            data.setdefault(k, v)
+        retired = [k for k in _RETIRED_ADAPTER_ENV if k in data]
+        for k in retired:
+            data.pop(k)
         self.k8s.apply_configmap(POSITIONING_NS, cm_name, data)
+        if retired:
+            self.k8s.unset_configmap_keys(POSITIONING_NS, cm_name, retired)
         # Patch the image AND ensure envFrom binds the config/secret (an adapter
         # deployed before v0.6.0 may bind neither, so the merged self-reg env would
         # never reach the pod). Inline env and volumes are left untouched.
@@ -641,22 +864,8 @@ class NorthboundService:
                         "behind": is_behind})
         return {"services": out, "behind_count": behind}
 
-    # ── Fusion config ─────────────────────────────────────────────────────────
-    def set_fusion(self, payload: FusionConfigPayload) -> dict[str, Any]:
-        cm = self.k8s.get_configmap(POSITIONING_NS, ENGINE_CONFIGMAP)
-        data = dict(cm.get("data") or {})
-        if payload.strategy is not None:
-            data["FUSION_STRATEGY"] = payload.strategy
-        if payload.compare is not None:
-            data["FUSION_COMPARE"] = payload.compare
-        if payload.device_map is not None:
-            data["DEVICE_MAP"] = payload.device_map
-        self.k8s.apply_configmap(POSITIONING_NS, ENGINE_CONFIGMAP, data)
-        self.k8s.restart_deployment(POSITIONING_NS, ENGINE_DEPLOYMENT)
-        return {"status": "applied", "engine_restarted": True}
-
     # ── Deploy-from-image ─────────────────────────────────────────────────────
-    def _apply_workload(self, ns: str, name: str, image: str, port: int, env, image_pull_secret) -> None:
+    def _apply_workload(self, ns: str, name: str, image: str, port: int, env, image_pull_secret, annotations=None) -> None:
         """Create-or-update a Deployment + ClusterIP Service from a plain image.
         Shared by adapter deploy (positioning) and generic workload deploy.
 
@@ -700,7 +909,7 @@ class NorthboundService:
         if image_pull_secret:
             pod_spec["imagePullSecrets"] = [{"name": image_pull_secret}]
 
-        labels = {"app": name, "app.kubernetes.io/managed-by": "dashboard-northbound"}
+        labels = {"app": name, "app.kubernetes.io/managed-by": "dashboard-northbound", "kelt.io/role": "adapter"}
         # Push adapters (edge scanner POSTs over 5G) are useless without an n6m
         # foothold, so attach one automatically at the reserved IP from config.
         # Cross-namespace NAD reference: the adapter lives here (positioning) but
@@ -719,7 +928,8 @@ class NorthboundService:
         self.k8s.upsert_deployment(ns, {
             "apiVersion": "apps/v1",
             "kind": "Deployment",
-            "metadata": {"name": name, "namespace": ns, "labels": labels},
+            "metadata": {"name": name, "namespace": ns, "labels": labels,
+                         **({"annotations": annotations} if annotations else {})},
             "spec": {
                 "replicas": 1,
                 "selector": {"matchLabels": {"app": name}},
@@ -745,17 +955,7 @@ class NorthboundService:
         # manual ADAPTER_URLS step. Operator-supplied env wins (not overridden).
         _validate_name(req.name)
         _validate_image(req.image)
-        engine_url = f"http://{ENGINE_SERVICE}.{POSITIONING_NS}.svc.cluster.local:{ENGINE_PORT}"
-        base_url = f"http://{req.name}.{POSITIONING_NS}.svc.cluster.local:{req.port}"
-        self_reg = [
-            DeployEnvVar(name="POSITIONING_ENGINE_URL", value=engine_url),
-            DeployEnvVar(name="ADAPTER_NAME", value=req.name),
-            DeployEnvVar(name="ADAPTER_BASE_URL", value=base_url),
-        ]
-        # Only override ADAPTER_KIND when the operator chose one; otherwise let the
-        # adapter image keep its own default (e.g. wifi-adapter -> "wifi").
-        if req.kind:
-            self_reg.append(DeployEnvVar(name="ADAPTER_KIND", value=req.kind))
+        self_reg = [DeployEnvVar(name=k, value=v) for k, v in _kelt_wiring(req.name, req.port).items()]
         have = {e.name for e in req.env}
         env = list(req.env) + [e for e in self_reg if e.name not in have]
         self._apply_workload(POSITIONING_NS, req.name, req.image, req.port, env, req.image_pull_secret)
@@ -790,16 +990,6 @@ class NorthboundService:
         return {"status": "deleted", "name": name}
 
     # ── Managed image rollout ──────────────────────────────────────────────────
-    def set_managed_image(self, deployment: str, image: str) -> dict[str, Any]:
-        if deployment not in MANAGED_DEPLOYMENTS:
-            raise ValueError(f"Unknown managed deployment '{deployment}' (one of {sorted(MANAGED_DEPLOYMENTS)})")
-        _validate_image(image)
-        ns = MANAGED_DEPLOYMENTS[deployment]
-        # Strategic-merge patch: containers merge by name (== deployment name).
-        patch = {"spec": {"template": {"spec": {"containers": [{"name": deployment, "image": image}]}}}}
-        self.k8s.apps.patch_namespaced_deployment(name=deployment, namespace=ns, body=patch)
-        return {"status": "rolled-out", "deployment": deployment, "namespace": ns, "image": image}
-
     # ── Contract guidance (static) ─────────────────────────────────────────────
     def contract(self) -> dict[str, Any]:
         return {
@@ -854,6 +1044,31 @@ class NorthboundService:
                 break
         if ns is None:
             return {"available": False, "service": name, "error": "service not found"}
+        # Liveness first: a proxy call to a pod that is not running fails as a
+        # connection error or a 503 from the API server, and that exception's own
+        # __str__ (an ApiException embeds the raw response, headers included) is
+        # not something to hand an operator - it read as a stack trace, not a
+        # reason (found live, 2026-09-11: wittra scaled to 0 for a G5 experiment
+        # showed exactly this in the info panel). Ask the Deployment first and say
+        # why in the same terms the Services panel already uses, instead of
+        # attempting the call and leaking internals when it predictably fails.
+        try:
+            dep = self.k8s.apps.read_namespaced_deployment(name=name, namespace=ns)
+            desired = dep.spec.replicas or 0
+            ready = dep.status.ready_replicas or 0
+            if desired == 0:
+                return {"available": False, "service": name, "namespace": ns,
+                        "error": "stopped (scaled to 0 replicas)"}
+            if ready == 0:
+                reason = next(
+                    (p.waiting_reason for p in self.k8s.list_pods(ns)
+                     if p.deployment == name and p.waiting_reason),
+                    None,
+                )
+                return {"available": False, "service": name, "namespace": ns,
+                        "error": f"not ready ({reason})" if reason else "not ready (starting up)"}
+        except Exception:
+            pass  # Deployment lookup itself failed; fall through and let the proxy call try anyway.
         # The service-proxy needs the port spelled out: the portless form defaults
         # to :80 and reports "no endpoints" when the service listens elsewhere.
         port = next((p.port for p in (svc_obj.spec.ports or [])), None)
@@ -870,8 +1085,13 @@ class NorthboundService:
                 body = body.decode("utf-8")
             data = json.loads(body)
             return {"available": True, "service": name, "namespace": ns, "contract": data}
-        except Exception as e:  # 404 (no endpoint yet), unreachable, parse error
-            return {"available": False, "service": name, "namespace": ns, "error": str(e)[:200]}
+        except ApiException as e:  # sanitized: exc.status/.reason, never the raw response dump
+            return {"available": False, "service": name, "namespace": ns,
+                    "error": f"contract endpoint unreachable (HTTP {e.status} {e.reason})" if e.status
+                             else "contract endpoint unreachable"}
+        except Exception:  # connection error, 404 (no endpoint yet), parse error
+            return {"available": False, "service": name, "namespace": ns,
+                    "error": "contract endpoint unreachable"}
 
     def discover_raw(self, name: str) -> dict[str, Any]:
         """Raw vendor device records from an adapter's GET /discover?raw=1, for the
@@ -879,7 +1099,7 @@ class NorthboundService:
         author the mapping + classify predicates).
 
         ADMIN-ONLY at the router: the raw payload is the vendor's own record and can
-        carry network secrets (Wittra `state.network.panid`, keys). It is returned to
+        carry network secrets (radio network ids, keys). It is returned to
         the admin UI but NEVER logged and never persisted here.
 
         Reached through the API-server service proxy like service_contract (the backend
@@ -928,6 +1148,173 @@ class NorthboundService:
             # could contain the upstream payload. Keep it short and typed.
             raise GatewayError(502, f"discover?raw=1 failed for {name!r}: {type(e).__name__}")
 
+    def contract_schema(self, name: str) -> dict[str, Any]:
+        """The JSON Schema of an adapter's mapping DOCUMENT (GET /contract/schema on the
+        adapter), so the guided mapping builder reads the grammar (PathSpec/ConstSpec,
+        the transform union, DiagnosticsBlock) at runtime instead of hardcoding it.
+
+        Reached through the API-server service proxy like discover_raw. The `/schema`
+        subpath must survive: it is baked into the proxy path template LITERALLY, because
+        a `{path}` param URL-encodes the `/` to %2F and the proxy 404s on it."""
+        _validate_name(name)
+        svc_obj, ns = None, None
+        for cand in NORTHBOUND_NAMESPACES:
+            try:
+                for s in self.k8s.core.list_namespaced_service(namespace=cand).items:
+                    if s.metadata.name == name:
+                        svc_obj, ns = s, cand
+                        break
+            except Exception:
+                continue
+            if ns:
+                break
+        if ns is None:
+            raise GatewayError(404, f"service {name!r} not found")
+        port = next((p.port for p in (svc_obj.spec.ports or [])), None)
+        proxy_name = f"{name}:{port}" if port else name
+        try:
+            resp = self.k8s.core.api_client.call_api(
+                "/api/v1/namespaces/{namespace}/services/{name}/proxy/contract/schema",
+                "GET",
+                path_params={"namespace": ns, "name": proxy_name},
+                header_params={"Accept": "application/json"},
+                auth_settings=["BearerToken"],
+                _preload_content=False,
+                _return_http_data_only=True,
+            )
+            http = resp[0] if isinstance(resp, tuple) else resp
+            body = http.data
+            if isinstance(body, (bytes, bytearray)):
+                body = body.decode("utf-8")
+            return json.loads(body)
+        except GatewayError:
+            raise
+        except Exception as e:
+            raise GatewayError(502, f"contract/schema failed for {name!r}: {type(e).__name__}")
+
+    def diagnostics_vocabulary(self) -> dict[str, Any]:
+        """The gateway's published core diagnostics vocabulary (no-auth contract). The
+        guided mapping builder reads the core targets/units/tiers from here so a 5th core
+        field is a spec change on the gateway, never a hand-edit in the dashboard."""
+        try:
+            resp = httpx.get(f"{self._gateway_base_url()}/contracts/diagnostics-vocabulary.json", timeout=6.0)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            raise GatewayError(502, f"vocabulary fetch failed: {type(e).__name__}")
+
+    def accuracy_class_vocabulary(self) -> dict[str, Any]:
+        """The gateway's published accuracy-class bands (no-auth contract, 0.17.0+).
+        The capabilities editor offers `accuracy_class` from here, and shows each
+        band's bounds, instead of hardcoding sub-metre/metre/coarse."""
+        try:
+            resp = httpx.get(f"{self._gateway_base_url()}/contracts/accuracy-class-vocabulary.json", timeout=6.0)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            raise GatewayError(502, f"vocabulary fetch failed: {type(e).__name__}")
+
+    # Where a deployment's env comes from, in precedence order (a later envFrom
+    # source wins, inline `env` beats them all). `<name>-config` / `<name>-secrets`
+    # are the operator's (the Configure form writes them); anything else, and
+    # inline env, is deployment wiring the operator does not edit from here.
+    # Read from the live Deployment, never inferred from the service's name.
+    def _env_sources(self, dep: Any, ns: str, name: str) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        if dep is None:
+            return out
+        cont = dep.spec.template.spec.containers[0]
+        for ef in (cont.env_from or []):
+            if ef.config_map_ref:
+                cm = ef.config_map_ref.name
+                try:
+                    data = dict(self.k8s.get_configmap(ns, cm).get("data") or {})
+                except Exception:
+                    data = {}
+                out.append({"kind": "configmap", "name": cm, "data": data,
+                            "operator": cm == f"{name}-config"})
+            if ef.secret_ref:
+                sec_name = ef.secret_ref.name
+                try:
+                    sec = self.k8s.core.read_namespaced_secret(name=sec_name, namespace=ns)
+                    data = {k: None for k in (sec.data or {})}
+                except Exception:
+                    data = {}
+                out.append({"kind": "secret", "name": sec_name, "data": data,
+                            "operator": sec_name == f"{name}-secrets"})
+        inline = {e.name: e.value for e in (cont.env or []) if e.name}
+        if inline:
+            out.append({"kind": "inline", "name": "deployment", "data": inline, "operator": False})
+        return out
+
+    @staticmethod
+    def _effective(sources: list[dict[str, Any]], key: str) -> dict[str, Any] | None:
+        """The source that actually provides `key` (the last one that has it)."""
+        hit = None
+        for src in sources:
+            if key in src["data"]:
+                hit = src
+        return hit
+
+    def set_binding(self, name: str, key: str, value: str) -> dict[str, Any]:
+        """Change one runtime choice on an adapter through its own PUT /bindings
+        (API-server service proxy, like discover_raw). The value is checked against
+        the contract's declared set first, so a typo never reaches the pod; the
+        adapter validates again and answers 422 on anything it does not implement."""
+        # service_contract() wraps the actual /contract body one level down, in
+        # ["contract"] (service_config() unwraps the same way); this used to skip
+        # that and look for the choices in the wrapper, which never has them.
+        c = self.service_contract(name)
+        if not c.get("available"):
+            raise ValueError(f"{name!r} is not reachable right now ({c.get('error') or 'try again'})")
+        contract = c["contract"]
+        choices = _contract_choices(contract)
+        if key not in choices:
+            raise ValueError(f"{name!r} declares no choice named {key!r}")
+        if value not in choices[key]["options"]:
+            raise ValueError(f"{value!r} is not one of {choices[key]['options']} for {key}")
+        _validate_name(name)
+        ns = self._service_namespace(name)
+        try:
+            svc_obj = self.k8s.core.read_namespaced_service(name=name, namespace=ns)
+        except Exception:
+            raise GatewayError(404, f"service {name!r} not found")
+        port = next((p.port for p in (svc_obj.spec.ports or [])), None)
+        proxy_name = f"{name}:{port}" if port else name
+
+        def _proxy(method: str, path: str, body: Any = None) -> Any:
+            resp = self.k8s.core.api_client.call_api(
+                "/api/v1/namespaces/{namespace}/services/{name}/proxy/{path}",
+                method,
+                path_params={"namespace": ns, "name": proxy_name, "path": path},
+                body=body,
+                header_params={"Accept": "application/json", "Content-Type": "application/json"},
+                auth_settings=["BearerToken"],
+                _preload_content=False,
+                _return_http_data_only=True,
+            )
+            http = resp[0] if isinstance(resp, tuple) else resp
+            raw = http.data.decode("utf-8") if isinstance(http.data, (bytes, bytearray)) else http.data
+            return json.loads(raw) if raw else None
+
+        try:
+            # PUT /bindings on this adapter REPLACES its whole stored config
+            # instead of merging (found live 2026-09-15: changing just `algorithm`
+            # wiped the AP bindings and calibration samples already on disk). Read
+            # the full current object first and send it back with only the one key
+            # changed, so a field this call never meant to touch cannot be lost.
+            current = _proxy("GET", "bindings") or {}
+            current[key] = value
+            result = _proxy("PUT", "bindings", current)
+            return {"service": name, key: value, "adapter": result}
+        except GatewayError:
+            raise
+        except Exception as e:
+            status = getattr(e, "status", None)
+            if status == 422:
+                raise ValueError(f"the adapter refused {value!r} for {key}")
+            raise GatewayError(502, f"PUT /bindings failed for {name!r}: {type(e).__name__}")
+
     def service_config(self, name: str) -> dict[str, Any]:
         """Contract schema + current values, for the guided setup.
 
@@ -941,19 +1328,14 @@ class NorthboundService:
             return {"available": False, "service": name, "error": c.get("error", "no contract")}
         ns = c["namespace"]
         contract = c["contract"]
-        cm_name = secret_name = None
         dep = None
         try:
             dep = self.k8s.apps.read_namespaced_deployment(name=name, namespace=ns)
-            for ef in (dep.spec.template.spec.containers[0].env_from or []):
-                if ef.config_map_ref:
-                    cm_name = ef.config_map_ref.name
-                if ef.secret_ref:
-                    secret_name = ef.secret_ref.name
         except Exception:
             pass
+        sources = self._env_sources(dep, ns, name)
 
-        def file_state(path: str) -> str:
+        def file_state(path: str, probe_pod: bool = True) -> str:
             """How a *_FILE path is provided:
               managed   - mounted from our <name>-files ConfigMap (dashboard owns it)
               external  - mounted from a PVC / other volume (the service owns it)
@@ -978,51 +1360,123 @@ class NorthboundService:
                     if path == mp or path.startswith(mp.rstrip("/") + "/"):
                         return vol_kind.get(vm.name, "external")
             # Not mounted anywhere: is a copy present in the pod (runtime-loaded)?
+            # Paths that are not operator documents skip the exec: "internal" =
+            # the service's own file (shipped in the image or written by it).
+            if not probe_pod:
+                return "internal"
             return "ephemeral" if self._read_pod_file(name, ns, path) else "absent"
-        cm_data: dict[str, str] = {}
-        if cm_name:
-            try:
-                cm_data = self.k8s.get_configmap(ns, cm_name).get("data") or {}
-            except Exception:
-                pass
-        secret_keys: set[str] = set()
-        if secret_name:
-            try:
-                sec = self.k8s.core.read_namespaced_secret(name=secret_name, namespace=ns)
-                secret_keys = set((sec.data or {}).keys())
-            except Exception:
-                pass
-
         def annotate(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
             out = []
             for e in entries or []:
                 n = e.get("name")
-                if e.get("sensitive"):
-                    item = {**e, "set": n in secret_keys}  # never expose the value
-                else:
-                    item = {**e, "value": cm_data.get(n), "set": n in cm_data}
-                # Annotate file fields (path-valued *_FILE / *_PATH) so the UI knows
-                # whether the dashboard owns the document (editor + readiness) or the
-                # service does (PVC -> hands off).
-                fpath = e.get("value") or cm_data.get(n) or e.get("default") or ""
+                src = self._effective(sources, n)
+                item = {**e, "set": src is not None}
+                if not e.get("sensitive"):
+                    item["value"] = src["data"].get(n) if src else None  # never expose a secret value
+                # Who owns the value: the operator (Configure writes <name>-config /
+                # <name>-secrets, or nothing provides it yet) or the deployment (wiring
+                # ConfigMap, inline env). A deployment-owned key would shadow whatever
+                # Configure wrote, so the form does not offer it.
+                item["owner"] = "operator" if (src is None or src["operator"]) else "deployment"
+                item["source"] = src["name"] if src else None
+                # A path-typed entry maps to a volume: say how it is provided so the UI
+                # can show storage instead of an input. *_FILE documents the dashboard
+                # can own get the full state (editor + readiness), other paths only the
+                # mount kind.
+                fpath = (item.get("value") if not e.get("sensitive") else None) or e.get("default") or ""
+                stateful_restorable = fpath and fpath in self._writable_doc_path(name, ns)
                 if _is_file_field(n, fpath):
                     item["file_state"] = file_state(fpath)
                     item["file_path"] = fpath
+                elif str(e.get("type") or "").lower() == "path":
+                    if stateful_restorable:
+                        # A *_PATH the service writes itself is normally storage,
+                        # not an operator document (see _is_file_field). This one is
+                        # the exception: it is PVC-backed specifically so the
+                        # dashboard's own apply_service_file can seed/restore it
+                        # (e.g. after an upstream write wipes it), so it gets the
+                        # same editor as a *_FILE field instead of read-only info.
+                        item["file_state"] = "managed"
+                    else:
+                        item["file_state"] = file_state(fpath, probe_pod=False) if fpath else "unset"
+                    item["file_path"] = fpath
+                # Adapter-registration wiring (see _kelt_wiring): either derived from
+                # cluster facts or fixed by the deploy form. Neither is something the
+                # operator revisits in a config form, so the UI leaves it out.
+                if n in KELT_WIRED_ENV:
+                    item["managed"] = True
                 out.append(item)
             return out
 
-        env = contract.get("env", {})
+        env = dict(contract.get("env", {}))
+        role = _role_of(name, (dep.metadata.labels if dep is not None else None) or {})
+        extra = _kelt_declared_env(role, contract)
+        if extra:
+            env["optional"] = list(env.get("optional") or []) + extra
+        annotated = {grp: annotate(env.get(grp)) for grp in ("required", "recommended", "optional")}
+        hints = None
+        if any(e.get("name") == "ADAPTER_CAPABILITIES" for grp in annotated.values() for e in grp):
+            schema_doc = next((e for grp in annotated.values() for e in grp if e.get("role") == "schema"), None)
+            hints = self._capabilities_hints(name, (schema_doc or {}).get("file_path") or "")
         return {
+            "capabilities_hints": hints,
+            # vendor-adapter 0.17.1+: how the adapter reaches its source. `transports`
+            # is what the image implements, `transport` what the active schema chose.
+            # One implemented transport is a fact the UI states, not a choice it offers.
+            "transports": contract.get("transports"),
+            "transport": contract.get("transport"),
+            # Runtime choices the image declares as a list plus an active value
+            # (wifi-adapter 0.17.3: motion_models/motion_model, algorithms/algorithm),
+            # set through the adapter's own PUT /bindings, effective on the next
+            # scan, no restart. Listed from the contract, never typed.
+            "bindings": _contract_choices(contract),
             "available": True,
             "service": name,
             "namespace": ns,
             "kind": contract.get("kind"),
             "external_origin": contract.get("external_origin"),
             "description": contract.get("description"),
-            "config_map": cm_name,
-            "secret": secret_name,
-            "env": {grp: annotate(env.get(grp)) for grp in ("required", "recommended", "optional")},
+            "config_map": f"{name}-config",
+            "secret": f"{name}-secrets",
+            # Passed through from the adapter's own /contract (vendor-adapter 0.14.0+).
+            # `configured` false means it holds no schema, so its vendor env list is
+            # empty and the UI asks for a schema instead of credentials. `mapping`
+            # carries supported/mapped/unmapped, which is how the UI can say that the
+            # adapter emits a field the mounted schema does not map. A service that
+            # predates these fields simply reports None and the UI falls back.
+            "configured": contract.get("configured"),
+            "vendor": contract.get("vendor"),
+            "schema_source": contract.get("schema_source"),
+            "mapping": contract.get("mapping"),
+            "discover_mapping": contract.get("discover_mapping"),
+            "env": annotated,
         }
+
+    def _capabilities_hints(self, name: str, schema_path: str) -> dict[str, Any]:
+        """What is already known about the source an adapter is bound to, so the
+        capabilities editor opens filled in and the operator confirms instead of
+        typing from memory. Two sources, both live: what the adapter currently
+        advertises in the engine registry (its baked base merged with any env), and
+        what its mounted schema already states (the vendor name, the coordinate
+        frame it maps, whether it maps a height). Nothing here is guessed from names."""
+        out: dict[str, Any] = {"advertised": None, "schema": None}
+        for a in self.list_adapters():
+            host = str(a.get("baseUrl") or "").replace("http://", "").split(".")[0]
+            if a.get("name") == name or host == name:
+                out["advertised"] = a.get("capabilities") or None
+                break
+        if schema_path:
+            try:
+                doc = json.loads(self.get_service_file(name, schema_path).get("content") or "")
+                mapping = doc.get("mapping") or {}
+                out["schema"] = {
+                    "vendor": doc.get("vendor"),
+                    "frame": (mapping.get("frame") or {}).get("const"),
+                    "z": "y" in mapping,
+                }
+            except Exception:
+                pass
+        return out
 
     def apply_service_config(self, name: str, values: dict[str, str | None]) -> dict[str, Any]:
         """Single-mechanism apply: route each var by the contract's `sensitive`
@@ -1031,33 +1485,57 @@ class NorthboundService:
         frontends, the image entrypoint re-renders env-config.js).
 
         Both writes are strategic-merge patches, so untouched keys are preserved.
-        The deployment must declare envFrom for the ConfigMap/Secret (the manifests
-        do, with optional: true so a degraded pod still boots); this manages the
-        content, not the wiring.
+        The deployment must list `<name>-config` / `<name>-secrets` in envFrom after
+        its wiring sources (the manifests do, with optional: true so a degraded pod
+        still boots); this manages the content, not the wiring.
         """
         c = self.service_contract(name)
         if not c.get("available"):
             raise ValueError(f"{name} exposes no /contract; refusing to map config blindly")
         ns = c["namespace"]
         contract = c["contract"]
+        dep = None
+        try:
+            dep = self.k8s.apps.read_namespaced_deployment(name=name, namespace=ns)
+        except Exception:
+            pass
+        role = _role_of(name, (dep.metadata.labels if dep is not None else None) or {})
         sensitive: dict[str, bool] = {}
         for grp in ("required", "recommended", "optional"):
             for e in (contract.get("env", {}).get(grp) or []):
                 sensitive[e["name"]] = bool(e.get("sensitive"))
+        for e in _kelt_declared_env(role, contract):
+            sensitive[e["name"]] = bool(e.get("sensitive"))
         unknown = [k for k in values if k not in sensitive]
         if unknown:
             raise ValueError(f"vars not in {name} contract: {sorted(unknown)}")
-        # Discover the envFrom ConfigMap/Secret names; fall back to a convention.
+        # A JSON-typed var (contract `type: json`, 0.17.1+) must at least parse: the
+        # adapter swallows a malformed ADAPTER_CAPABILITIES silently (falls back to the
+        # baked base) and the operator would only notice as a source that never shows up.
+        json_typed = {
+            e["name"] for grp in ("required", "recommended", "optional")
+            for e in (contract.get("env", {}).get(grp) or []) + _kelt_declared_env(role, contract)
+            if str(e.get("type") or "").lower() == "json"
+        }
+        for k in json_typed:
+            v = values.get(k)
+            if v:
+                try:
+                    if not isinstance(json.loads(v), dict):
+                        raise ValueError
+                except ValueError:
+                    raise ValueError(f"{k} must be a JSON object")
+        # Writes go to the operator's own objects. A key the deployment provides
+        # elsewhere (wiring ConfigMap, inline env) is refused: writing it here would
+        # either be shadowed or fight the phase that rewrites the wiring.
         cm_name, secret_name = f"{name}-config", f"{name}-secrets"
-        try:
-            dep = self.k8s.apps.read_namespaced_deployment(name=name, namespace=ns)
-            for ef in (dep.spec.template.spec.containers[0].env_from or []):
-                if ef.config_map_ref:
-                    cm_name = ef.config_map_ref.name
-                if ef.secret_ref:
-                    secret_name = ef.secret_ref.name
-        except Exception:
-            pass
+        sources = self._env_sources(dep, ns, name)
+        owned_elsewhere = sorted(
+            k for k in values
+            if (src := self._effective(sources, k)) is not None and not src["operator"]
+        )
+        if owned_elsewhere:
+            raise ValueError(f"{owned_elsewhere} are set by the deployment (all.yml), not from here")
         # A null value UNSETS the var (delete the key); else set it. Routed by the
         # contract's `sensitive` flag to the Secret or the ConfigMap.
         set_vals = {k: v for k, v in values.items() if v is not None}
@@ -1137,6 +1615,49 @@ class NorthboundService:
                 continue
         return POSITIONING_NS
 
+    def _write_pod_file(self, name: str, ns: str, path: str, content: str) -> bool:
+        """Write `content` verbatim into a running pod at `path`, exec'd with the
+        payload base64'd on the command line (no stdin streaming to manage). Only
+        called for a path apply_service_file already checked is this service's own
+        PVC-backed store (see _writable_doc_path) — attach_dir_store mounts the PVC
+        and redirects the env to it, but copies nothing onto it by itself, so this
+        is the step that actually puts the content where the service reads it."""
+        if not re.match(r"^/[\w./-]+$", path or ""):
+            return False
+        try:
+            pods = self.k8s.core.list_namespaced_pod(namespace=ns, label_selector=f"app={name}").items
+            pod = next((p.metadata.name for p in pods if p.status.phase == "Running"), None)
+            if not pod:
+                return False
+            b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
+            out = self.k8s.exec_in_pod(
+                ns, pod, ["sh", "-c", f"echo {b64} | base64 -d > {path} && echo WRITE_OK"], container=name,
+            )
+            return bool(out) and "WRITE_OK" in out
+        except Exception:
+            return False
+
+    def _wait_for_running_pod(self, name: str, ns: str, timeout_s: float = 40.0) -> str | None:
+        """Poll for a Running, ready pod of this deployment. Used after a rollout
+        this same request just triggered, to write into the pod that actually has
+        the freshly (re)attached volume, not whichever pod happened to answer
+        list_namespaced_pod a moment before the rollout took effect."""
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            try:
+                pods = self.k8s.core.list_namespaced_pod(namespace=ns, label_selector=f"app={name}").items
+                pod = next(
+                    (p for p in pods if p.status.phase == "Running"
+                     and all((cs.ready for cs in (p.status.container_statuses or [])), )),
+                    None,
+                )
+                if pod:
+                    return pod.metadata.name
+            except Exception:
+                pass
+            time.sleep(1.5)
+        return None
+
     def _read_pod_file(self, name: str, ns: str, path: str) -> str | None:
         """Read a file at `path` from the service's running pod (best-effort), to
         detect a document loaded at runtime but not declaratively mounted (i.e.
@@ -1160,15 +1681,28 @@ class NorthboundService:
         _validate_name(name)
         ns = self._service_namespace(name)
         key = (path or "").rsplit("/", 1)[-1] or "file"
-        try:
-            cm = self.k8s.get_configmap(ns, f"{name}-files")
-            content = (cm.get("data") or {}).get(key)
-            if content is not None:
-                return {"name": name, "path": path, "content": content, "ephemeral": False}
-        except Exception:
-            pass
+        stateful = bool(path) and path in self._writable_doc_path(name, ns)
+        if not stateful:
+            # For an ordinary document the ConfigMap IS the source of truth (only
+            # the dashboard writes there). A stateful doc's ConfigMap entry is just
+            # the last thing an operator pasted in: the service itself keeps
+            # writing the PVC file directly (e.g. every PUT /bindings), so that
+            # snapshot goes stale the moment the service changes anything - read
+            # the pod instead, below, which is what is actually running.
+            try:
+                cm = self.k8s.get_configmap(ns, f"{name}-files")
+                content = (cm.get("data") or {}).get(key)
+                if content is not None:
+                    return {"name": name, "path": path, "content": content, "ephemeral": False}
+            except Exception:
+                pass
         runtime = self._read_pod_file(name, ns, path)
-        return {"name": name, "path": path, "content": runtime, "ephemeral": runtime is not None}
+        # A stateful doc's runtime copy IS its persisted copy (PVC-backed, see
+        # _ensure_writable_store): it is never mirrored into the ConfigMap above,
+        # so every read takes this branch, and without this check a document that
+        # survives every restart would be reported "ephemeral, lost on restart".
+        stateful = bool(path) and path in self._writable_doc_path(name, ns)
+        return {"name": name, "path": path, "content": runtime, "ephemeral": runtime is not None and not stateful}
 
     def _stateful_spec(self, name: str, ns: str) -> dict[str, str] | None:
         """{env, path} for this adapter's runtime-written doc, or None. Bridge keyed by
@@ -1180,9 +1714,17 @@ class NorthboundService:
         except Exception:
             return None
 
-    def _writable_doc_path(self, name: str, ns: str) -> str | None:
+    def _writable_doc_path(self, name: str, ns: str) -> set[str]:
+        """Paths that count as THIS adapter's stateful runtime doc for
+        apply_service_file: the image's own default (before the store exists) and
+        the already-redirected path inside STORE_DIR (after _ensure_writable_store
+        has run once and the env now points there). Both must match, or re-applying
+        a document after the first redirect takes the wrong branch below."""
         spec = self._stateful_spec(name, ns)
-        return spec["path"] if spec else None
+        if not spec:
+            return set()
+        fname = spec["path"].rsplit("/", 1)[-1] or "file"
+        return {spec["path"], f"{STORE_DIR}/{fname}"}
 
     def _ensure_writable_store(self, name: str, ns: str = POSITIONING_NS) -> None:
         """PVC-back a stateful adapter's runtime-written doc. The PVC is mounted at a
@@ -1250,10 +1792,19 @@ class NorthboundService:
         # Runtime-written doc (e.g. wifi calibration): back it with a PVC (dir mount +
         # env redirect, see _ensure_writable_store) so the service's writes persist,
         # instead of the read-only ConfigMap mount below.
-        if self._writable_doc_path(name, ns) == path:
+        if path in self._writable_doc_path(name, ns):
             self._ensure_writable_store(name, ns)
+            # attach_dir_store only mounts the PVC and redirects the env to it; it
+            # copies nothing onto the PVC by itself (found live 2026-09-15: a saved
+            # document sat in the ConfigMap above while the running pod kept
+            # serving its old file, indefinitely, since nothing restarts it either).
+            # Restart so a pod with the mount definitely exists, then write the
+            # content into it directly.
+            self.k8s.restart_deployment(ns, name)
+            pod = self._wait_for_running_pod(name, ns)
+            written = self._write_pod_file(name, ns, path, content) if pod else False
             return {"status": "applied", "name": name, "config_map": cm_name,
-                    "mount": path, "persistent": True}
+                    "mount": path, "persistent": True, "written": written}
 
         # One "service-files" volume; one mount per document (merge key = mountPath).
         patch = {"spec": {"template": {"spec": {

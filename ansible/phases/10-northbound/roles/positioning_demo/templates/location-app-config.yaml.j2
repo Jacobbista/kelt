@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: location-app-config
+  namespace: {{ demo_namespace }}
+data:
+  # Operator settings, seeded once: after the first run the dashboard Configure
+  # form owns this ConfigMap and the role never rewrites it. Listed after the
+  # wiring ConfigMap in envFrom, so a key here wins.
+  # Frame consistency with the engine (the blueprint/frame authority): the demo
+  # projects CAMARA area.center back into the local floor frame, so these must
+  # match the engine's gps_origin + floor dims or markers land off-canvas. The
+  # blueprint is authored at runtime (placement editor), hence operator-owned here.
+  VITE_GPS_ORIGIN_LAT: "{{ floor_plan_gps_lat }}"
+  VITE_GPS_ORIGIN_LON: "{{ floor_plan_gps_lon }}"
+  VITE_FLOOR_W: "{{ floor_width_m }}"
+  VITE_FLOOR_D: "{{ floor_depth_m }}"
+  # Fix accuracy (m) above which a device renders greyed-out / "imprecise" instead of live.
+  VITE_ACCURACY_MAX_M: "15"

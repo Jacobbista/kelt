@@ -20,6 +20,7 @@ The landing view. Cluster-wide status at a glance.
 - CPU and memory sparklines (15-minute trend)
 - Node cards with status and resource usage
 - Network Function status cards; selecting one opens its detail in the 5G Core module
+- Exposure stack and Edge apps cards (shown only when those layers are deployed), same idiom; selecting one opens Services or Edge apps
 
 Read-only.
 
@@ -147,15 +148,26 @@ Service-management console for the northbound positioning stack. Read views are
 open to `dashboard-viewer`; all write controls require `dashboard-admin`.
 
 - Services: inventory of the camara/positioning/mec deployments (image, ready
-  replicas, pod phases). Each service offers a guided **Configure** action (admin)
-- Guided setup (per service): reads the service's own `/contract` and walks the
-  operator through its fields in order, required then recommended then optional,
-  each with description and example. Apply routes every value by the contract
-  `sensitive` flag (Secret for sensitive, ConfigMap otherwise, both via envFrom)
-  and rolls the deployment. A service that exposes no contract degrades to a
-  read-only notice. Sensitive current values are never shown, only set/unset
+  replicas, pod phases). Each service with a contract offers **info** (what it
+  reads and who provides it) and, for admins, **Configure**. Every service also
+  offers a plain **restart** (rolls the pod, config and image unchanged), the
+  same generic action the 5G Core page offers per NF
+- Configure (per service): reads the service's own `/contract` and shows only the
+  settings the operator owns, grouped as Connection (required or secret),
+  Field mapping / Documents (a file the dashboard can own), Options. Controls
+  follow the contract `type` (switch for boolean, number, password for secret).
+  Apply writes `<name>-config` / `<name>-secrets` by the contract `sensitive`
+  flag and rolls the deployment. Deployment wiring (from `all.yml`), KELT's own
+  registration env and storage paths are not offered: they are read in info.
+  `ADAPTER_CAPABILITIES` (the bound source's traits, contract `type: json`) is a
+  guided editor pre-filled from the registry and the schema; accuracy classes
+  come from the gateway's published vocabulary. The transport the adapter uses
+  to reach its source is stated from the contract, not chosen.
+  A service that exposes no contract degrades to a read-only notice. Sensitive
+  current values are never shown, only set/unset. See "Who owns a service's
+  env" in [architecture/positioning-adapters.md](../architecture/positioning-adapters.md)
 - Adapter registry: the live registry read from the engine (`GET /adapters`),
-  showing each adapter's kind, `registered_via`, last-seen, and derived state
+  showing each adapter's kind, `registeredVia`, last-seen, and derived state
   (live / unreachable / stale). Adapters self-register; admins can force-remove a
   stale entry. No manual name+URL registration
 - Deploy adapter from image: pin an `image:tag`, port, optional `kind`, env vars
@@ -166,13 +178,13 @@ open to `dashboard-viewer`; all write controls require `dashboard-admin`.
   `vendor-adapter`, a per-vendor template instantiated once per vendor (name it
   after the vendor, point it at the vendor API via env). Gated by the backend
   `allow_workload_create` setting on top of admin.
-- Fusion config: edit `FUSION_STRATEGY` / `FUSION_COMPARE` / `DEVICE_MAP`
 - Asset Identity Map: CRUD over the gateway `GET/PUT /assets` (Discover devices
   onboarding). Since engine `0.8.19` the live broadcast is derived from the
   adapters' `devices` capability, so an onboarded asset goes live as soon as its
   adapter reports it - no track-list sync needed; see
   [architecture/positioning-adapters.md](../architecture/positioning-adapters.md)
-- Managed image rollout: retarget gateway / engine / demo to a new image
+- Update all: re-runs phase 10 to the images pinned in `all.yml` and upgrades the
+  catalog adapters that are behind (no manual image rollout: the pin is the intent)
 - Adapter contract: the `Measurement` schema, a Python adapter skeleton, an
   `env.contract.yaml` template, and links to the upstream `5g-northbound` docs
 

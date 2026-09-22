@@ -2,23 +2,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { IconArrowLeft, IconRefresh, IconTrash } from "../components/icons";
-import { Panel, Collapsible, Modal, Banner, Tabs, Field, inputCls, btn } from "../components/ui";
+import { Panel, Modal, Banner, Field, inputCls, btn } from "../components/ui";
 import { useToast } from "../context/ToastContext";
 import { useConfirm } from "../context/ConfirmContext";
 import { env } from "../runtime-env";
-import { KEYCLOAK_AUTHORITY } from "../auth/oidc";
 import LogViewer from "../components/LogViewer";
-
-const TABS = [
-  { id: "status", label: "Status" },
-  { id: "adapters", label: "Adapters" },
-  { id: "assets", label: "Assets" },
-];
+import MappingStudio from "../components/MappingStudio";
 import {
   getNorthboundServices,
   getNorthboundAdapters,
+  getNorthboundLogHealth,
   getNorthboundContract,
+  getNorthboundServiceContract,
+  getNorthboundAccuracyClassVocabulary,
   getNorthboundBindings,
+  setNorthboundServiceBinding,
   getNorthboundReadiness,
   getNorthboundServiceConfig,
   applyNorthboundServiceConfig,
@@ -31,13 +29,8 @@ import {
   getNorthboundVersions,
   deleteNorthboundWorkload,
   deployNorthboundImage,
-  setNorthboundFusion,
-  rolloutNorthboundManaged,
-  getNorthboundAssets,
-  setNorthboundAssets,
-  getNorthboundDiscoverable,
   getNorthboundDiscoverRaw,
-  getClientSecret,
+  restartDeployment,
 } from "../api";
 
 // Generic adapters published by 5g-northbound that an operator can deploy on
@@ -53,18 +46,18 @@ const CATALOG = [
     // env-config.js. Fallback tracks the same baseline for an un-injected bundle.
     image: env("VITE_NB_WIFI_IMAGE", "ghcr.io/jacobbista/5g-northbound/wifi-adapter:0.9.0"),
     kind: "singleton",
-    adapterKind: "wifi",
     blurb: "Wi-Fi RSSI positioning source. Deploy one.",
   },
   {
     name: "vendor-adapter",
     image: env("VITE_NB_REST_ADAPTER_IMAGE", "ghcr.io/jacobbista/5g-northbound/vendor-adapter:0.9.0"),
     kind: "template",
-    adapterKind: "", // per vendor: operator sets it (e.g. uwb for Wittra)
-    blurb: "Generic wrapper around a vendor REST API (e.g. Wittra). Deploy one per vendor; name it after the vendor and point it at the vendor API in the env below.",
+    // What it is and how it reaches the vendor are both in the schema loaded after
+    // deploy (its `transport`: rest today, mqtt/webhook declared upstream). Nothing
+    // about the vendor is decided here beyond the instance name.
+    blurb: "Generic bridge to a vendor cloud. Deploy one per vendor, named after the vendor; the schema you load next describes the vendor's API and how it is reached (REST today).",
   },
 ];
-const MANAGED = ["camara-gateway", "positioning-engine", "location-app"];
 
 // Engine registry membership/reachability (from GET /adapters `state`): live =
 // heartbeat fresh and polling OK; unreachable = alive but its source/poll fails
@@ -98,6 +91,33 @@ const KIND_BADGE = {
   ui: { cls: "bg-emerald-500/15 text-emerald-300", label: "ui" },
   internal: { cls: "bg-slate-700/60 text-slate-400", label: "internal" },
 };
+
+// Each service has a data-path role: southbound adapters ingest, the engine fuses,
+// northbound serves. Rendered north -> core -> south (compass/telco convention, north up).
+// `role`/`lane` come from the kelt.io/role deploy-time label, with a heuristic fallback
+// until every workload carries it.
+// LANE_HEX applies inline so the same hex value drives chip text, dot, header, and rail.
+const LANE_HEX = { north: "#38bdf8", core: "#a78bfa", south: "#2dd4bf" };
+const LANE_ORDER = [
+  ["north", "Northbound", "serve consumers"],
+  ["core", "Core", "fusion"],
+  ["south", "Southbound", "ingest from vendors & sensors"],
+];
+// Caption rendered between two lanes: what rises from the lower lane into the one above.
+const LANE_CONNECT = { north: "positions served to consumers", core: "adapter fixes rise to the engine" };
+// Renders a front-door proxy (oauth2-proxy-<gate>) nested under the service it fronts.
+function orderLane(svcs) {
+  const proxies = svcs.filter((s) => s.role === "proxy");
+  const rest = svcs.filter((s) => s.role !== "proxy");
+  const stemOf = (p) => (p.name || "").replace(/^oauth2-proxy-/, "");
+  const out = [];
+  for (const s of rest) {
+    out.push({ svc: s, sub: false });
+    for (const p of proxies) if (s.name.startsWith(stemOf(p))) out.push({ svc: p, sub: true });
+  }
+  for (const p of proxies) if (!rest.some((s) => s.name.startsWith(stemOf(p)))) out.push({ svc: p, sub: true });
+  return out;
+}
 
 // Per-service label SUFFIX (not the full subdomain). KELT serves every surface at
 // <prefix>-<suffix>.<base> (e.g. kelt-camara.<base>); the contract's `subdomain`
@@ -133,723 +153,9 @@ function publicUrl(s) {
 // hardcoded subdomain convention was removed because it guessed origins that
 // were never routed. See docs/security/external-access.md.
 
-// Asset Identity Map editor (admin). The gateway is the authority (GET/PUT /assets,
-// PVC-backed); PUT replaces the store, so we load-all, edit, save-all. The field
-// model + enums mirror the upstream schema/asset.schema.json (v2); the gateway
-// validates authoritatively. The gateway serves no asset-schema endpoint, so the
-// HELP copy below is a hand-kept mirror of that schema's field descriptions.
-// Copy-paste retrieval: the CAMARA retrieve call as a ready snippet for the
-// operator's OWN terminal (curl / PowerShell / Python), the same pattern as the
-// IAM token block. It does NOT fire from the browser; it assumes $TOKEN is
-// already set (mint it from Settings -> IAM, camara-api-demo). The gateway URL is
-// derived from the dashboard hostname, matching the kelt-camara.<base> route.
-// Self-contained: mints a token (camara-api-demo, the tenant-scoped reference
-// consumer) AND runs the retrieve in one paste, so the operator does not need a
-// token beforehand. "insert secret" inlines the client secret (audit-logged,
-// same as the IAM page); without it the snippet keeps the .testbed.secrets
-// placeholder so nothing leaks by default.
-function RetrieveSnippet({ assets }) {
-  const [lang, setLang] = useState("curl");
-  const [assetId, setAssetId] = useState("");
-  const [maxAge, setMaxAge] = useState("0");
-  const [copied, setCopied] = useState(false);
-  const [secret, setSecret] = useState(null);
-  const [secretErr, setSecretErr] = useState("");
-
-  const { protocol, hostname } = window.location;
-  const isIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) || hostname === "localhost";
-  const labels = hostname.split(".");
-  const base = labels.slice(1).join(".");
-  const prefix = labels[0].replace(/-(dashboard|dev)$/, "");
-  const url = (!isIp && base && prefix)
-    ? `${protocol}//${prefix}-camara.${base}/location-retrieval/v0.5/retrieve`
-    : "https://<prefix>-camara.<base>/location-retrieval/v0.5/retrieve";
-  const tokenUrl = KEYCLOAK_AUTHORITY
-    ? `${KEYCLOAK_AUTHORITY.replace(/\/$/, "")}/protocol/openid-connect/token`
-    : "https://<keycloak>/realms/<realm>/protocol/openid-connect/token";
-
-  const list = Array.isArray(assets) ? assets : [];
-  const asset = assetId.trim() || "<asset_id>";
-  const age = String(maxAge).trim() || "0";
-  const bodyJson = `{"device":{"assetId":"${asset}"},"maxAge":${age}}`;
-  const secretField = secret || "<paste-from-.testbed.secrets>";
-
-  const snippets = {
-    curl: `TOKEN=$(curl -s -X POST ${tokenUrl} \\
-  --data-urlencode grant_type=client_credentials \\
-  --data-urlencode client_id=camara-api-demo \\
-  --data-urlencode 'client_secret=${secretField}' \\
-  | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
-echo "$TOKEN"
-
-curl -s -i -X POST ${url} \\
-  -H "Authorization: Bearer $TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '${bodyJson}'`,
-    powershell: `$token = (Invoke-RestMethod -Method Post -Uri "${tokenUrl}" -Body @{
-  grant_type    = 'client_credentials';
-  client_id     = 'camara-api-demo';
-  client_secret = '${secretField}'
-}).access_token
-$token
-
-$r = Invoke-WebRequest -Method Post -Uri "${url}" -Headers @{ Authorization = "Bearer $token" } -ContentType 'application/json' -Body '${bodyJson}'
-$r.Headers['x-correlator']; $r.Content`,
-    python: `import requests
-
-tok = requests.post("${tokenUrl}", data={
-    "grant_type": "client_credentials",
-    "client_id": "camara-api-demo",
-    "client_secret": "${secretField}",
-}).json()["access_token"]
-print(tok)
-
-r = requests.post("${url}",
-    headers={"Authorization": f"Bearer {tok}"},
-    json={"device": {"assetId": "${asset}"}, "maxAge": ${age}})
-print(r.status_code, r.headers.get("x-correlator"))
-print(r.json())`,
-  };
-  const snippet = snippets[lang];
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(snippet);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch { /* restrictive clipboard context: user selects manually */ }
-  };
-  const reveal = async () => {
-    setSecretErr("");
-    try {
-      const res = await getClientSecret("camara-api-demo");
-      if (res.found) setSecret(res.secret);
-      else setSecretErr(`${res.env_key} is not in .testbed.secrets on the host (realm has the changeme default)`);
-    } catch (e) {
-      setSecretErr(e?.message || "could not read the secret");
-    }
-  };
-
-  return (
-    <Panel title="Test retrieval" hint="The full CAMARA retrieve, ready to paste into your own terminal: it mints a token (camara-api-demo) and runs the retrieve in one go. Pick an onboarded asset, insert the secret, copy, and run.">
-      <div className="flex flex-wrap items-end gap-6">
-        <label className="flex flex-col gap-1.5 text-[11px] text-slate-400">
-          asset
-          <select className={`${inputCls} w-64`} value={assetId} disabled={!list.length}
-            onChange={(e) => setAssetId(e.target.value)}>
-            <option value="">{assets == null ? "loading…" : list.length ? "select an asset…" : "no assets onboarded"}</option>
-            {list.map((a) => (
-              <option key={a.asset_id} value={a.asset_id}>{a.asset_id}{a.org ? ` · ${a.org}` : ""}</option>
-            ))}
-          </select>
-        </label>
-        <label className="flex flex-col gap-1.5 text-[11px] text-slate-400">
-          maxAge (s)
-          <input className={`${inputCls} w-24`} value={maxAge} onChange={(e) => setMaxAge(e.target.value)} />
-        </label>
-      </div>
-      <div className="mt-5 rounded-lg border border-slate-800 bg-slate-950 p-3.5 text-[11px] font-mono text-slate-300">
-        <div className="mb-2.5 flex gap-1.5">
-          {[["curl", "curl"], ["powershell", "PowerShell"], ["python", "Python"]].map(([id, label]) => (
-            <button key={id} type="button" onClick={() => setLang(id)}
-              className={`rounded px-2.5 py-1 text-[10px] ${lang === id ? "bg-slate-700 text-slate-100" : "bg-slate-900 text-slate-400 hover:bg-slate-800"}`}>
-              {label}
-            </button>
-          ))}
-        </div>
-        <pre className="whitespace-pre-wrap break-all leading-relaxed">{snippet}</pre>
-        <div className="mt-3 flex flex-wrap items-center gap-3">
-          <button type="button" onClick={copy}
-            className="rounded bg-slate-800 px-2.5 py-1 text-[10px] text-slate-300 hover:bg-slate-700">
-            {copied ? "copied" : "copy"}
-          </button>
-          <button type="button" onClick={secret ? () => setSecret(null) : reveal}
-            className="rounded bg-slate-800 px-2.5 py-1 text-[10px] text-slate-300 hover:bg-slate-700">
-            {secret ? "hide secret" : "insert secret"}
-          </button>
-          <span className="text-[10px] text-slate-500">maxAge 0 = bypass cache · -i shows x-correlator</span>
-          {secretErr && <span className="text-[10px] text-amber-400">{secretErr}</span>}
-        </div>
-      </div>
-    </Panel>
-  );
-}
-
-const ASSET_KINDS = ["uwb-tag", "tool", "pallet", "forklift", "asset", "ue"];
-const ASSET_SOURCES = ["wittra", "wifi", "fiveg", "gnss", "synthetic"];
-// org defaults to the testbed's CAMARA tenant (camara_org, injected as VITE_CAMARA_ORG)
-// so onboarded assets land in the one tenant instead of starting blank. See docs/security/iam.md.
-// Asset Identity Map v3: an asset carries N capabilities (a source + the id that source
-// fetches it by), and the gateway fuses them into one fix. A robot with a UWB tag AND a
-// WiFi radio is one asset with two capabilities. See schema/asset.schema.json (v3).
-const EMPTY_CAP = { source: "synthetic", positioning_id: "" };
-const EMPTY_ASSET = { asset_id: "", kind: "asset", org: env("VITE_CAMARA_ORG", "demo"), label: "", metadata: {}, capabilities: [{ ...EMPTY_CAP }] };
-const ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
-const ORG_RE = /^[a-z0-9-]{1,64}$/;
-
-// Normalise a stored asset to the canonical v3 shape (capabilities[]). The live cutover
-// is v3-only (the gateway rejects a v2 flat map), so the PVC is migrated in the deploy
-// window and reads come back v3 already; this stays as defensive normalisation and to
-// lift a hand-written or legacy-exported v2 file on import.
-function assetCapabilities(a) {
-  if (Array.isArray(a?.capabilities) && a.capabilities.length) {
-    return a.capabilities.map((c) => ({
-      source: (c?.source || "").trim(),
-      positioning_id: (c?.positioning_id || "").trim(),
-    }));
-  }
-  if (a?.source || a?.positioning_id) {
-    return [{ source: (a.source || "").trim(), positioning_id: (a.positioning_id || "").trim() }];
-  }
-  return [];
-}
-function normalizeAsset(a) {
-  const { source, positioning_id, simulated, ...rest } = a || {};
-  return { ...rest, capabilities: assetCapabilities(a) };
-}
-// A synthetic-sourced asset is not real hardware; surfaced as a badge (mirrors location-app,
-// which derives the same from source==="synthetic"). No stored `simulated` flag in v3.
-const isSynthetic = (a) => (a?.capabilities || []).some((c) => c?.source === "synthetic");
-// One-line guidance per field, condensed from the upstream asset.schema.json
-// descriptions. The assetId -> positioning_id indirection is the part operators trip on.
-const HELP = {
-  asset_id: "Public CAMARA handle the consumer queries by (device.assetId). A business id like pkg-4471, not a phone number.",
-  positioning_id: "The id the chosen adapter fetches this device by: the vendor-native device id (used verbatim in the adapter's API call), or the engine track id for a synthetic source.",
-  kind: "Entity class, surfaced in the CAMARA profile so a consumer knows what it is tracking.",
-  source: "Routes the asset: the engine serves it from the registered adapter whose name equals this (?source=). Pick a deployed adapter.",
-  org: "Tenant. The gateway matches it against the token org claim, so a consumer sees only its own org's assets.",
-};
-
-// Guided editor for one asset. Self-contained form state (including free-form
-// metadata rows) so the parent only handles the assembled asset on save. Built from
-// the upstream asset.schema.json field descriptions (see HELP above).
-function AssetModal({ initial, isNew, busy, onSave, onClose }) {
-  const [form, setForm] = useState(() => ({ ...EMPTY_ASSET, ...initial }));
-  const [meta, setMeta] = useState(() =>
-    Object.entries(initial?.metadata || {}).map(([k, v]) => ({ k, v: String(v) })));
-  const [step, setStep] = useState(0);
-  // Live adapter registry: `source` ROUTES (v0.8.0 the engine serves the asset from
-  // the adapter whose ADAPTER_NAME == source), so the picker offers the names of
-  // registered adapters, not a free modality string. See docs/architecture/positioning-adapters.md.
-  const [adapters, setAdapters] = useState([]);
-  useEffect(() => {
-    getNorthboundAdapters().then((a) => setAdapters(Array.isArray(a) ? a : [])).catch(() => {});
-  }, []);
-  const set = (patch) => setForm((f) => ({ ...f, ...patch }));
-  // Capabilities are a list: add/edit/remove a { source, positioning_id } row.
-  const caps = form.capabilities || [];
-  const setCap = (i, patch) => set({ capabilities: caps.map((c, j) => (j === i ? { ...c, ...patch } : c)) });
-  const addCap = () => set({ capabilities: [...caps, { ...EMPTY_CAP }] });
-  const removeCap = (i) => set({ capabilities: caps.filter((_, j) => j !== i) });
-
-  // Options = live adapter names (the routing key). Keep the current value selectable
-  // even if its adapter is offline, and fall back to the known modalities when nothing
-  // is registered yet so the form stays usable in a cold stack.
-  const liveNames = adapters.map((a) => a.name).filter(Boolean);
-  const stateOf = Object.fromEntries(adapters.map((a) => [a.name, a.state]));
-  const capSourceOptions = (source) => Array.from(new Set([...(liveNames.length ? liveNames : ASSET_SOURCES), source].filter(Boolean)));
-  const capHint = (source) => liveNames.length
-    ? (liveNames.includes(source)
-        ? `Routes to adapter "${source}"${stateOf[source] && stateOf[source] !== "live" ? ` (${stateOf[source]})` : " · live"}.`
-        : `No registered adapter named "${source}". Deploy one (Build your own) or pick a live source.`)
-    : "No adapters registered yet. Deploy one in Build your own; the values below are known modalities.";
-
-  // Progressive steps: identity → capabilities → tenant/details. Each step gates the next
-  // (Next disabled until valid) so the operator cannot skip a source's positioning_id or
-  // commit a malformed org; the whole thing is a guided flow, not one long field dump.
-  const idOk = ID_RE.test((form.asset_id || "").trim());
-  const capValid = (c) => !!(c?.source || "").trim() && ID_RE.test((c?.positioning_id || "").trim());
-  const capsOk = caps.length >= 1 && caps.every(capValid);
-  const orgOk = ORG_RE.test((form.org || "").trim());
-  const STEPS = [
-    { id: "identity", label: "Identity", valid: idOk },
-    { id: "capabilities", label: "Capabilities", valid: capsOk },
-    { id: "details", label: "Details", valid: orgOk },
-  ];
-  const last = STEPS.length - 1;
-  const canNext = STEPS[step].valid;
-  const allValid = STEPS.every((s) => s.valid);
-
-  const submit = () => {
-    const metadata = {};
-    for (const { k, v } of meta) { const key = k.trim(); if (key) metadata[key] = v; }
-    const capabilities = caps.map((c) => ({
-      source: (c.source || "").trim(),
-      positioning_id: (c.positioning_id || "").trim(),
-    }));
-    onSave({ ...form, capabilities, metadata });
-  };
-
-  return (
-    <Modal
-      title={isNew ? "Add asset" : `Edit ${initial.asset_id}`}
-      hint="device.assetId → positioning_id (vendor device id) → source = adapter that serves it · org (tenant)"
-      onClose={onClose}
-    >
-      <div className="flex flex-col gap-4 text-xs">
-        {/* Stepper: current highlighted, done steps checked and clickable to go back;
-            forward is only reachable through a validated Next. */}
-        <div className="flex items-center gap-1">
-          {STEPS.map((s, i) => {
-            const done = i < step;
-            const active = i === step;
-            const reachable = i <= step;
-            return (
-              <button
-                key={s.id}
-                type="button"
-                disabled={!reachable}
-                onClick={() => reachable && setStep(i)}
-                className={`flex items-center gap-1.5 rounded px-2 py-1 transition-colors ${
-                  active ? "bg-sky-600/20 text-sky-300" : done ? "text-emerald-400 hover:bg-slate-800" : "text-slate-500"
-                }`}
-              >
-                <span className={`flex h-4 w-4 items-center justify-center rounded-full text-[9px] ${
-                  active ? "bg-sky-500 text-white" : done ? "bg-emerald-500 text-white" : "bg-slate-700 text-slate-300"
-                }`}>
-                  {done ? "✓" : i + 1}
-                </span>
-                {s.label}
-              </button>
-            );
-          })}
-        </div>
-
-        {step === 0 && (
-          <div className="flex flex-col gap-3">
-            <p className="text-[11px] text-slate-500">Who this device is publicly, and what it is.</p>
-            <Field label="assetId" hint={HELP.asset_id}>
-              <input className={inputCls} placeholder="pkg-4471" value={form.asset_id}
-                disabled={!isNew} onChange={(e) => set({ asset_id: e.target.value })} />
-              {form.asset_id && !idOk && <span className="text-[10px] text-rose-400">letters / digits / . _ : - (1-128)</span>}
-            </Field>
-            <Field label="kind" hint={HELP.kind}>
-              <select className={inputCls} value={form.kind} onChange={(e) => set({ kind: e.target.value })}>
-                {ASSET_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
-              </select>
-            </Field>
-          </div>
-        )}
-
-        {step === 1 && (
-          <div className="flex flex-col gap-3">
-            <p className="text-[11px] text-slate-500">How this asset is located. Add one capability per source it is tracked by (a UWB tag AND a WiFi radio = two rows); the gateway fuses them into one fix.</p>
-            {caps.map((c, i) => (
-              <div key={i} className="rounded border border-slate-800 bg-slate-950/40 p-2">
-                <div className="mb-1.5 flex items-center justify-between">
-                  <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500">capability {i + 1}</span>
-                  {caps.length > 1 && (
-                    <button type="button" className="px-1 text-rose-400 hover:text-rose-300"
-                      onClick={() => removeCap(i)} aria-label="Remove capability">✕</button>
-                  )}
-                </div>
-                <Field label="source" hint={HELP.source}>
-                  <select className={inputCls} value={c.source} onChange={(e) => setCap(i, { source: e.target.value })}>
-                    {capSourceOptions(c.source).map((s) => (
-                      <option key={s} value={s}>{s}{stateOf[s] && stateOf[s] !== "live" ? ` (${stateOf[s]})` : ""}</option>
-                    ))}
-                  </select>
-                  <span className={`text-[10px] ${liveNames.includes(c.source) && stateOf[c.source] === "live" ? "text-emerald-500" : "text-amber-500"}`}>{capHint(c.source)}</span>
-                </Field>
-                <Field label="positioning_id" hint={HELP.positioning_id}>
-                  <div className="flex items-center gap-2">
-                    <input className={`${inputCls} flex-1`} placeholder="vendor device id (synthetic: engine track id)"
-                      value={c.positioning_id} onChange={(e) => setCap(i, { positioning_id: e.target.value })} />
-                    <button type="button" className={btn.ghost} disabled={!form.asset_id}
-                      onClick={() => setCap(i, { positioning_id: form.asset_id })}>= assetId</button>
-                  </div>
-                  {c.positioning_id && !ID_RE.test(c.positioning_id.trim()) && <span className="text-[10px] text-rose-400">letters / digits / . _ : - (1-128)</span>}
-                </Field>
-              </div>
-            ))}
-            <button type="button" className={btn.ghost} onClick={addCap}>+ capability</button>
-          </div>
-        )}
-
-        {step === 2 && (
-          <div className="flex flex-col gap-3">
-            <p className="text-[11px] text-slate-500">Tenant, and optional presentation details.</p>
-            <Field label="org" hint={HELP.org}>
-              <input className={inputCls} placeholder="acme" value={form.org} onChange={(e) => set({ org: e.target.value })} />
-              {form.org && !orgOk && <span className="text-[10px] text-rose-400">lowercase letters / digits / - (1-64)</span>}
-            </Field>
-            <Field label="label (optional)" hint="Human-readable name shown in UIs.">
-              <input className={inputCls} placeholder="Forklift 7 (bay A)" value={form.label} onChange={(e) => set({ label: e.target.value })} />
-            </Field>
-            {/* Advanced: free-form metadata (schema additionalProperties), e.g. floor, bay. */}
-            <div className="rounded border border-slate-800 bg-slate-950/40 p-2">
-              <div className="mb-1 flex items-center justify-between">
-                <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500">metadata (optional)</span>
-                <button type="button" className={btn.ghost} onClick={() => setMeta((m) => [...m, { k: "", v: "" }])}>+ field</button>
-              </div>
-              {meta.length === 0 ? (
-                <p className="text-[10px] text-slate-600">Free-form per-asset fields (e.g. floor, bay).</p>
-              ) : (
-                <div className="flex flex-col gap-1.5">
-                  {meta.map((row, i) => (
-                    <div key={i} className="flex items-center gap-2">
-                      <input className={`${inputCls} w-32`} placeholder="floor" value={row.k}
-                        onChange={(e) => setMeta((m) => m.map((r, j) => (j === i ? { ...r, k: e.target.value } : r)))} />
-                      <input className={`${inputCls} flex-1`} placeholder="3" value={row.v}
-                        onChange={(e) => setMeta((m) => m.map((r, j) => (j === i ? { ...r, v: e.target.value } : r)))} />
-                      <button type="button" className="px-1 text-rose-400 hover:text-rose-300"
-                        onClick={() => setMeta((m) => m.filter((_, j) => j !== i))} aria-label="Remove field">✕</button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        <div className="mt-1 flex items-center justify-between gap-2 border-t border-slate-800 pt-3">
-          <button type="button" className={btn.ghost} onClick={onClose}>Cancel</button>
-          <div className="flex items-center gap-2">
-            {step > 0 && <button type="button" className={btn.ghost} onClick={() => setStep((s) => s - 1)}>Back</button>}
-            {step < last ? (
-              <button type="button" className={btn.sky} disabled={!canNext} onClick={() => canNext && setStep((s) => s + 1)}>Next</button>
-            ) : (
-              <button type="button" className={btn.sky} disabled={busy || !allValid} onClick={submit}>{busy ? "Saving…" : "Save asset"}</button>
-            )}
-          </div>
-        </div>
-      </div>
-    </Modal>
-  );
-}
-
-// Validate a parsed asset array before a replace-all import: mirrors the per-asset rules
-// (assetId/org patterns, at least one capability with a source + valid positioning_id)
-// plus duplicate detection, and lifts a still-v2 flat entry to capabilities[] so an older
-// hand-written or exported file still imports. The gateway validates authoritatively on
-// PUT; this just catches obvious errors before we replace the whole store.
-function validateImportedAssets(arr) {
-  const errors = [];
-  const seen = new Set();
-  const clean = arr.map((a, i) => {
-    const id = (a?.asset_id || "").trim();
-    const org = (a?.org || "").trim();
-    const where = id || `#${i + 1}`;
-    const capabilities = assetCapabilities(a);
-    if (!ID_RE.test(id)) errors.push(`${where}: bad asset_id`);
-    else if (seen.has(id)) errors.push(`${where}: duplicate asset_id`);
-    if (!ORG_RE.test(org)) errors.push(`${where}: bad org`);
-    if (capabilities.length === 0) errors.push(`${where}: no capabilities`);
-    else capabilities.forEach((c, j) => {
-      if (!c.source) errors.push(`${where}: capability ${j + 1} has no source`);
-      if (!ID_RE.test(c.positioning_id)) errors.push(`${where}: capability ${j + 1} bad positioning_id`);
-    });
-    if (id) seen.add(id);
-    const { source, positioning_id, simulated, ...rest } = a || {};
-    return {
-      ...rest, asset_id: id, org,
-      kind: a?.kind || "asset",
-      label: (a?.label || "").trim(),
-      capabilities: capabilities.map((c) => ({ source: c.source, positioning_id: c.positioning_id })),
-      metadata: (a && typeof a.metadata === "object" && a.metadata) || {},
-    };
-  });
-  return { errors, clean };
-}
-
-// Onboarding: devices the engine sees across live adapters that are not yet mapped
-// (GET /assets/discoverable). `origin` distinguishes a vendor inventory entry (stable
-// registry, bulk) from an on-air observation (wifi, per-activity). Onboarding is never
-// automatic — picking one opens the Add-asset wizard prefilled; the operator confirms
-// and commits an explicit PUT /assets.
-const ORIGIN_BADGE = {
-  inventory: { cls: "bg-sky-500/15 text-sky-300", label: "inventory", title: "vendor registry entry (stable)" },
-  observed: { cls: "bg-emerald-500/15 text-emerald-300", label: "observed", title: "seen on air (per-activity)" },
-};
-
-// Device role (schema-driven, from the adapter's classify block): "infrastructure" = a
-// fixed node (e.g. a UWB anchor) that is never onboarded as an asset; "asset" or absent =
-// onboardable. Absent until the adapter's schema declares a classify rule, in which case
-// every candidate is treated as onboardable.
-const ROLE_BADGE = {
-  asset: { cls: "bg-emerald-500/15 text-emerald-300", label: "asset" },
-  infrastructure: { cls: "bg-slate-700/60 text-slate-400", label: "infrastructure" },
-};
-
-// One discoverable candidate. onOnboard=null renders it read-only (used for the anchors
-// group). Shows origin, the vendor-native device_type, and role badges when present.
-function CandidateRow({ c, onOnboard }) {
-  const ob = ORIGIN_BADGE[c.origin] || { cls: "bg-slate-700/60 text-slate-400", label: c.origin || "?", title: "" };
-  const rb = c.role ? ROLE_BADGE[c.role] : null;
-  const sub = (c.label && c.label !== c.id) ? c.label : "";
-  return (
-    <div className="flex items-center gap-3 py-2 text-xs">
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="font-mono font-semibold text-slate-200">{c.id}</span>
-          {c.source && <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[9px] text-slate-400">{c.source}</span>}
-          <span className={`rounded px-1.5 py-0.5 text-[9px] ${ob.cls}`} title={ob.title}>{ob.label}</span>
-          {c.source_class && <span className="rounded bg-indigo-500/15 px-1.5 py-0.5 text-[9px] text-indigo-300" title="normalized source class">{c.source_class}</span>}
-          {c.device_type && <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[9px] text-slate-400" title="vendor-native device type">{c.device_type}</span>}
-          {rb && <span className={`rounded px-1.5 py-0.5 text-[9px] ${rb.cls}`}>{rb.label}</span>}
-        </div>
-        {(sub || c.last_seen) && (
-          <div className="mt-0.5 flex items-center gap-2 text-[10px] text-slate-600">
-            {sub && <span>{sub}</span>}
-            {c.last_seen && <span>· seen {c.last_seen}</span>}
-          </div>
-        )}
-      </div>
-      {onOnboard && <button type="button" className={btn.sky} onClick={() => onOnboard(c)}>onboard →</button>}
-    </div>
-  );
-}
-
-function DiscoverModal({ onOnboard, onClose }) {
-  const [rows, setRows] = useState(null); // null = loading
-  const [err, setErr] = useState("");
-  useEffect(() => {
-    getNorthboundDiscoverable()
-      // The gateway returns { candidates: [{ id, source, origin, role?, source_class?,
-      // device_type?, label?, last_seen? }] }. Fall back to devices / a bare array so a
-      // contract tweak does not blank the list.
-      .then((d) => setRows(
-        Array.isArray(d?.candidates) ? d.candidates
-          : Array.isArray(d?.devices) ? d.devices
-          : Array.isArray(d) ? d : []
-      ))
-      .catch((e) => { setErr(e.message || "could not load discoverable devices"); setRows([]); });
-  }, []);
-
-  // The gateway MARKS infrastructure (role) rather than excluding it, so KELT separates it:
-  // onboardable = asset or unclassified; infrastructure is shown muted and cannot be onboarded.
-  const infra = (rows || []).filter((c) => c.role === "infrastructure");
-  const onboardable = (rows || []).filter((c) => c.role !== "infrastructure");
-
-  return (
-    <Modal
-      title="Discover devices"
-      hint="Devices live adapters report but that are not yet onboarded. Pick one to prefill an asset; onboarding stays an explicit save."
-      wide
-      onClose={onClose}
-    >
-      {rows === null ? (
-        <p className="text-xs text-slate-500">Scanning adapters…</p>
-      ) : err ? (
-        <div className="rounded bg-amber-500/10 px-3 py-2 text-xs text-amber-300">{err}</div>
-      ) : rows.length === 0 ? (
-        <p className="text-xs text-slate-500">No new devices. Every device a live adapter reports is already onboarded, or no adapter advertises a device inventory yet.</p>
-      ) : (
-        <div className="flex flex-col gap-4">
-          {onboardable.length === 0 ? (
-            <p className="text-xs text-slate-500">Every reported device is fixed infrastructure; nothing to onboard.</p>
-          ) : (
-            <div className="flex flex-col divide-y divide-slate-800/60">
-              {onboardable.map((c) => <CandidateRow key={`${c.source}/${c.id}`} c={c} onOnboard={onOnboard} />)}
-            </div>
-          )}
-          {infra.length > 0 && (
-            <div className="rounded border border-slate-800 bg-slate-950/40 p-2">
-              <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-slate-500">
-                {infra.length} infrastructure device{infra.length > 1 ? "s" : ""} · fixed, not onboardable
-              </div>
-              <div className="flex flex-col divide-y divide-slate-800/40 opacity-70">
-                {infra.map((c) => <CandidateRow key={`${c.source}/${c.id}`} c={c} onOnboard={null} />)}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-    </Modal>
-  );
-}
-
-function AssetsTab({ toast }) {
-  const [assets, setAssets] = useState(null); // null = loading
-  const [editing, setEditing] = useState(null);
-  const [isNew, setIsNew] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-  const [importConfirm, setImportConfirm] = useState(null); // { count, next }
-  const [discoverOpen, setDiscoverOpen] = useState(false);
-  const fileRef = useRef(null);
-
-  // Onboard a discovered device: open the Add-asset wizard PREFILLED from the candidate as
-  // a single capability (source from the candidate, positioning_id = the id the adapter
-  // fetches by, both editable). The operator confirms org/kind and can add more sources
-  // before saving — onboarding is never silent.
-  const onboardCandidate = (c) => {
-    setDiscoverOpen(false);
-    setEditing({
-      ...EMPTY_ASSET,
-      asset_id: c.id || "",
-      capabilities: [{
-        source: c.source || "synthetic",
-        positioning_id: c.id || "",
-      }],
-      label: c.label || "",
-      // Carry the classification as provenance (no hardcoded source_class/device_type →
-      // asset-kind mapping; the operator picks kind in the wizard). No-op until present.
-      metadata: {
-        ...(c.source_class ? { source_class: c.source_class } : {}),
-        ...(c.device_type ? { device_type: c.device_type } : {}),
-      },
-    });
-    setIsNew(true);
-  };
-
-  // Read-tolerant: normalise every entry to capabilities[] so the table and editor render
-  // whether the gateway returns v3 or a still-v2 flat store (migrated to v3 on next save).
-  const load = useCallback(() => {
-    setErr("");
-    getNorthboundAssets()
-      .then((d) => setAssets(Array.isArray(d?.assets) ? d.assets.map(normalizeAsset) : []))
-      .catch((e) => { setErr(e.message || "could not load /assets"); setAssets([]); });
-  }, []);
-  useEffect(() => { load(); }, [load]);
-
-  const saveAll = async (next) => {
-    setBusy(true);
-    try {
-      await setNorthboundAssets({ version: 3, assets: next });
-      setAssets(next);
-      toast.success("Assets saved — gateway store updated");
-    } catch (e) { toast.error(`Save failed: ${e.message}`); throw e; }
-    finally { setBusy(false); }
-  };
-
-  const upsert = async (a) => {
-    const id = (a.asset_id || "").trim();
-    const org = (a.org || "").trim();
-    const caps = a.capabilities || [];
-    if (!ID_RE.test(id)) return toast.error("asset_id: letters/digits/._:- (1-128)");
-    if (!ORG_RE.test(org)) return toast.error("org: lowercase letters/digits/- (1-64)");
-    if (caps.length === 0) return toast.error("add at least one capability");
-    for (const c of caps) {
-      if (!(c.source || "").trim()) return toast.error("every capability needs a source");
-      if (!ID_RE.test((c.positioning_id || "").trim())) return toast.error("positioning_id: letters/digits/._:- (1-128)");
-    }
-    const clean = { ...a, asset_id: id, org, label: (a.label || "").trim() };
-    const next = [...(assets || []).filter((x) => x.asset_id !== id), clean];
-    try { await saveAll(next); setEditing(null); } catch { /* toast shown */ }
-  };
-
-  const remove = async (id) => {
-    try { await saveAll((assets || []).filter((x) => x.asset_id !== id)); } catch { /* toast shown */ }
-  };
-
-  // Export the current map as assets.json (same shape as the companion seed file, so
-  // it doubles as a backup and a seed template). Client-side blob, no round-trip.
-  const doExport = () => {
-    const body = JSON.stringify({ version: 3, assets: assets || [] }, null, 2);
-    const url = URL.createObjectURL(new Blob([body], { type: "application/json" }));
-    const a = document.createElement("a");
-    a.href = url; a.download = "assets.json";
-    document.body.appendChild(a); a.click(); a.remove();
-    URL.revokeObjectURL(url);
-  };
-
-  // Import a JSON file and REPLACE the whole map (PUT /assets is replace-all). Accept a
-  // bare array or { assets: [...] }; validate before offering the confirm so a bad file
-  // never silently wipes the store.
-  const onImportFile = async (e) => {
-    const file = e.target.files?.[0];
-    e.target.value = ""; // let the same file be re-picked after a fix
-    if (!file) return;
-    let parsed;
-    try { parsed = JSON.parse(await file.text()); }
-    catch { return toast.error("Import failed: not valid JSON"); }
-    const arr = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.assets) ? parsed.assets : null;
-    if (!arr) return toast.error("Import failed: expected an array or { assets: [...] }");
-    if (arr.length === 0) return toast.error("Import failed: file has no assets");
-    const { errors, clean } = validateImportedAssets(arr);
-    if (errors.length) {
-      return toast.error(`Import rejected: ${errors.slice(0, 3).join("; ")}${errors.length > 3 ? ` (+${errors.length - 3} more)` : ""}`);
-    }
-    setImportConfirm({ count: clean.length, next: clean });
-  };
-
-  const confirmImport = async () => {
-    const c = importConfirm; setImportConfirm(null);
-    try { await saveAll(c.next); } catch { /* toast shown */ }
-  };
-
-  return (
-    <div className="flex flex-col gap-4">
-    <Panel title="Asset Identity Map" hint="CAMARA private-asset profile: assetId → positioning source. The gateway is the authority (GET/PUT /assets). The engine broadcasts each device from its adapter's capability, so an onboarded asset goes live as soon as its adapter reports it.">
-      {assets === null ? (
-        <p className="text-xs text-slate-500">Loading…</p>
-      ) : (
-        <div className="flex flex-col gap-3">
-          {err && <div className="rounded bg-amber-500/10 px-3 py-2 text-xs text-amber-300">{err}</div>}
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <button type="button" className={btn.ghost} disabled={busy || (assets || []).length === 0}
-                title="download the current map as assets.json" onClick={doExport}>⇩ export</button>
-              <button type="button" className={btn.ghost} disabled={busy}
-                title="replace the whole map from an assets.json file" onClick={() => fileRef.current?.click()}>⇪ import</button>
-              <input ref={fileRef} type="file" accept="application/json,.json" className="hidden" onChange={onImportFile} />
-            </div>
-            <div className="flex items-center gap-2">
-              <button type="button" className={btn.ghost} title="devices seen by live adapters, not yet onboarded" onClick={() => setDiscoverOpen(true)}>⌕ Discover devices</button>
-              <button type="button" className={btn.sky} onClick={() => { setEditing({ ...EMPTY_ASSET }); setIsNew(true); }}>+ Add asset</button>
-            </div>
-          </div>
-          {assets.length === 0 ? (
-            <p className="text-xs text-slate-500">No assets yet. Add one to expose it through the CAMARA Location API by <span className="font-mono">assetId</span>.</p>
-          ) : (
-            <table className="w-full text-xs">
-              <thead><tr className="text-left text-slate-400">
-                <th className="py-1">assetId</th><th>kind</th><th>org</th><th>capabilities</th><th></th>
-              </tr></thead>
-              <tbody>
-                {assets.map((a) => (
-                  <tr key={a.asset_id} className="border-t border-slate-800 align-top">
-                    <td className="py-1 font-mono text-slate-200">{a.asset_id}{isSynthetic(a) && <span className="ml-1 rounded bg-amber-500/20 px-1 text-[9px] text-amber-300" title="Synthetic source, not real hardware">SYNTHETIC</span>}</td>
-                    <td>{a.kind}</td><td>{a.org}</td>
-                    <td>
-                      <div className="flex flex-wrap gap-1">
-                        {(a.capabilities || []).map((c, i) => (
-                          <span key={i} className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px]">
-                            <span className="text-slate-300">{c.source}</span>
-                            <span className="text-slate-500"> · </span>
-                            <span className="font-mono text-slate-400">{c.positioning_id}</span>
-                          </span>
-                        ))}
-                      </div>
-                    </td>
-                    <td className="text-right">
-                      <button type="button" className="mr-3 text-sky-400 hover:underline" onClick={() => { setEditing({ ...EMPTY_ASSET, ...a }); setIsNew(false); }}>edit</button>
-                      <button type="button" className="text-rose-400 hover:underline disabled:opacity-40" disabled={busy} onClick={() => remove(a.asset_id)}>delete</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      )}
-      {discoverOpen && (
-        <DiscoverModal onOnboard={onboardCandidate} onClose={() => setDiscoverOpen(false)} />
-      )}
-      {editing && (
-        <AssetModal initial={editing} isNew={isNew} busy={busy} onSave={upsert} onClose={() => setEditing(null)} />
-      )}
-      {importConfirm && (
-        <Modal
-          title="Replace all assets?"
-          hint={`Imports ${importConfirm.count} asset${importConfirm.count > 1 ? "s" : ""} and replaces the current ${(assets || []).length} in the gateway store. This cannot be undone.`}
-          onClose={() => setImportConfirm(null)}
-        >
-          <div className="flex justify-end gap-2">
-            <button type="button" className={btn.ghost} onClick={() => setImportConfirm(null)}>Cancel</button>
-            <button type="button" className={btn.sky} disabled={busy} onClick={confirmImport}>{busy ? "Importing…" : `Replace with ${importConfirm.count}`}</button>
-          </div>
-        </Modal>
-      )}
-    </Panel>
-    <RetrieveSnippet assets={assets} />
-    </div>
-  );
-}
-
 // Update-all: roll every companion service to the current 5g-northbound release
 // (latest on ghcr). The backend persists the release tag, re-runs phase 10, then
-// patches the catalog adapters (wifi/vendor REST) it does not own — all in one
+// patches the catalog adapters (wifi/vendor REST) it does not own, all in one
 // streamed % + ETA. Opens with a persistence panel: the rollout reuses PVCs
 // (blueprint/registry/asset map/wifi calibration) and keeps ConfigMap/Secret
 // config, so nothing is lost.
@@ -946,10 +252,12 @@ export default function NorthboundPage() {
 
   const [services, setServices] = useState([]);
   const [adapters, setAdapters] = useState([]);
+  const [logHealth, setLogHealth] = useState({}); // deployment name -> {has_errors, sample}
   const [contract, setContract] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [tab, setTab] = useState("status");
   const [configuring, setConfiguring] = useState(null);
+  const [infoFor, setInfoFor] = useState(null);
+  const [mappingSvc, setMappingSvc] = useState(null);
   const [deployOpen, setDeployOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [showUpdateAll, setShowUpdateAll] = useState(false);
@@ -973,6 +281,24 @@ export default function NorthboundPage() {
   // Keyed by service name; drives the per-row ↑ chip and the Update all count.
   const verMap = Object.fromEntries((versions.services || []).map((v) => [v.name, v]));
   const behindCount = versions.behind_count || 0;
+
+  // Matches an engine-registry entry to its Deployment by baseUrl host, not by name.
+  // A self-registering adapter's ADAPTER_NAME (registry identity) can differ from its
+  // Deployment name (e.g. synthetic-adapter registers as "synthetic"), but its baseUrl
+  // always embeds the Deployment/Service DNS name. An entry with no matching Deployment
+  // is registry-only: self-registered from outside this console (seeded, or an
+  // off-cluster source), with no pod, logs, or configure action.
+  const hostOfUrl = (url) => { try { return new URL(url).hostname.split(".")[0]; } catch { return null; } };
+  const adapterMap = Object.fromEntries(
+    adapters.map((a) => [hostOfUrl(a.baseUrl) || a.name, a])
+  );
+  const registryOnlyAdapters = adapters.filter(
+    (a) => !services.some((s) => s.name === (hostOfUrl(a.baseUrl) || a.name))
+  );
+
+  // Vendor bindings, grouped by consumer, for display inline in each consumer's row.
+  const bindingsByConsumer = {};
+  for (const b of bindings) (bindingsByConsumer[b.consumer] ||= []).push(b);
 
   // Silent loader, used by the 5s auto-poll and after every action so the
   // button does not flicker every poll.
@@ -1013,6 +339,32 @@ export default function NorthboundPage() {
     return () => clearInterval(id);
   }, [refresh, loadBindings]);
 
+  // How each adapter reaches its source (contract `transport`, 0.17.1+). Read once
+  // per adapter image, not on the 5s poll: it is a property of the image plus the
+  // loaded schema, and each read is a proxied call into the pod.
+  const [transportOf, setTransportOf] = useState({});
+  const adapterImages = services.filter((s) => s.role === "adapter").map((s) => `${s.name}@${s.image}`).join("|");
+  useEffect(() => {
+    let alive = true;
+    const names = adapterImages ? adapterImages.split("|").map((x) => x.split("@")[0]) : [];
+    Promise.all(names.map((n) =>
+      getNorthboundServiceContract(n)
+        .then((c) => [n, c?.available ? { transport: c.contract?.transport || null, transports: c.contract?.transports || null } : null])
+        .catch(() => [n, null])
+    )).then((pairs) => { if (alive) setTransportOf(Object.fromEntries(pairs)); });
+    return () => { alive = false; };
+  }, [adapterImages]);
+
+  // Log health on its own, slower poll: it reads every pod's actual log tail
+  // (real per-pod calls, not a status read), so it does not belong on the 5s
+  // tick. 30s is plenty for a "go look" indicator, not a live metric.
+  useEffect(() => {
+    const load = () => getNorthboundLogHealth().then(setLogHealth).catch(() => {});
+    load();
+    const id = setInterval(load, 30000);
+    return () => clearInterval(id);
+  }, []);
+
   const run = async (label, fn) => {
     setBusy(true);
     try { await fn(); toast.success(`${label} ok`); await refresh().catch(() => {}); loadBindings(); }
@@ -1042,7 +394,7 @@ export default function NorthboundPage() {
       }
     }
     for (const [consumer, { values, names }] of Object.entries(byConsumer)) {
-      toast.success(`Detected ${names.join(", ")} — binding ${consumer}`);
+      toast.success(`Detected ${names.join(", ")}, binding ${consumer}`);
       run(`bind ${consumer}`, () => applyNorthboundServiceConfig(consumer, values));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1062,37 +414,64 @@ export default function NorthboundPage() {
               {isAdmin ? "" : " Read-only (dashboard-admin required for changes)."}
             </p>
           </div>
-          {/* Update all lives in the in-content banner (only when behind); the header
-              keeps just refresh to avoid a redundant second CTA. */}
-          <button type="button" onClick={manualRefresh} disabled={refreshing} className={`inline-flex items-center gap-1 ${btn.ghost} disabled:opacity-60`}>
-            <IconRefresh size={14} className={refreshing ? "animate-spin" : ""} /> {refreshing ? "refreshing…" : "refresh"}
-          </button>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={manualRefresh} disabled={refreshing} className={`inline-flex items-center gap-1 ${btn.ghost} disabled:opacity-60`}>
+              <IconRefresh size={14} className={refreshing ? "animate-spin" : ""} /> {refreshing ? "refreshing…" : "refresh"}
+            </button>
+          </div>
         </div>
       </header>
 
-      <Tabs tabs={isAdmin ? TABS : TABS.filter((t) => t.id !== "assets")} active={tab} onChange={setTab} />
-
-      {/* key=tab remounts the pane on switch so it fades/rises in (see .tab-pane). */}
-      <div key={tab} className="tab-pane">
-      {tab === "status" && (
-        <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-4">
         {isAdmin && behindCount > 0 && (
           <div className="flex items-center justify-between gap-3 rounded-lg border border-sky-800/50 bg-sky-950/30 px-4 py-2.5">
             <span className="text-xs text-sky-200">
               <span className="font-semibold">{behindCount} update{behindCount > 1 ? "s" : ""} available</span>
-              {" "}— newer 5g-northbound image{behindCount > 1 ? "s are" : " is"} on ghcr.
+              {", "}newer 5g-northbound image{behindCount > 1 ? "s are" : " is"} on ghcr.
             </span>
             <button type="button" onClick={() => setShowUpdateAll(true)} className={btn.sky}>↑ Update all</button>
           </div>
         )}
-        <Panel title="Services" hint="Positioning and CAMARA services. “managed” roll via Update all; catalog adapters (wifi, vendor REST) upgrade individually.">
+        <Panel
+          title="Services"
+          hint="Positioning and CAMARA services. “managed” roll via Update all; catalog adapters (wifi, vendor REST) upgrade individually."
+        >
           {services.length === 0 ? (
             <p className="text-xs text-slate-500">No northbound services found. Enable the feature with <span className="font-mono">testbed northbound on</span>.</p>
           ) : (
-            <div className="flex flex-col divide-y divide-slate-800/60">
-              {services.map((s) => {
-                const phase = s.pods && s.pods[0] ? s.pods[0].phase : "Unknown";
-                const kind = KIND_BADGE[s.kind] || KIND_BADGE.internal;
+            <div className="flex flex-col gap-2">
+              <div className="mb-1 flex flex-wrap items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-[11px] text-slate-500">
+                <span>data rises</span><span className="text-slate-600">↑</span>
+                <span className="rounded border border-slate-800 px-2 py-0.5" style={{ color: LANE_HEX.north }}>gateway + apps</span><span className="text-slate-600">↑</span>
+                <span className="rounded border border-slate-800 px-2 py-0.5" style={{ color: LANE_HEX.core }}>engine · fusion</span><span className="text-slate-600">↑</span>
+                <span className="rounded border border-slate-800 px-2 py-0.5" style={{ color: LANE_HEX.south }}>southbound adapters</span><span className="text-slate-600">↑</span>
+                <span>vendors &amp; sensors</span>
+              </div>
+              {LANE_ORDER.map(([lane, laneTag, laneSub]) => {
+                const laneSvcs = services.filter((s) => (s.lane || "north") === lane);
+                if (!laneSvcs.length) return null;
+                const hue = LANE_HEX[lane];
+                return (
+                  <div key={lane}>
+                    <div className="border-l-2 pl-3" style={{ borderColor: hue }}>
+                      <div className="mb-1 flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10.5px] font-semibold uppercase tracking-wider" style={{ color: hue }}>{laneTag}</span>
+                          <span className="text-[11px] text-slate-500">{laneSub}</span>
+                        </div>
+                        {/* Each lane's own action, accented with that lane's hue. */}
+                        <div className="flex items-center gap-1.5">
+                          {lane === "north" && isAdmin && (
+                            <Link to="/services/northbound/assets" className="rounded border px-2 py-1 text-[11px] font-medium transition-colors hover:bg-white/5" style={{ borderColor: hue, color: hue }}>Assets</Link>
+                          )}
+                          {lane === "south" && isAdmin && (
+                            <button type="button" onClick={() => setDeployOpen(true)} className="rounded border px-2 py-1 text-[11px] font-medium transition-colors hover:bg-white/5" style={{ borderColor: hue, color: hue }}>Deploy adapter</button>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex flex-col divide-y divide-slate-800/60">
+                        {orderLane(laneSvcs).map(({ svc: s, sub: isSub }) => {
+                        const phase = s.pods && s.pods[0] ? s.pods[0].phase : "Unknown";
                 const ver = verMap[s.name];                    // backend drift vs ghcr release
                 const latestTag = ver?.latest;                 // shown on the ↑ chip when behind
                 const behind = !!ver?.behind;
@@ -1103,17 +482,71 @@ export default function NorthboundPage() {
                   ? `ghcr.io/jacobbista/5g-northbound/${imgBasename(s.image)}:${latestTag}` : null;
                 const ep = publicUrl(s);
                 const starting = (s.ready_replicas || 0) < (s.replicas || 0);
+                // The backend reports `rollout` and the image a ready pod ACTUALLY runs,
+                // which can lag the spec while the new pod crashes and the old one keeps serving.
+                const degraded = s.rollout === "degraded";
+                const runTag = s.running_image ? imgTag(s.running_image) : null;
+                const imgMismatch = !!(runTag && tag && runTag !== tag);
+                const badPod = (s.pods || []).find((p) => p.waiting_reason || (!p.ready && (p.restarts || 0) > 0));
+                const rolloutTitle = degraded
+                  ? `rollout not complete: ${badPod ? `${badPod.name}, ${badPod.waiting_reason || "not ready"} (${badPod.restarts} restarts)` : "pods unavailable"}${imgMismatch ? ` · serving ${runTag}, spec is ${tag}` : ""}`
+                  : "";
+                // Ready/rollout misses a pod that is up and serving most requests fine
+                // while silently 500ing on one (a caught exception, not a crash) - the
+                // engine's ZeroDivisionError on a zero-accuracy fusion (2026-09-11) looked
+                // perfectly healthy by every other signal on this row.
+                const logErr = logHealth[s.name];
+                // Engine-registry state for a south-lane adapter: membership/reachability
+                // the engine itself reports, distinct from the pod phase above (a pod can be
+                // Running while its heartbeat to the engine goes stale or unreachable).
+                const reg = s.role === "adapter" ? adapterMap[s.name] : null;
+                // What an adapter is, from live facts rather than a label: the image's
+                // family (registry `kind`, declared by the image itself since 0.17.1) and
+                // the transport it reaches its source over (contract). The source it
+                // speaks for is its own chip, because a missing one is the operator's
+                // signal that ADAPTER_CAPABILITIES is not set yet.
+                const tr = s.role === "adapter" ? transportOf[s.name] : null;
+                const adapterSubtitle = reg
+                  ? [reg.kind, tr?.transport ? tr.transport.toUpperCase() : null].filter(Boolean).join(" · ")
+                  : null;
+                const subtitle = adapterSubtitle ?? s.subtitle;
+                const declaredSource = reg?.capabilities?.source || null;
+                const regState = reg && (ADAPTER_STATE[reg.state] || { cls: "bg-slate-700/60 text-slate-400", label: reg.state || "?" });
+                // This consumer's own adapter bindings (e.g. placement-editor -> vendor-adapter).
+                const myBindings = bindingsByConsumer[s.name] || [];
                 return (
-                  <div key={`${s.namespace}/${s.name}`} className="flex items-center gap-3 py-2.5">
-                    <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${phaseDot(phase)}`} title={phase} />
+                  <div key={`${s.namespace}/${s.name}`} className={isSub ? "pl-6 opacity-70" : ""}>
+                  <div className="flex items-center gap-3 py-2.5">
+                    <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${degraded ? "bg-rose-500" : phaseDot(phase)}`} title={degraded ? rolloutTitle : phase} />
                     {/* Primary: name + classifying/state chips on line 1, the de-emphasized
                         image + public link on line 2. Keeps rows aligned regardless of which
                         optional chips a service has. */}
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-sm font-semibold text-slate-100">{s.name}</span>
-                        {s.kind && <span className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${kind.cls}`} title="how this surface is served">{kind.label}</span>}
-                        {tag && <span className="font-mono text-[10px] text-slate-400" title={s.image || ""}>{tag}</span>}
+                        {s.role && (
+                          <span className="inline-flex items-center gap-1.5 rounded border border-slate-800 bg-slate-900 px-1.5 py-0.5 text-[10px] font-semibold" style={{ color: LANE_HEX[s.lane] || "#94a3b8" }} title="role in the data path">
+                            <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: LANE_HEX[s.lane] || "#94a3b8" }} />{s.role}
+                            {subtitle && <span className="font-normal text-slate-500"> · {subtitle}</span>}
+                          </span>
+                        )}
+                        {reg && (declaredSource ? (
+                          <span className="rounded border border-slate-800 bg-slate-900 px-1.5 py-0.5 text-[9.5px] text-slate-400" title="the source name its fixes carry (ADAPTER_CAPABILITIES)">source <span className="font-mono text-slate-200">{declaredSource}</span></span>
+                        ) : (
+                          <span className="rounded bg-amber-950/50 px-1.5 py-0.5 text-[9.5px] text-amber-300" title="No source declared: the engine drops its fixes. Set ADAPTER_CAPABILITIES in Configure.">no source declared</span>
+                        ))}
+                        {regState && (
+                          <span
+                            className={`rounded px-1.5 py-0.5 text-[9px] ${regState.cls}`}
+                            title={`engine registry: ${regState.label}${reg.registeredVia ? ` · via ${reg.registeredVia}` : ""}${typeof reg.lastSeenSAgo === "number" ? ` · seen ${Math.round(reg.lastSeenSAgo)}s ago` : ""}`}
+                          >
+                            {regState.label}
+                          </span>
+                        )}
+                        {reg?.inCooldown && <span className="text-[9px] text-rose-400">cooldown {Math.round(reg.cooldownSecondsRemaining || 0)}s</span>}
+                        {tag && <span className={`font-mono text-[10px] ${degraded && imgMismatch ? "text-slate-500 line-through" : "text-slate-400"}`} title={s.image || ""}>{tag}</span>}
+                        {degraded && imgMismatch && <span className="rounded bg-rose-950/50 px-1.5 py-0.5 font-mono text-[10px] text-rose-300" title={`ready pod runs ${s.running_image}, deployment spec is ${s.image}`}>serving {runTag}</span>}
+                        {degraded && <span className="rounded bg-rose-950/50 px-1.5 py-0.5 text-[10px] text-rose-300" title={rolloutTitle}>⚠ rollout failed</span>}
                         {/* Version-drift chip. On a catalog adapter (not phase-managed) it IS the
                             upgrade affordance: click to patch just this one to its latest tag. On a
                             managed service it is a read-only indicator (those roll via Update all). */}
@@ -1138,7 +571,7 @@ export default function NorthboundPage() {
                             <span
                               className="rounded bg-amber-950/40 px-1.5 py-0.5 text-[10px] text-amber-300"
                               title={ver?.managed
-                                ? `deployed ${tag}; latest ${latestTag} — rolls via Update all`
+                                ? `deployed ${tag}; latest ${latestTag}, rolls via Update all`
                                 : `deployed ${tag}; latest release is ${latestTag}`}
                             >
                               ↑ {latestTag}
@@ -1149,17 +582,16 @@ export default function NorthboundPage() {
                           <span className="rounded bg-rose-950/40 px-1.5 py-0.5 text-[10px] text-rose-300" title={`needs config: ${(readiness[s.name].missing || []).join(", ")}`}>⚠ needs config</span>
                         )}
                         {(readiness[s.name]?.ephemeral || []).length > 0 && (
-                          <span className="rounded bg-amber-950/40 px-1.5 py-0.5 text-[10px] text-amber-300" title={`loaded but not persisted (lost on restart): ${readiness[s.name].ephemeral.join(", ")} — persist via Configure`}>⟳ ephemeral</span>
+                          <span className="rounded bg-amber-950/40 px-1.5 py-0.5 text-[10px] text-amber-300" title={`loaded but not persisted (lost on restart): ${readiness[s.name].ephemeral.join(", ")}, persist via Configure`}>⟳ ephemeral</span>
                         )}
                         {s.stateful && s.persistent === false && (
-                          <span className="rounded bg-amber-950/40 px-1.5 py-0.5 text-[10px] text-amber-300" title="calibration is written in this service's own UI but is NOT PVC-backed yet — it would be lost on restart. Click “enable persistence”.">⟳ not persisted</span>
+                          <span className="rounded bg-amber-950/40 px-1.5 py-0.5 text-[10px] text-amber-300" title="calibration is written in this service's own UI but is not PVC-backed yet, it would be lost on restart. Click “enable persistence”.">⟳ not persisted</span>
                         )}
                       </div>
                       <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
                         <span className="uppercase tracking-wide">{s.namespace}</span>
-                        {s.managed && <span title="managed by Ansible — rolls via Update all / phase 10">· managed</span>}
                         {ep ? (
-                          <a href={ep.url} target="_blank" rel="noreferrer" title={`open ${ep.url}`} className="inline-flex shrink-0 items-center gap-1 font-mono text-sky-400 hover:text-sky-300">{ep.label} <span aria-hidden="true">↗</span></a>
+                          <a href={ep.url} target="_blank" rel="noreferrer" title={`open ${ep.url}`} className="inline-flex shrink-0 items-center gap-1 font-mono text-sky-400 hover:text-sky-300">{ep.label.split(".")[0]} <span aria-hidden="true">↗</span></a>
                         ) : s.node_port ? (
                           <span className="shrink-0 font-mono text-[10px]" title="LAN NodePort">:{s.node_port}</span>
                         ) : null}
@@ -1173,24 +605,56 @@ export default function NorthboundPage() {
                             n6m {s.n6m_ip}
                           </span>
                         )}
+                        {s.description && <span className="text-slate-500">{s.description}</span>}
+                        {/* Which adapter this consumer is bound to. */}
+                        {myBindings.map((b) => (
+                          <span key={b.field} className="inline-flex items-center gap-1 rounded bg-slate-800/60 px-1.5 py-0.5 text-[10px]">
+                            <span className="text-slate-500">→</span>
+                            {b.candidates.length === 0 ? (
+                              <span className="text-slate-500">no {b.kind} deployed</span>
+                            ) : b.bound_to ? (
+                              <span className="font-mono text-emerald-400">{b.bound_to} ✓</span>
+                            ) : b.candidates.length === 1 ? (
+                              <span className="inline-flex items-center gap-1 text-amber-300"><IconRefresh size={9} className="animate-spin" /> binding {b.candidates[0].name}…</span>
+                            ) : isAdmin ? (
+                              <select
+                                className="rounded border border-slate-700 bg-slate-950 px-1 py-0.5 text-[10px] text-slate-200"
+                                value={(b.candidates.find((c) => c.name === b.bound_to) || {}).url || ""}
+                                onChange={(e) => { if (e.target.value) bindAdapter(b, e.target.value); }}
+                                disabled={busy}
+                              >
+                                <option value="">{b.candidates.length} {b.kind}s, pick one</option>
+                                {b.candidates.map((c) => <option key={c.url} value={c.url}>{c.name}</option>)}
+                              </select>
+                            ) : (
+                              <span className="text-amber-300">{b.candidates.length} {b.kind}s, pick one</span>
+                            )}
+                          </span>
+                        ))}
                       </div>
                     </div>
                     {/* Right cluster: status + actions, aligned across every row. */}
                     <div className="flex shrink-0 items-center gap-2">
-                      <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[10px] ${starting ? "bg-amber-950/40 text-amber-300" : "bg-slate-800 text-slate-300"}`} title={starting ? "pods starting" : "ready"}>
-                        {starting && <IconRefresh size={10} className="animate-spin" />}
+                      <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[10px] ${degraded ? "bg-rose-950/40 text-rose-300" : starting ? "bg-amber-950/40 text-amber-300" : "bg-slate-800 text-slate-300"}`} title={degraded ? rolloutTitle : starting ? "pods starting" : "ready"}>
+                        {starting && !degraded && <IconRefresh size={10} className="animate-spin" />}
                         {s.ready_replicas}/{s.replicas}
                       </span>
-                      {s.pods && s.pods[0] && (
-                        <button
-                          type="button"
-                          title={`stream logs (${s.pods[0].name})`}
-                          onClick={() => setLogTarget({ namespace: s.namespace, pod: s.pods[0].name, deployment: s.name })}
-                          className="rounded bg-indigo-600/20 px-2 py-1 text-[11px] font-medium text-indigo-300 transition-colors hover:bg-indigo-600/30"
-                        >
-                          logs
-                        </button>
-                      )}
+                      {s.pods && s.pods[0] && (() => {
+                        // Prefers the crashing pod over the healthy old one when degraded.
+                        const logPod = badPod || s.pods[0];
+                        return (
+                          <button
+                            type="button"
+                            title={degraded ? `stream logs (${logPod.name})` : logErr ? `stream logs (${logPod.name}) — recent error: ${logErr.sample}` : `stream logs (${logPod.name})`}
+                            onClick={() => setLogTarget({ namespace: s.namespace, pod: logPod.name, deployment: s.name })}
+                            className={`rounded px-2 py-1 text-[11px] font-medium transition-colors ${degraded ? "bg-rose-600/20 text-rose-300 hover:bg-rose-600/30"
+                              : logErr ? "bg-amber-600/20 text-amber-300 ring-1 ring-amber-500/40 hover:bg-amber-600/30"
+                              : "bg-indigo-600/20 text-indigo-300 hover:bg-indigo-600/30"}`}
+                          >
+                            logs
+                          </button>
+                        );
+                      })()}
                       {isAdmin && s.stateful && s.persistent === false && (
                         <button
                           type="button"
@@ -1207,8 +671,37 @@ export default function NorthboundPage() {
                           enable persistence
                         </button>
                       )}
+                      {/* Read-only view for viewers; an admin reads the same rows inside Configure. */}
+                      {!isAdmin && s.configurable && (
+                        <button type="button" onClick={() => setInfoFor(s.name)} className={btn.ghost} title="what this service reads and who provides it">info</button>
+                      )}
                       {isAdmin && s.configurable && (
                         <button type="button" onClick={() => setConfiguring(s.name)} className={btn.ghost}>configure</button>
+                      )}
+                      {/* A plain restart, no config or image change: the same generic
+                          action the 5G Core page offers per NF, wired here too so an
+                          operator does not have to go through Upgrade or a document
+                          save just to bounce a pod (e.g. to pick up a file this session
+                          wrote directly, outside any Configure flow). */}
+                      {isAdmin && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          title={`restart ${s.name}`}
+                          onClick={() => setConfirm({
+                            title: `Restart ${s.name}?`,
+                            body: "Rolls the pod. Config and image are unchanged.",
+                            label: "Restart",
+                            runLabel: `restart ${s.name}`,
+                            action: () => restartDeployment(s.namespace, s.name),
+                          })}
+                          className={btn.ghost}
+                        >
+                          restart
+                        </button>
+                      )}
+                      {isAdmin && s.has_mapping && (
+                        <button type="button" onClick={() => setMappingSvc(s.name)} className="rounded border border-sky-500/40 bg-sky-500/15 px-2 py-1 text-[11px] font-medium text-sky-300 hover:bg-sky-500/25">◎ mapping</button>
                       )}
                       {isAdmin && deployedNames.has(s.name) && (
                         <button
@@ -1229,162 +722,114 @@ export default function NorthboundPage() {
                       )}
                     </div>
                   </div>
+                  </div>
+                );
+                      })}
+                      </div>
+                    </div>
+                    {LANE_CONNECT[lane] && (
+                      <div className="flex items-center gap-2 py-1.5 pl-3 text-[10.5px] text-slate-600">
+                        <span className="h-px flex-1 bg-gradient-to-r from-slate-700 to-transparent" />
+                        ↑ {LANE_CONNECT[lane]} ↑
+                        <span className="h-px flex-1 bg-gradient-to-l from-slate-700 to-transparent" />
+                      </div>
+                    )}
+                  </div>
                 );
               })}
+              {/* Registry-only adapters have no matching Deployment (seeded or
+                  registered from an off-cluster source), so no pod/logs/configure. */}
+              {registryOnlyAdapters.length > 0 && (
+                <div className="border-l-2 pl-3" style={{ borderColor: LANE_HEX.south }}>
+                  <div className="flex flex-col divide-y divide-slate-800/60">
+                    {registryOnlyAdapters.map((a) => {
+                      const st = ADAPTER_STATE[a.state] || { cls: "bg-slate-700/60 text-slate-400", label: a.state || "?" };
+                      const canForce = a.state !== "live";
+                      return (
+                        <div key={a.name} className="flex items-center gap-3 py-2.5 text-xs">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-mono font-semibold text-slate-200">{a.name}</span>
+                              {a.kind && <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[9px] text-slate-400">{a.kind}</span>}
+                              <span className={`rounded px-1.5 py-0.5 text-[9px] ${st.cls}`}>{st.label}</span>
+                              {a.inCooldown && <span className="text-[9px] text-rose-400">cooldown {Math.round(a.cooldownSecondsRemaining || 0)}s</span>}
+                            </div>
+                            <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[10px] text-slate-600">
+                              {a.registeredVia && <span>via {a.registeredVia}</span>}
+                              {typeof a.lastSeenSAgo === "number" && <span>· seen {Math.round(a.lastSeenSAgo)}s ago</span>}
+                              <span className="truncate font-mono">{a.baseUrl}</span>
+                            </div>
+                            {a.n6m_ip && (
+                              <div className="mt-0.5 text-[10px] text-teal-400">
+                                5G ingest: <span className="font-mono">http://{a.n6m_ip}:8080</span> <span className="text-slate-600">(over n6m)</span>
+                              </div>
+                            )}
+                          </div>
+                          {isAdmin && canForce && (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              title="force-remove stale entry"
+                              onClick={() => setConfirm({
+                                title: `Force-remove ${a.name}?`,
+                                body: "Clears this stale entry from the engine registry. A live adapter would re-announce on its next heartbeat.",
+                                label: "Force-remove",
+                                runLabel: `force-remove ${a.name}`,
+                                action: () => unregisterNorthboundAdapter(a.name),
+                              })}
+                              className="shrink-0 text-rose-400 hover:text-rose-300 disabled:opacity-40"
+                            >
+                              <IconTrash size={13} />
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           )}
+          {contract?.docs && (
+            <p className="mt-3 border-t border-slate-800 pt-3 text-[11px] text-slate-500">
+              Build your own positioning source:{" "}
+              <a className="text-sky-400 hover:underline" href={contract.docs.adapter_contract} target="_blank" rel="noreferrer">adapter contract</a>
+              {" · "}
+              <a className="text-sky-400 hover:underline" href={contract.docs.rest_adapter} target="_blank" rel="noreferrer">vendor REST</a>
+              {" · "}
+              <a className="text-sky-400 hover:underline" href={contract.docs.env_contract} target="_blank" rel="noreferrer">env contract</a>
+            </p>
+          )}
         </Panel>
-        {bindings.length > 0 && (
-          <Panel title="Vendor bindings" hint="Which deployed adapter each consumer points at. One adapter of a kind binds automatically; more than one shows a switcher.">
-            <div className="flex flex-col divide-y divide-slate-800/60">
-              {bindings.map((b) => (
-                <div key={`${b.consumer}:${b.field}`} className="flex items-center gap-3 py-2 text-xs">
-                  <span className="min-w-[150px] font-semibold text-slate-100">{b.consumer}</span>
-                  <span className="font-mono text-[10px] text-slate-500">{b.field}</span>
-                  <span className="text-slate-600" aria-hidden="true">→</span>
-                  <span className="flex-1">
-                    {b.candidates.length === 0 ? (
-                      <span className="text-slate-500">no {b.kind} deployed</span>
-                    ) : b.bound_to ? (
-                      <span className="inline-flex items-center gap-1 font-mono text-emerald-400">{b.bound_to} <span aria-hidden="true">✓</span></span>
-                    ) : b.candidates.length === 1 ? (
-                      <span className="inline-flex items-center gap-1 text-amber-300"><IconRefresh size={11} className="animate-spin" /> binding {b.candidates[0].name}…</span>
-                    ) : (
-                      <span className="text-amber-300">{b.candidates.length} {b.kind}s — pick one</span>
-                    )}
-                  </span>
-                  {isAdmin && b.candidates.length > 1 && (
-                    <select
-                      className={inputCls}
-                      value={(b.candidates.find((c) => c.name === b.bound_to) || {}).url || ""}
-                      onChange={(e) => { if (e.target.value) bindAdapter(b, e.target.value); }}
-                      disabled={busy}
-                    >
-                      <option value="">switch…</option>
-                      {b.candidates.map((c) => <option key={c.url} value={c.url}>{c.name}</option>)}
-                    </select>
-                  )}
-                </div>
-              ))}
-            </div>
-          </Panel>
+        {deployOpen && (
+          <Modal
+            title="Deploy adapter"
+            hint="Creates a Deployment and Service in the positioning namespace. The adapter self-registers with the engine, then you give it its vendor settings from Configure."
+            onClose={() => setDeployOpen(false)}
+          >
+            <DeployForm
+              busy={busy}
+              existing={new Set(services.map((s) => s.name))}
+              onSubmit={async (body) => { await run(`deploy ${body.name}`, () => deployNorthboundImage(body)); setDeployOpen(false); }}
+            />
+          </Modal>
         )}
         {configuring && (
           <ConfigureService
             service={configuring}
             services={services}
+            bindings={bindingsByConsumer[configuring] || []}
             toast={toast}
             onClose={() => setConfiguring(null)}
             onApplied={() => { refresh(); loadBindings(); }}
           />
         )}
-        </div>
-      )}
-
-      {tab === "adapters" && (
-        <div className="flex flex-col gap-4">
-          <Panel
-            title="Adapter registry"
-            hint="Live registry from the engine. Adapters self-register and heartbeat; the engine evicts dead ones. Deploy an adapter and it announces itself, no manual step."
-            right={isAdmin && <button type="button" onClick={() => setDeployOpen(true)} className={btn.sky}>Deploy adapter</button>}
-          >
-            {adapters.length === 0 && <p className="text-xs text-slate-500">No adapters registered; the engine uses its embedded mock fallback until one self-registers.</p>}
-            <div className="flex flex-col gap-1.5">
-              {adapters.map((a) => {
-                const st = ADAPTER_STATE[a.state] || { cls: "bg-slate-700/60 text-slate-400", label: a.state || "?" };
-                const dep = deployedNames.has(a.name);
-                // Delete a dashboard-deployed workload (it then deregisters); else
-                // offer force-remove only for a dead entry (a live self-registered
-                // adapter would just re-announce, so removing it is meaningless).
-                const canForce = !dep && a.state !== "live";
-                return (
-                  <div key={a.name} className="flex items-center gap-3 rounded border border-slate-800 bg-slate-950 px-3 py-2 text-xs">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-mono font-semibold text-slate-200">{a.name}</span>
-                        {a.kind && <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[9px] text-slate-400">{a.kind}</span>}
-                        <span className={`rounded px-1.5 py-0.5 text-[9px] ${st.cls}`}>{st.label}</span>
-                        {a.in_cooldown && <span className="text-[9px] text-rose-400">cooldown {Math.round(a.cooldown_seconds_remaining || 0)}s</span>}
-                      </div>
-                      <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[10px] text-slate-600">
-                        {a.registered_via && <span>via {a.registered_via}</span>}
-                        {typeof a.last_seen_s_ago === "number" && <span>· seen {Math.round(a.last_seen_s_ago)}s ago</span>}
-                        <span className="truncate font-mono">{a.base_url}</span>
-                      </div>
-                      {/* Push adapters carry an n6m address: the 5G-reachable ingest the
-                          edge scanner POSTs to (not the ClusterIP). Shown so the operator
-                          can point the scanner at it. */}
-                      {a.n6m_ip && (
-                        <div className="mt-0.5 text-[10px] text-teal-400">
-                          5G ingest: <span className="font-mono">http://{a.n6m_ip}:8080</span> <span className="text-slate-600">(over n6m)</span>
-                        </div>
-                      )}
-                    </div>
-                    {isAdmin && (dep || canForce) && (
-                      <button
-                        type="button"
-                        disabled={busy}
-                        title={dep ? "delete workload" : "force-remove stale entry"}
-                        onClick={() => setConfirm({
-                          title: dep ? `Delete ${a.name}?` : `Force-remove ${a.name}?`,
-                          body: dep
-                            ? "Removes the Deployment and Service; the adapter deregisters from the engine on shutdown."
-                            : "Clears this stale entry from the engine registry. A live adapter would re-announce on its next heartbeat.",
-                          label: dep ? "Delete" : "Force-remove",
-                          runLabel: dep ? `delete ${a.name}` : `force-remove ${a.name}`,
-                          action: () => (dep ? deleteNorthboundWorkload(a.name) : unregisterNorthboundAdapter(a.name)),
-                        })}
-                        className="shrink-0 text-rose-400 hover:text-rose-300 disabled:opacity-40"
-                      >
-                        <IconTrash size={13} />
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-            {contract?.docs && (
-              <p className="mt-3 border-t border-slate-800 pt-3 text-[11px] text-slate-500">
-                Build your own positioning source:{" "}
-                <a className="text-sky-400 hover:underline" href={contract.docs.adapter_contract} target="_blank" rel="noreferrer">adapter contract</a>
-                {" · "}
-                <a className="text-sky-400 hover:underline" href={contract.docs.rest_adapter} target="_blank" rel="noreferrer">vendor REST</a>
-                {" · "}
-                <a className="text-sky-400 hover:underline" href={contract.docs.env_contract} target="_blank" rel="noreferrer">env contract</a>
-              </p>
-            )}
-          </Panel>
-          {/* Expert controls, rarely touched: folded away so the registry stays the focus. */}
-          {isAdmin && (
-            <Collapsible title="Advanced tuning" hint="Fusion strategy and manual image rollout. Not needed for normal operation.">
-              <div className="flex flex-col gap-4">
-                <div>
-                  <div className="mb-1.5 text-xs font-medium text-slate-300">Fusion</div>
-                  <p className="mb-2 text-[11px] text-slate-500">Classical estimators (no ML). Applies to positioning-engine and restarts it.</p>
-                  <FusionForm busy={busy} onSubmit={(body) => run("fusion update", () => setNorthboundFusion(body))} />
-                </div>
-                <div className="border-t border-slate-800 pt-4">
-                  <div className="mb-1.5 text-xs font-medium text-slate-300">Managed image rollout</div>
-                  <p className="mb-2 text-[11px] text-slate-500">Retargets a running deployment. The durable image lives in all.yml; re-run the phase to reconcile.</p>
-                  <ManagedForm busy={busy} onSubmit={(dep, image) => run(`rollout ${dep}`, () => rolloutNorthboundManaged(dep, image))} />
-                </div>
-              </div>
-            </Collapsible>
-          )}
-          {deployOpen && (
-            <Modal
-              title="Deploy adapter"
-              hint="Pick a catalog adapter (wifi, vendor REST) or any image. Creates a Deployment + Service in the positioning namespace; the adapter self-registers with the engine (no manual step)."
-              wide
-              onClose={() => setDeployOpen(false)}
-            >
-              <DeployForm busy={busy} onSubmit={async (body) => { await run(`deploy ${body.name}`, () => deployNorthboundImage(body)); setDeployOpen(false); }} />
-            </Modal>
-          )}
-        </div>
-      )}
-
-      {tab === "assets" && isAdmin && <AssetsTab toast={toast} />}
+        {infoFor && (
+          <ServiceInfo service={infoFor} services={services} onClose={() => setInfoFor(null)} />
+        )}
+        {mappingSvc && (
+          <MappingStudio service={mappingSvc} onClose={() => setMappingSvc(null)} onSaved={() => refresh()} />
+        )}
       </div>
 
       {showUpdateAll && (
@@ -1424,136 +869,112 @@ export default function NorthboundPage() {
   );
 }
 
-function DeployForm({ busy, onSubmit }) {
+// Deploy settles the adapter's IDENTITY: what image to run and what to call it.
+// Vendor settings are deliberately not collected here. The adapter publishes its
+// own /contract, and Configure renders it afterwards with the real descriptions and
+// Secret routing, which a pair of blank ENV_NAME/value boxes cannot do.
+function DeployForm({ busy, existing, onSubmit }) {
+  const [choice, setChoice] = useState(null); // a CATALOG entry, or "custom"
   const [name, setName] = useState("");
   const [image, setImage] = useState("");
   const [port, setPort] = useState(8080);
   const [pullSecret, setPullSecret] = useState("");
-  const [adapterKind, setAdapterKind] = useState(""); // ADAPTER_KIND (modality); empty = image default
-  const [env, setEnv] = useState([]);
-  const [kind, setKind] = useState(null); // catalog deploy kind: "singleton" | "template" | null
+  const [advOpen, setAdvOpen] = useState(false);
 
-  // Singleton prefills its fixed name; a template prefills only the image and
-  // leaves the name blank so the operator names the instance per vendor.
-  const pickCatalog = (c) => {
+  // A singleton carries its own fixed name; a template and a custom image are named
+  // by the operator, so the name starts blank and is the one thing left to decide.
+  const pick = (c) => {
+    setChoice(c);
+    if (c === "custom") { setImage(""); setName(""); return; }
     setImage(c.image);
-    setKind(c.kind);
-    setAdapterKind(c.adapterKind || "");
     setName(c.kind === "singleton" ? c.name : "");
   };
-  const singletons = CATALOG.filter((c) => c.kind === "singleton");
-  const templates = CATALOG.filter((c) => c.kind === "template");
-
-  const addEnv = () => setEnv((e) => [...e, { name: "", value: "", sensitive: false }]);
-  const setEnvAt = (i, k, v) => setEnv((e) => e.map((row, j) => (j === i ? { ...row, [k]: v } : row)));
-  const rmEnv = (i) => setEnv((e) => e.filter((_, j) => j !== i));
+  const isSingleton = choice && choice !== "custom" && choice.kind === "singleton";
+  const isCustom = choice === "custom";
+  const ready = !!choice && !!name.trim() && !!image.trim();
 
   const submit = (e) => {
     e.preventDefault();
-    if (!name || !image) return;
+    if (!ready) return;
     onSubmit({
       name: name.trim(),
       image: image.trim(),
       port: Number(port) || 8080,
       image_pull_secret: pullSecret.trim() || null,
-      kind: adapterKind.trim(),
-      env: env.filter((r) => r.name).map((r) => ({ name: r.name.trim(), value: r.value, sensitive: !!r.sensitive })),
+      env: [],
     });
   };
 
+  const card = (on) => `rounded border px-3 py-2 text-left transition-colors ${on ? "border-sky-500/40 bg-sky-500/15" : "border-slate-800 bg-slate-950/40 hover:bg-white/5"}`;
+
   return (
-    <form className="flex flex-col gap-2 text-xs" onSubmit={submit}>
-      <div className="flex flex-col gap-2 rounded border border-slate-800 bg-slate-950/40 p-2">
-        <div className="flex flex-wrap items-center gap-1">
-          <span className="w-32 text-[10px] uppercase tracking-wide text-slate-500">Adapter (one)</span>
-          {singletons.map((c) => (
-            <button key={c.name} type="button" title={c.blurb} onClick={() => pickCatalog(c)} className={btn.ghost}>{c.name}</button>
-          ))}
-        </div>
-        <div className="flex flex-wrap items-center gap-1">
-          <span className="w-32 text-[10px] uppercase tracking-wide text-slate-500">Vendor template</span>
-          {templates.map((c) => (
-            <button key={c.name} type="button" title={c.blurb} onClick={() => pickCatalog(c)} className={btn.ghost}>{c.name} (per vendor)</button>
-          ))}
-        </div>
-        {kind === "template" && (
-          <p className="text-[11px] text-amber-300/80">
-            Name this instance after the vendor (e.g. <span className="font-mono">wittra</span>) and point it at the vendor API in the env below. Deploy one per vendor.
-          </p>
-        )}
-        {kind === "singleton" && (
-          <p className="text-[11px] text-slate-500">Self-contained source; deploy at most one.</p>
-        )}
+    <form className="flex flex-col gap-4 text-xs" onSubmit={submit}>
+      <div className="flex flex-col gap-1.5">
+        {CATALOG.map((c) => {
+          // A singleton is one per cluster, so once it is running there is nothing
+          // to deploy: show it as present rather than offering a second copy.
+          const taken = c.kind === "singleton" && !!existing?.has(c.name);
+          return (
+            <button key={c.name} type="button" disabled={taken} onClick={() => pick(c)} className={`${card(choice === c)} ${taken ? "opacity-50" : ""}`}>
+              <span className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-slate-100">{c.name}</span>
+                <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[9px] text-slate-400">
+                  {taken ? "already deployed" : c.kind === "singleton" ? "deploy one" : "one per vendor"}
+                </span>
+              </span>
+              <span className="mt-0.5 block text-[10px] leading-snug text-slate-500">{c.blurb}</span>
+            </button>
+          );
+        })}
+        <button type="button" onClick={() => pick("custom")} className={card(isCustom)}>
+          <span className="text-xs font-semibold text-slate-100">Custom image</span>
+          <span className="mt-0.5 block text-[10px] leading-snug text-slate-500">Any image that speaks the adapter contract.</span>
+        </button>
       </div>
-      <div className="flex flex-wrap gap-2">
-        <input className={inputCls} placeholder={kind === "template" ? "vendor name (e.g. wittra)" : "name"} value={name} onChange={(e) => setName(e.target.value)} />
-        <input className={`${inputCls} min-w-[24rem] flex-1`} placeholder="image:tag" value={image} onChange={(e) => setImage(e.target.value)} />
-        <input className={`${inputCls} w-20`} type="number" placeholder="port" value={port} onChange={(e) => setPort(e.target.value)} />
-        <input className={`${inputCls} w-28`} placeholder="kind (e.g. uwb)" title="ADAPTER_KIND shown in the registry/demo; leave blank to keep the image default" value={adapterKind} onChange={(e) => setAdapterKind(e.target.value)} />
-        <input className={inputCls} placeholder="imagePullSecret (optional)" value={pullSecret} onChange={(e) => setPullSecret(e.target.value)} />
-      </div>
-      <div className="flex flex-col gap-1">
-        {env.map((row, i) => (
-          <div key={i} className="flex flex-wrap items-center gap-2">
-            <input className={inputCls} placeholder="ENV_NAME" value={row.name} onChange={(e) => setEnvAt(i, "name", e.target.value)} />
-            <input className={`${inputCls} min-w-[16rem] flex-1`} placeholder="value" value={row.value} onChange={(e) => setEnvAt(i, "value", e.target.value)} />
-            <label className="flex items-center gap-1 text-[10px] text-slate-400">
-              <input type="checkbox" checked={row.sensitive} onChange={(e) => setEnvAt(i, "sensitive", e.target.checked)} /> secret
-            </label>
-            <button type="button" onClick={() => rmEnv(i)} className={btn.ghost}>x</button>
+
+      {choice && (
+        <div className="flex flex-col gap-3 border-t border-slate-800 pt-3">
+          {isSingleton ? (
+            <p className="text-[11px] text-slate-400">
+              Deploys as <span className="font-mono text-slate-200">{name}</span> from <span className="font-mono text-slate-500">{`${imgBasename(image)}:${imgTag(image)}`}</span>.
+            </p>
+          ) : (
+            <>
+              {isCustom && (
+                <FormField label="Image" help="Repository and tag, for example ghcr.io/your-org/your-adapter:1.0.0.">
+                  <input className={inputCls} placeholder="image:tag" value={image} onChange={(e) => setImage(e.target.value)} />
+                </FormField>
+              )}
+              <FormField label="Instance name" help="The name it registers under in the engine. For a vendor adapter, name it after the vendor.">
+                <input className={inputCls} placeholder={isCustom ? "adapter name" : "vendor name"} value={name} onChange={(e) => setName(e.target.value)} />
+              </FormField>
+            </>
+          )}
+
+          <div>
+            <button type="button" onClick={() => setAdvOpen((v) => !v)} className="text-[10px] font-medium uppercase tracking-wide text-slate-500 transition-colors hover:text-slate-300">
+              {advOpen ? "▾" : "▸"} Advanced
+            </button>
+            {advOpen && (
+              <div className="mt-2 flex flex-col gap-3">
+                <FormField label="Container port" help="The port the adapter listens on. Almost always 8080.">
+                  <input className={`${inputCls} w-24`} type="number" value={port} onChange={(e) => setPort(e.target.value)} />
+                </FormField>
+                <FormField label="Image pull secret" help="Only for an image in a private registry.">
+                  <input className={inputCls} placeholder="none" value={pullSecret} onChange={(e) => setPullSecret(e.target.value)} />
+                </FormField>
+              </div>
+            )}
           </div>
-        ))}
-        <button type="button" onClick={addEnv} className={`${btn.ghost} self-start`}>+ env var</button>
+        </div>
+      )}
+
+      <div className="flex items-center gap-3 border-t border-slate-800 pt-3">
+        <button type="submit" disabled={busy || !ready} className={btn.sky}>Deploy</button>
+        <span className="text-[10px] leading-snug text-slate-500">
+          {choice ? "It registers with the engine on boot, then Configure asks for its vendor settings." : "Pick what to deploy."}
+        </span>
       </div>
-      <p className="text-[10px] text-slate-500">The adapter self-registers with the engine on boot and heartbeats; it appears in the registry above within a few seconds.</p>
-      <button type="submit" disabled={busy} className={`${btn.sky} self-start`}>deploy</button>
-    </form>
-  );
-}
-
-function FusionForm({ busy, onSubmit }) {
-  const [strategy, setStrategy] = useState("");
-  const [compare, setCompare] = useState("");
-  const [deviceMap, setDeviceMap] = useState("");
-  return (
-    <form
-      className="flex flex-wrap items-end gap-2 text-xs"
-      onSubmit={(e) => {
-        e.preventDefault();
-        const body = {};
-        if (strategy) body.strategy = strategy.trim();
-        if (compare !== "") body.compare = compare.trim();
-        if (deviceMap !== "") body.device_map = deviceMap.trim();
-        if (Object.keys(body).length) onSubmit(body);
-      }}
-    >
-      <label className="flex flex-col gap-1">
-        <span className="text-[10px] text-slate-500">FUSION_STRATEGY</span>
-        <input className={inputCls} placeholder="weighted_avg" value={strategy} onChange={(e) => setStrategy(e.target.value)} />
-      </label>
-      <label className="flex flex-col gap-1">
-        <span className="text-[10px] text-slate-500">FUSION_COMPARE (csv)</span>
-        <input className={inputCls} value={compare} onChange={(e) => setCompare(e.target.value)} />
-      </label>
-      <label className="flex flex-col gap-1">
-        <span className="text-[10px] text-slate-500">DEVICE_MAP (id=adapter,csv)</span>
-        <input className={inputCls} value={deviceMap} onChange={(e) => setDeviceMap(e.target.value)} />
-      </label>
-      <button type="submit" disabled={busy} className={btn.indigo}>apply</button>
-    </form>
-  );
-}
-
-function ManagedForm({ busy, onSubmit }) {
-  const [dep, setDep] = useState(MANAGED[0]);
-  const [image, setImage] = useState("");
-  return (
-    <form className="flex flex-wrap items-center gap-2 text-xs" onSubmit={(e) => { e.preventDefault(); if (image) onSubmit(dep, image.trim()); }}>
-      <select className={inputCls} value={dep} onChange={(e) => setDep(e.target.value)}>
-        {MANAGED.map((d) => <option key={d} value={d}>{d}</option>)}
-      </select>
-      <input className={`${inputCls} min-w-[24rem] flex-1`} placeholder="image:tag" value={image} onChange={(e) => setImage(e.target.value)} />
-      <button type="submit" disabled={busy} className={btn.amber}>roll out</button>
     </form>
   );
 }
@@ -1596,11 +1017,11 @@ function JsonView({ value, depth = 0 }) {
 // Guided builder for a discover.classify block. Fetches raw vendor records
 // (admin-only GET /discover?raw=1 through the backend proxy) so the operator points
 // the ROLE rule at the vendor's OWN field names instead of hand-writing the predicate
-// JSON, and shows its live effect on the real sample. Authors role only: source_class
+// JSON, and shows its live effect on the real sample. Authors role only: sourceClass
 // (the radio) is deliberately NOT set here, because the vendor device list does not
 // report the per-device radio, so guessing it from a device TYPE would be wrong (see
-// the note in the body). Apply merges discover.mapping.device_type + discover.classify
-// back into the schema and preserves any existing source_class config; the existing
+// the note in the body). Apply merges discover.mapping.deviceType + discover.classify
+// back into the schema and preserves any existing sourceClass config; the existing
 // Save & restart persists it (ConfigMap + rollout). Structural, not vendor-specific:
 // it only assumes a `discover` block exists.
 function ClassifyBuilder({ service, schema, onApply }) {
@@ -1610,9 +1031,9 @@ function ClassifyBuilder({ service, schema, onApply }) {
   const [loading, setLoading] = useState(true);
 
   const cls = schema?.discover?.classify || {};
-  const [typeField, setTypeField] = useState(schema?.discover?.mapping?.device_type?.path || "deviceType");
-  const [assetValue, setAssetValue] = useState(cls?.asset_when?.equals ?? "");
-  const hasSourceClass = !!cls.source_class_default || (Array.isArray(cls.source_class_rules) && cls.source_class_rules.length > 0);
+  const [typeField, setTypeField] = useState(schema?.discover?.mapping?.deviceType?.path || "deviceType");
+  const [assetValue, setAssetValue] = useState(cls?.assetWhen?.equals ?? "");
+  const hasSourceClass = !!cls.sourceClassDefault || (Array.isArray(cls.sourceClassRules) && cls.sourceClassRules.length > 0);
 
   useEffect(() => {
     let alive = true;
@@ -1657,12 +1078,12 @@ function ClassifyBuilder({ service, schema, onApply }) {
     const next = JSON.parse(JSON.stringify(schema));
     next.discover = next.discover || {};
     next.discover.mapping = next.discover.mapping || {};
-    next.discover.mapping.device_type = { path: typeField };
-    // Author role only. Preserve any operator-authored source_class config, never add one.
+    next.discover.mapping.deviceType = { path: typeField };
+    // Author role only. Preserve any operator-authored sourceClass config, never add one.
     const keepSC = {};
-    if (cls.source_class_default) keepSC.source_class_default = cls.source_class_default;
-    if (Array.isArray(cls.source_class_rules) && cls.source_class_rules.length) keepSC.source_class_rules = cls.source_class_rules;
-    next.discover.classify = { asset_when: { path: typeField, equals: assetValue }, ...keepSC };
+    if (cls.sourceClassDefault) keepSC.sourceClassDefault = cls.sourceClassDefault;
+    if (Array.isArray(cls.sourceClassRules) && cls.sourceClassRules.length) keepSC.sourceClassRules = cls.sourceClassRules;
+    next.discover.classify = { assetWhen: { path: typeField, equals: assetValue }, ...keepSC };
     onApply(next);
   };
 
@@ -1675,7 +1096,7 @@ function ClassifyBuilder({ service, schema, onApply }) {
   );
   if (!raw || raw.length === 0) return (
     <div className="rounded border border-slate-800 bg-slate-950 p-3 text-[11px] text-slate-400">
-      The adapter returned no devices — nothing to sample. Check the vendor connection, or edit the JSON by hand.
+      The adapter returned no devices, nothing to sample. Check the vendor connection, or edit the JSON by hand.
     </div>
   );
 
@@ -1699,7 +1120,7 @@ function ClassifyBuilder({ service, schema, onApply }) {
           <span className="rounded bg-slate-800 px-2 py-1 font-mono text-[11px] text-slate-300">{typeField}</span>
           <span className="text-slate-500">equals</span>
           <select className={inputCls} value={assetValue} onChange={(e) => setAssetValue(e.target.value)}>
-            <option value="">— pick a value —</option>
+            <option value="">(pick a value)</option>
             {distinctValues.map((v) => <option key={v} value={v}>{v}</option>)}
           </select>
         </div>
@@ -1708,12 +1129,12 @@ function ClassifyBuilder({ service, schema, onApply }) {
         <div className="rounded border border-slate-800 bg-slate-950 px-3 py-2 text-[11px]">
           On this sample: <span className="text-emerald-300">{counts.asset} asset{counts.asset === 1 ? "" : "s"}</span>
           {" · "}<span className="text-slate-300">{counts.infra} infrastructure</span>
-          {counts.asset === 0 && <span className="ml-2 text-amber-400">no device matches — check the value</span>}
+          {counts.asset === 0 && <span className="ml-2 text-amber-400">no device matches, check the value</span>}
         </div>
       )}
       <div className="rounded border border-slate-800 bg-slate-950/60 px-3 py-2 text-[11px] text-slate-400">
-        <span className="text-slate-300">Source class (radio)</span> is not set here. The vendor list does not report the per-device radio, so KELT does not guess it from the device type. Add <span className="font-mono text-slate-300">source_class_rules</span> by hand in the JSON only from a real signal (a positioning join, or site knowledge).
-        {hasSourceClass && <span className="text-emerald-400"> Existing source_class config is preserved.</span>}
+        <span className="text-slate-300">Source class (radio)</span> is not set here. The vendor list does not report the per-device radio, so KELT does not guess it from the device type. Add <span className="font-mono text-slate-300">sourceClassRules</span> by hand in the JSON only from a real signal (a positioning join, or site knowledge).
+        {hasSourceClass && <span className="text-emerald-400"> Existing sourceClass config is preserved.</span>}
       </div>
       <details className="rounded border border-slate-800 bg-slate-950">
         <summary className="cursor-pointer px-3 py-2 text-[11px] text-slate-400 hover:text-slate-200">Show a raw vendor record</summary>
@@ -1722,12 +1143,13 @@ function ClassifyBuilder({ service, schema, onApply }) {
         </div>
       </details>
       <div className="flex items-center justify-between gap-2 border-t border-slate-800 pt-3">
-        <p className="text-[10px] text-slate-500">Apply merges <span className="font-mono">device_type</span> + <span className="font-mono">classify</span> into the schema below.</p>
+        <p className="text-[10px] text-slate-500">Apply merges <span className="font-mono">deviceType</span> + <span className="font-mono">classify</span> into the schema below.</p>
         <button type="button" onClick={apply} disabled={!canApply} className={btn.sky}>Apply to schema</button>
       </div>
     </div>
   );
 }
+
 
 // Focused viewer/editor for a file-backed document (a *_FILE the dashboard owns).
 // Default Preview parses the JSON and renders its entries (no raw text); Edit is
@@ -1828,7 +1250,7 @@ function FileDocModal({ service, entry, path, initial, onClose, onSaved }) {
             <div className="h-[60vh] overflow-auto rounded border border-slate-800 bg-slate-950 px-3 py-2 font-mono text-[12px]">
               {parsed.ok
                 ? <JsonView value={parsed.value} />
-                : <span className="text-rose-300">{draft.trim() ? "Invalid JSON — switch to Edit to fix it." : "Empty document."}</span>}
+                : <span className="text-rose-300">{draft.trim() ? "Invalid JSON, switch to Edit to fix it." : "Empty document."}</span>}
             </div>
           ) : (
             <textarea
@@ -1855,16 +1277,118 @@ function FileDocModal({ service, entry, path, initial, onClose, onSaved }) {
   );
 }
 
+// A contract description is written for a README (the vendor-adapter's SCHEMA_FILE
+// runs to a paragraph on ConfigMap mounts and PUT semantics). A form field carries
+// the first sentence and keeps the rest on hover, so the env var's own name stays
+// the primary label instead of prose filling the row.
+function FieldHelp({ text }) {
+  const s = String(text || "").trim();
+  if (!s) return null;
+  const m = s.match(/^[\s\S]*?[.!?](?=\s|$)/);
+  const head = (m ? m[0] : s).trim();
+  const truncated = head.length < s.length;
+  return (
+    <p className="mt-0.5 text-[11px] leading-snug text-slate-500" title={truncated ? s : undefined}>
+      {head}{truncated && <span className="text-slate-600"> …</span>}
+    </p>
+  );
+}
+
+// A Configure section: a colored rail marks what kind of field this is (Connection,
+// Field mapping, Options), same hue family as the service's own lane chip elsewhere
+// on the page.
+const SECTION_HUE = { rose: "#fb7185", sky: "#38bdf8", neutral: "#94a3b8" };
+function ConfigSection({ tone, title, children }) {
+  const hue = SECTION_HUE[tone] || SECTION_HUE.neutral;
+  return (
+    <div className="flex flex-col gap-3 border-b border-slate-800 py-4 first:pt-0 last:border-b-0 last:pb-0">
+      <div className="flex w-full items-center gap-2">
+        <span style={{ width: 3, height: 13, borderRadius: 2, backgroundColor: hue }} />
+        <span className="text-[10px] font-bold uppercase tracking-wide" style={{ color: hue }}>{title}</span>
+      </div>
+      <div className="flex flex-col gap-3">{children}</div>
+    </div>
+  );
+}
+
+// A two-column field row: label + description on the left, the control fixed-width
+// on the right. Keeps a whole section scannable as a column of controls instead of
+// each field stacking its own full-width block.
+function FieldRow({ name, badges, desc, children, alert }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="font-mono text-[12px] font-semibold text-slate-100">{name}</span>
+            {badges}
+          </div>
+          {desc}
+        </div>
+        <div className="flex w-56 shrink-0 flex-col items-end gap-1">{children}</div>
+      </div>
+      {alert}
+    </div>
+  );
+}
+
+// A document the dashboard can own (edit, seed, persist): a *_FILE the backend
+// reports as managed / absent / ephemeral. "external" is a PVC the service writes
+// itself, "internal" a path that is the service's own (image or runtime file).
+const isOwnedDocument = (f) => !!f.file_state && !["external", "internal"].includes(f.file_state);
+// What Configure offers: values the operator owns. Deployment wiring (all.yml,
+// inline env), KELT's own registration env and storage paths are not settings,
+// they are read in the service's info panel. A document is the one exception to
+// the owner check: who set the PATH string (often the deployment, e.g. once a
+// stateful doc has been redirected onto its PVC) is separate from who owns the
+// FILE's content at that path, which is the operator whenever the backend calls
+// it "managed" (its own apply_service_file mechanism can seed/restore it).
+const isOperatorSetting = (f) =>
+  !f.managed && (isOwnedDocument(f) || (f.owner !== "deployment" && !f.file_state));
+
+// What a field is actually used for, folded up from the contract's `declared_at`
+// (the exact schema locations that reference the variable). Answers "what breaks if
+// I leave this empty" in a few words, where printing four dotted paths would just be
+// more prose. The paths stay available on hover.
+const USED_FOR = [
+  [/^auth\b/, "auth"],
+  [/^discover\b/, "discovery"],
+  [/^diagnostics\b/, "diagnostics"],
+  [/^(baseUrl|pathVars|path)\b/, "position fetch"],
+];
+function usedFor(declaredAt) {
+  const out = [];
+  for (const loc of declaredAt || []) {
+    const hit = USED_FOR.find(([re]) => re.test(loc));
+    const label = hit ? hit[1] : String(loc).split(".")[0];
+    if (!out.includes(label)) out.push(label);
+  }
+  return out;
+}
+
+// A labelled form control. The label carries what the value IS; the raw env var or
+// flag name, when it matters, belongs in the help line underneath.
+function FormField({ label, help, children }) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-[11px] font-medium text-slate-300">{label}</span>
+      {children}
+      {help && <span className="text-[10px] leading-snug text-slate-500">{help}</span>}
+    </label>
+  );
+}
+
 // File-backed contract field (a *_FILE path, e.g. the vendor-adapter's SCHEMA_FILE):
 // shows the current document as a chip; clicking opens FileDocModal to view/edit/
 // replace it. No paste-into-the-form textarea. Generic, driven only by the field
-// being a *_FILE — no service-specific code.
+// being a *_FILE, no service-specific code.
 function FileFieldEditor({ service, entry, toast, onApplied, shadowedBy }) {
   const path = entry.file_path || entry.value || entry.default || "";
   const fname = path.split("/").pop() || "document";
   const [content, setContent] = useState(null); // null while loading
   const [ephemeral, setEphemeral] = useState(false);
   const [open, setOpen] = useState(false);
+  const [mapOpen, setMapOpen] = useState(false);
   const [shadowCleared, setShadowCleared] = useState(false);
   const [clearing, setClearing] = useState(false);
   useEffect(() => {
@@ -1877,6 +1401,12 @@ function FileFieldEditor({ service, entry, toast, onApplied, shadowedBy }) {
     return () => { alive = false; };
   }, [service, path]);
   const hasDoc = !!(content && content.trim());
+  // A document is a mapping schema when it has a location mapping or a fetch path.
+  const hasMapping = (() => {
+    if (!hasDoc) return false;
+    try { const o = JSON.parse(content); return !!o && typeof o === "object" && (!!o.mapping || !!o.path); }
+    catch { return false; }
+  })();
   // Make the file the ACTIVE source, not just a mounted file: point its *_FILE env
   // at the path (the service reads the env, not the bare file) and clear any inline
   // twin that would override it. Only touches what is not already right (avoids a
@@ -1891,7 +1421,7 @@ function FileFieldEditor({ service, entry, toast, onApplied, shadowedBy }) {
     setContent(saved);
     setEphemeral(false);
     setOpen(false);
-    try { await activate(); setShadowCleared(true); toast.success(`${entry.name} saved & active — rolling out ${service}`); }
+    try { await activate(); setShadowCleared(true); toast.success(`${entry.name} saved and active, rolling out ${service}`); }
     catch (e) { toast.success(`${entry.name} saved`); toast.error(`Could not activate the file: ${e.message}`); }
     onApplied?.(); // refresh the page so the rollout shows in the status list
   };
@@ -1901,33 +1431,44 @@ function FileFieldEditor({ service, entry, toast, onApplied, shadowedBy }) {
     try {
       await activate();
       setShadowCleared(true);
-      toast.success(`Using ${fname} — rolling out ${service}`);
+      toast.success(`Using ${fname}, rolling out ${service}`);
       onApplied?.();
     } catch (e) { toast.error(`Could not activate ${fname}: ${e.message}`); }
     finally { setClearing(false); }
   };
   const showShadow = shadowedBy && !shadowCleared;
   return (
-    <div className="flex flex-col gap-1 py-1.5">
-      <label className="flex items-center gap-2 font-mono text-[11px] text-slate-200">
-        {entry.name}
-        <span className="text-[9px] text-slate-600">document → {path}</span>
-      </label>
-      {entry.description && <p className="text-[10px] leading-snug text-slate-500">{entry.description}</p>}
-      {ephemeral && (
-        <p className="text-[10px] text-amber-300">⟳ Loaded at runtime but not persisted (lost on restart). Open it and save to store it declaratively.</p>
-      )}
-      {showShadow && (
-        <div className="flex flex-wrap items-center gap-2 rounded border border-amber-900/50 bg-amber-950/30 px-2 py-1.5">
-          <p className="text-[10px] text-amber-300">⚠ {shadowedBy} is set inline and overrides this document — editing the file has no effect until {shadowedBy} is cleared.</p>
-          <button type="button" disabled={clearing} onClick={useThisFile} className={`${btn.amber} text-[10px]`}>
-            {clearing ? "clearing…" : `Clear ${shadowedBy} & use this file`}
-          </button>
-        </div>
-      )}
-      <div className="flex items-center gap-2">
+    <>
+      <FieldRow
+        name={entry.name}
+        badges={<span className="font-mono text-[10px] text-slate-500">document</span>}
+        desc={<FieldHelp text={entry.description} />}
+        alert={
+          <>
+            {ephemeral && (
+              <p className="text-[10px] text-amber-300">⟳ Loaded at runtime but not persisted (lost on restart). Open it and save to store it declaratively.</p>
+            )}
+            {showShadow && (
+              <div className="flex flex-wrap items-center gap-2 rounded border border-amber-900/50 bg-amber-950/30 px-2 py-1.5">
+                <p className="text-[10px] text-amber-300">⚠ {shadowedBy} is set inline and overrides this document, editing the file has no effect until {shadowedBy} is cleared.</p>
+                <button type="button" disabled={clearing} onClick={useThisFile} className={`${btn.amber} text-[10px]`}>
+                  {clearing ? "clearing…" : `Clear ${shadowedBy} & use this file`}
+                </button>
+              </div>
+            )}
+          </>
+        }
+      >
         {content === null ? (
           <span className="text-[11px] text-slate-500">loading…</span>
+        ) : hasMapping ? (
+          // The raw document stays reachable as a de-emphasized secondary link.
+          <>
+            <button type="button" onClick={() => setMapOpen(true)} className={btn.sky}>◎ Configure mapping</button>
+            <button type="button" onClick={() => setOpen(true)} className="text-[10px] text-slate-500 hover:text-slate-300">
+              <span className="font-mono">{fname}</span> · {new Blob([content]).size} B · <span className="underline underline-offset-2">raw</span>
+            </button>
+          </>
         ) : hasDoc ? (
           <button type="button" onClick={() => setOpen(true)}
             className="inline-flex items-center gap-2 rounded border border-slate-700 bg-slate-800/60 px-2.5 py-1.5 text-[11px] text-slate-200 hover:bg-slate-800">
@@ -1942,92 +1483,386 @@ function FileFieldEditor({ service, entry, toast, onApplied, shadowedBy }) {
           </button>
         )}
         {ephemeral && hasDoc && <span className="rounded bg-amber-950/50 px-1.5 py-0.5 text-[9px] text-amber-300">not persisted</span>}
-      </div>
+      </FieldRow>
       {open && (
         <FileDocModal service={service} entry={entry} path={path} initial={content}
           onClose={() => setOpen(false)} onSaved={onSaved} />
       )}
-    </div>
+      {mapOpen && (
+        <MappingStudio service={service} path={path} initial={content}
+          onClose={() => setMapOpen(false)} onSaved={onSaved} />
+      )}
+    </>
   );
 }
 
 // One field of the guided setup. Non-sensitive shows the current value (editable);
 // sensitive shows a password input with a "set" hint and never the value.
-function ConfigField({ entry, required, value, onChange, upstreams, service, toast, onApplied, shadowedBy }) {
+// ADAPTER_CAPABILITIES in plain words. It is what the engine and the CAMARA API
+// are told about the source behind a generic adapter image. Opens pre-filled from
+// what is already known live (the adapter's current advertisement in the engine
+// registry, and the vendor/frame/height the mounted schema already states), so the
+// operator confirms rather than types. Coordinates and height come from the schema
+// and are not asked twice. accuracy_class is offered from the gateway's published
+// vocabulary; the radius input appears only where the class needs it (coarse) or on
+// request. Any other key already in the value is preserved untouched.
+const BOUND_SOURCE_KEYS = ["source", "kinds", "frame", "z", "accuracy_class", "nominalAccuracy"];
+function CapabilitiesField({ entry, value, onChange, hints }) {
+  const raw = value !== undefined ? value : (entry.value ?? "");
+  let caps = {};
+  let broken = false;
+  if (String(raw || "").trim()) {
+    try { const j = JSON.parse(raw); if (j && typeof j === "object" && !Array.isArray(j)) caps = j; else broken = true; }
+    catch { broken = true; }
+  }
+  const schema = hints?.schema || null;
+  const advertised = hints?.advertised || null;
+  const [vocab, setVocab] = useState(undefined); // undefined loading, null unavailable
+  const [prefilled, setPrefilled] = useState(false);
+  const [radiusOpen, setRadiusOpen] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    getNorthboundAccuracyClassVocabulary()
+      .then((v) => { if (alive) setVocab(v && v.classes ? v : null); })
+      .catch(() => { if (alive) setVocab(null); });
+    return () => { alive = false; };
+  }, []);
+  const emit = (next) => {
+    const clean = { ...next };
+    for (const k of Object.keys(clean)) {
+      const v = clean[k];
+      if (v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length)) delete clean[k];
+    }
+    onChange(entry.name, Object.keys(clean).length ? JSON.stringify(clean) : "");
+  };
+  const set = (patch) => emit({ ...caps, ...patch });
+  // Pre-fill once, only when nothing is stored yet: registry advertisement first,
+  // then the schema's own statements win (it is the document the operator wrote).
+  useEffect(() => {
+    if (prefilled || entry.set || value !== undefined) return;
+    const seed = {};
+    for (const k of BOUND_SOURCE_KEYS) if (advertised && advertised[k] !== undefined) seed[k] = advertised[k];
+    if (schema?.vendor) seed.source = schema.vendor;
+    if (schema?.frame) seed.frame = schema.frame;
+    if (schema && typeof schema.z === "boolean") seed.z = schema.z;
+    setPrefilled(true);
+    if (Object.keys(seed).length) emit(seed);
+  }, [advertised, schema, entry.set, value, prefilled]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const classes = vocab?.classes || {};
+  const cls = caps.accuracy_class || "";
+  const band = classes[cls];
+  const openEnded = !!band && band.upperBound == null;
+  const assumed = caps.nominalAccuracy > 0 ? caps.nominalAccuracy : (band && band.upperBound != null ? band.upperBound : null);
+  const showRadius = openEnded || radiusOpen || caps.nominalAccuracy > 0;
+  const others = Object.keys(caps).filter((k) => !BOUND_SOURCE_KEYS.includes(k));
+  const label = "text-[11.5px] font-medium text-slate-200";
+  const help = "text-[10.5px] leading-snug text-slate-500";
+  const row = "grid grid-cols-1 gap-1 sm:grid-cols-[minmax(0,1fr)_14rem] sm:items-start sm:gap-4";
+  const fromSchema = <span className="text-[9.5px] text-slate-500">from the schema</span>;
+  return (
+    <div className="flex flex-col gap-3">
+      <div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="font-mono text-[12px] font-semibold text-slate-100">{entry.name}</span>
+          {entry.declared_by === "kelt" && (
+            <span className="text-[9.5px] text-slate-500" title="The adapter's own /contract does not declare this variable; KELT offers it because the registry model reads it.">declared by KELT</span>
+          )}
+        </div>
+        <p className={help}>What the engine and the CAMARA API are told about the source behind this adapter. The image is generic, so this is where the vendor's traits live; without a source name the engine drops its fixes.</p>
+        {!entry.set && (advertised || schema) && (
+          <p className="mt-1 text-[10.5px] text-sky-300">Filled in from what the adapter advertises today and from its schema. Check it, then apply.</p>
+        )}
+      </div>
+      {broken && <p className="text-[11px] text-amber-300">The stored value is not a JSON object; saving from here replaces it.</p>}
+      <div className="flex flex-col gap-3 rounded border border-slate-800 bg-slate-950/60 p-3">
+        <div className={row}>
+          <div>
+            <div className={label}>Source name</div>
+            <p className={help}>The tag every fix carries. An asset is bound to this source by that name (<span className="font-mono">capabilities[].source</span>); a name no adapter serves is refused when saving assets.</p>
+          </div>
+          <input className={inputCls} value={caps.source || ""} placeholder={schema?.vendor || "vendor name"} onChange={(e) => set({ source: e.target.value.trim() })} />
+        </div>
+        <div className={row}>
+          <div>
+            <div className={label}>Asset kinds it can locate</div>
+            <p className={help}>Comma separated. An asset of a kind no source declares is refused when saving assets.</p>
+          </div>
+          <input
+            className={inputCls}
+            key={(caps.kinds || []).join("|")}
+            defaultValue={(caps.kinds || []).join(", ")}
+            placeholder="asset, uwb-tag"
+            onBlur={(e) => set({ kinds: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })}
+          />
+        </div>
+        <div className={row}>
+          <div>
+            <div className={label}>Coordinates</div>
+            <p className={help}>The frame the vendor reports in. The engine inverts latitude/longitude to the floor plan.</p>
+          </div>
+          {schema?.frame ? (
+            <div className="flex flex-col items-end gap-0.5"><span className="font-mono text-[12px] text-slate-200">{caps.frame || schema.frame}</span>{fromSchema}</div>
+          ) : (
+            <select className={inputCls} value={caps.frame || ""} onChange={(e) => set({ frame: e.target.value })}>
+              <option value="">(not declared)</option>
+              <option value="local">floor-plan metres (local)</option>
+              <option value="wgs84">latitude / longitude (wgs84)</option>
+            </select>
+          )}
+        </div>
+        <div className={row}>
+          <div>
+            <div className={label}>Height</div>
+            <p className={help}>Whether fixes carry a vertical component.</p>
+          </div>
+          {schema && typeof schema.z === "boolean" ? (
+            <div className="flex flex-col items-end gap-0.5"><span className="text-[12px] text-slate-200">{(caps.z ?? schema.z) ? "reported" : "not reported"}</span>{fromSchema}</div>
+          ) : (
+            <div className="inline-flex justify-self-end overflow-hidden rounded border border-slate-700">
+              {[false, true].map((on) => (
+                <button key={String(on)} type="button" onClick={() => set({ z: on })}
+                  className={`px-3 py-1 text-[11px] transition-colors ${(caps.z === true) === on ? "bg-sky-600 text-white" : "bg-slate-950 text-slate-400 hover:text-slate-200"}`}>
+                  {on ? "Reported" : "Not reported"}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className={row}>
+          <div>
+            <div className={label}>Nominal precision</div>
+            <p className={help}>How precise this technology is, as a band. A fix that reports no radius of its own is given the worst of the band{assumed != null ? `: ${assumed} m here` : ""}.</p>
+          </div>
+          <div className="flex flex-col gap-1">
+            {vocab === null ? (
+              <input className={inputCls} value={cls} placeholder="sub-metre | metre | coarse" onChange={(e) => set({ accuracy_class: e.target.value.trim() })} />
+            ) : (
+              <select className={inputCls} value={cls} onChange={(e) => set({ accuracy_class: e.target.value })}>
+                <option value="">(not declared)</option>
+                {Object.entries(classes).map(([k, b]) => (
+                  <option key={k} value={k}>{k}{b.upperBound != null ? ` (${b.lowerBound ?? 0} to ${b.upperBound} m)` : ` (over ${b.lowerBound} m)`}</option>
+                ))}
+                {cls && !classes[cls] && <option value={cls}>{cls} (not in vocabulary)</option>}
+              </select>
+            )}
+            {band?.description && <span className="text-right text-[10px] text-slate-500">{band.description}</span>}
+            {vocab === null && <span className="text-right text-[10px] text-slate-600">bands not published by this gateway</span>}
+            {!showRadius && cls && (
+              <button type="button" onClick={() => setRadiusOpen(true)} className="self-end text-[10px] text-sky-400 hover:text-sky-300">assume a different radius…</button>
+            )}
+          </div>
+        </div>
+        {showRadius && (
+          <div className={row}>
+            <div>
+              <div className={label}>Radius to assume (m)</div>
+              <p className={help}>{openEnded ? `${cls} has no upper bound, so this is required or the engine drops every fix from this source.` : "Overrides the band's worst case for fixes that carry no radius."}</p>
+            </div>
+            <input className={inputCls} type="number" min="0" step="0.1" value={caps.nominalAccuracy ?? ""}
+              placeholder={openEnded ? "required" : (band ? String(band.upperBound) : "")}
+              onChange={(e) => set({ nominalAccuracy: e.target.value === "" ? undefined : Number(e.target.value) })} />
+          </div>
+        )}
+      </div>
+      {openEnded && !(caps.nominalAccuracy > 0) && <p className="text-[11px] text-amber-300">Enter the radius to assume: {cls} alone resolves to no value.</p>}
+      {others.length > 0 && (
+        <p className="text-[10px] text-slate-600">also declared, kept as is: <span className="font-mono">{others.map((k) => `${k}=${JSON.stringify(caps[k])}`).join("  ")}</span></p>
+      )}
+    </div>
+  );
+}
+
+function ConfigField({ entry, required, value, onChange, upstreams, declared, service, toast, onApplied, shadowedBy, hints }) {
   // A file field (file_state set by the backend for path-valued *_FILE/*_PATH)
   // the dashboard owns is a document editor. When "external" (a PVC the service
   // writes itself, e.g. wifi-adapter's bindings/calibration), hands off: plain field.
-  if (entry.file_state && service && entry.file_state !== "external") {
+  if (isOwnedDocument(entry) && service) {
     return <FileFieldEditor service={service} entry={entry} toast={toast} onApplied={onApplied} shadowedBy={shadowedBy} />;
   }
+  if (entry.name === "ADAPTER_CAPABILITIES") {
+    return <CapabilitiesField entry={entry} value={value} onChange={onChange} hints={hints} />;
+  }
   const placeholder = entry.sensitive
-    ? (entry.set ? "•••• set — leave blank to keep" : (entry.example || ""))
+    ? (entry.set ? "•••• set, leave blank to keep" : (entry.example || ""))
     : (entry.value ?? entry.default ?? entry.example ?? "");
   const shown = value !== undefined ? value : (entry.sensitive ? "" : (entry.value ?? ""));
-  // A *_URL field whose value is a cluster service points at another deployed
-  // service the dashboard already knows. Offer a picker of those services so the
-  // operator selects (e.g.) wittra instead of hand-typing the FQDN; "Custom URL"
-  // falls back to free text for off-cluster upstreams.
-  const isServiceUrl = /_URL$/.test(entry.name) && !entry.sensitive && (upstreams || []).length > 0;
+  // Offer the service picker only where the field DEMONSTRABLY points at one of
+  // the services it can offer: its effective value names one of them, or its
+  // contract default names one that is deployed. Matching on the name ending in
+  // _URL was wrong (it offered camara-gateway as the vendor's own cloud base URL),
+  // and "any cluster FQDN" was wrong too (Keycloak is in-cluster but not on the
+  // list, so the select hid the real value behind "use default").
+  const hostOf = (u) => String(u || "").replace(/^https?:\/\//, "").split("/")[0].split(":")[0].split(".")[0];
+  const effectiveHost = hostOf((value !== undefined ? value : (entry.value ?? "")) || "");
+  const defaultHost = hostOf(entry.default);
+  const pointsAtOffered = (upstreams || []).some((u) =>
+    (!!effectiveHost && u.name === effectiveHost) ||
+    (!effectiveHost && !!defaultHost && (u.name === defaultHost || imgBasename(u.image) === defaultHost)));
+  const isServiceUrl = (declared || pointsAtOffered) && !entry.sensitive;
+  // The control follows the type the contract declares (string | url | integer |
+  // number | boolean | path, default string). Where a service is old enough not to
+  // declare one at all, fall back to reading a flag off its default: that guess
+  // applies only where the contract is silent, and it retires as services adopt the
+  // field. The wire value stays a ConfigMap string, so the literal spelling ("1" vs
+  // "true") comes from the declared default.
+  const ftype = entry.type ? String(entry.type).toLowerCase() : null;
+  const looksFlag = ["0", "1", "true", "false"].includes(String(entry.default ?? "").toLowerCase());
+  const isFlag = !entry.sensitive && (ftype ? ftype === "boolean" : looksFlag);
+  const flagPair = ["0", "1"].includes(String(entry.default ?? "").toLowerCase()) ? ["0", "1"] : ["false", "true"];
+  const flagOn = ["1", "true"].includes(String(shown || entry.default || "").toLowerCase());
+  const isNumeric = ftype === "integer" || ftype === "number";
   const [custom, setCustom] = useState(false);
+  // An already-set secret shows as a fact ("set in Secret"), not an empty password
+  // box begging to be filled in again. "replace" swaps in the input on demand.
+  const [replacing, setReplacing] = useState(false);
+  const secretSet = entry.sensitive && entry.set && !replacing;
   const useTextInput = !isServiceUrl || custom;
+  const showDefaultNote = !entry.sensitive && !isFlag && !isServiceUrl && entry.default && !entry.set && !String(shown || "").trim();
+
+  const badges = (
+    <>
+      {required && <span className="text-[9px] font-bold uppercase tracking-wide text-rose-400">required</span>}
+      {entry.sensitive && <span className="text-[9.5px] text-amber-400">🔒 secret</span>}
+    </>
+  );
+
+  // Prefer the contract's declared_at over the README-length description: it is
+  // shorter and it is the thing the operator needs. Full text stays on hover.
+  const used = usedFor(entry.declared_at);
+  const desc = used.length ? (
+    <p
+      className="mt-0.5 text-[11px] leading-snug text-slate-500"
+      title={[entry.description, (entry.declared_at || []).join("\n")].filter(Boolean).join("\n\n")}
+    >
+      used for {used.join(", ")}
+    </p>
+  ) : (
+    <FieldHelp text={entry.description} />
+  );
+
   return (
-    <div className="flex flex-col gap-0.5 py-1.5">
-      <label className="flex items-center gap-2 font-mono text-[11px] text-slate-200">
-        {entry.name}
-        {required && <span className="text-rose-400" title="required">*</span>}
-        {entry.sensitive && <span className="rounded bg-slate-800 px-1 text-[9px] text-amber-300">secret</span>}
-        {!required && !entry.set && <span className="text-[9px] text-slate-600">optional</span>}
-      </label>
-      {entry.description && <p className="text-[10px] leading-snug text-slate-500">{entry.description}</p>}
-      {useTextInput ? (
+    <FieldRow name={entry.name} badges={badges} desc={desc}>
+      {secretSet ? (
+        <div className="flex w-full items-center justify-end gap-2">
+          <span className="rounded border border-emerald-800/60 bg-emerald-950/40 px-2 py-0.5 text-[10px] text-emerald-400">✓ set</span>
+          <button type="button" onClick={() => setReplacing(true)} className="text-[11px] text-sky-400 hover:text-sky-300">replace</button>
+        </div>
+      ) : isFlag ? (
+        <div className="inline-flex overflow-hidden rounded border border-slate-700">
+          {[false, true].map((on) => (
+            <button
+              key={String(on)}
+              type="button"
+              onClick={() => onChange(entry.name, on ? flagPair[1] : flagPair[0])}
+              className={`px-3 py-1 text-[11px] transition-colors ${flagOn === on ? "bg-sky-600 text-white" : "bg-slate-950 text-slate-400 hover:text-slate-200"}`}
+            >
+              {on ? "On" : "Off"}
+            </button>
+          ))}
+        </div>
+      ) : useTextInput ? (
         <input
-          className={inputCls}
-          type={entry.sensitive ? "password" : "text"}
+          className={`${inputCls} w-full`}
+          type={entry.sensitive ? "password" : isNumeric ? "number" : "text"}
           placeholder={placeholder}
           value={shown}
+          autoFocus={replacing}
           onChange={(e) => onChange(entry.name, e.target.value)}
         />
       ) : (
         <select
-          className={inputCls}
+          className={`${inputCls} w-full`}
           value={shown}
           onChange={(e) => { if (e.target.value === "__custom__") { setCustom(true); } else { onChange(entry.name, e.target.value); } }}
         >
-          <option value="">— use default ({entry.default || "unset"}) —</option>
+          <option value="">(use default: {entry.default || "unset"})</option>
           {upstreams.map((u) => (
-            <option key={u.url} value={u.url}>{u.name} — {u.url}</option>
+            <option key={u.url} value={u.url}>{u.name} ({u.url})</option>
           ))}
           <option value="__custom__">Custom URL…</option>
         </select>
       )}
+      {replacing && <span className="text-[9.5px] text-slate-600">replaces the stored Secret on apply</span>}
       {isServiceUrl && custom && (
-        <button type="button" onClick={() => setCustom(false)} className="self-start text-[10px] text-slate-500 hover:text-slate-300">← pick a deployed service</button>
+        <button type="button" onClick={() => setCustom(false)} className="text-[9.5px] text-slate-500 hover:text-slate-300">← pick a deployed service</button>
       )}
-    </div>
+      {showDefaultNote && <span className="text-[9.5px] text-slate-600">default <b className="font-mono font-normal text-slate-400">{entry.default}</b></span>}
+    </FieldRow>
   );
 }
 
 // Guided, contract-driven setup for one service. Reads /config (schema + current
 // state), renders required -> recommended -> optional in order, applies via the
 // single-mechanism backend (Secret vs ConfigMap by `sensitive`), then rolls out.
-function ConfigureService({ service, services, toast, onClose, onApplied }) {
+const BINDING_LABELS = {
+  motion_model: ["Motion model", "How the filter predicts between scans. A random walk only widens the uncertainty (no velocity to run away with); constant velocity extrapolates along the estimated motion."],
+  algorithm: ["Position algorithm", "How a position is computed from the scan."],
+};
+
+// One runtime choice of an adapter: a select over the set its image declares,
+// applied through the adapter's own PUT /bindings. Takes effect on the next
+// scan, nothing restarts; picking the previous value is the rollback.
+function BindingSelect({ service, name, options, active, toast, onDone }) {
+  const [value, setValue] = useState(active || "");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setValue(active || ""); }, [active]);
+  const [label, help] = BINDING_LABELS[name] || [name.replace(/_/g, " "), null];
+  const dirty = value && value !== active;
+  const apply = async () => {
+    setBusy(true);
+    try {
+      await setNorthboundServiceBinding(service, name, value);
+      toast.success(`${label}: ${value}, effective on the next scan`);
+      onDone?.(value);
+    } catch (e) { toast.error(e.message || String(e)); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="mb-3 flex items-start justify-between gap-4">
+      <div className="min-w-0">
+        <div className="text-[12px] text-slate-200">{label}</div>
+        {help && <div className="text-[11px] leading-snug text-slate-500">{help}</div>}
+        <div className="text-[11px] text-slate-500">Active now: <span className="font-mono text-slate-300">{active || "unknown"}</span>. Changes apply on the next scan, no restart.</div>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <select value={value} onChange={(e) => setValue(e.target.value)} disabled={busy}
+          className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-[12px] text-slate-200">
+          {options.map((o) => <option key={o} value={o}>{o}</option>)}
+        </select>
+        <button type="button" onClick={apply} disabled={!dirty || busy}
+          className="rounded bg-sky-700 px-2 py-1 text-[12px] text-white disabled:opacity-40">{busy ? "Applying…" : "Apply"}</button>
+      </div>
+    </div>
+  );
+}
+
+function ConfigureService({ service, services, bindings, toast, onClose, onApplied }) {
   const [cfg, setCfg] = useState(null);
   const [err, setErr] = useState(null);
   const [vals, setVals] = useState({});
   const [busy, setBusy] = useState(false);
-  const [showAll, setShowAll] = useState(false);
 
-  // Deployed services as pickable upstreams for *_URL fields (so the operator
-  // selects e.g. wittra instead of typing the FQDN). Exclude the service itself.
-  const upstreams = (services || [])
+  // Deployed services as pickable upstreams for a URL field (so the operator
+  // picks the service instead of typing the FQDN). Exclude the service itself.
+  // A field the backend declares as an adapter binding (with a kind) offers only
+  // the deployed adapters of that kind: a wifi-adapter slot must not list the
+  // engine or an auth proxy as if they could fill it.
+  const allUpstreams = (services || [])
     .filter((s) => s.name !== service)
     .map((s) => ({ name: s.name, image: s.image, url: `http://${s.name}.${s.namespace}.svc.cluster.local:8080` }));
-  const imageBase = (img) => (img || "").split("/").pop().split("@")[0].split(":")[0];
+  const bindingFor = (name) => (bindings || []).find((b) => b.field === name);
+  const upstreamsFor = (name) => {
+    const b = bindingFor(name);
+    return b ? b.candidates.map((c) => ({ name: c.name, url: c.url })) : allUpstreams;
+  };
+  // The service's own role/subtitle/namespace, already known from the inventory the
+  // Services panel renders from. Real data, not a description written for the modal.
+  const svcMeta = (services || []).find((s) => s.name === service);
 
   useEffect(() => {
     let alive = true;
-    setCfg(null); setErr(null); setVals({}); setShowAll(false);
+    setCfg(null); setErr(null); setVals({});
     getNorthboundServiceConfig(service)
       .then((c) => {
         if (!alive) return;
@@ -2049,10 +1884,10 @@ function ConfigureService({ service, services, toast, onClose, onApplied }) {
         // default host, e.g. "vendor-adapter") matches exactly one deployed service
         // by image, pre-select that service. Ambiguous (>1) is left to the picker.
         for (const f of [...(env.recommended || []), ...(env.optional || [])]) {
-          if (f.set || f.sensitive || !/_URL$/.test(f.name)) continue;
-          const host = String(f.default || "").replace(/^https?:\/\//, "").split(":")[0];
+          if (f.set || f.sensitive || !isOperatorSetting(f) || !/_URL$/.test(f.name)) continue;
+          const host = String(f.default || "").replace(/^https?:\/\//, "").split("/")[0].split(":")[0];
           if (!host) continue;
-          const match = (services || []).filter((s) => imageBase(s.image) === host);
+          const match = (services || []).filter((s) => imgBasename(s.image) === host);
           if (match.length === 1) seed[f.name] = `http://${match[0].name}.${match[0].namespace}.svc.cluster.local:8080`;
         }
         if (Object.keys(seed).length) setVals(seed);
@@ -2069,21 +1904,25 @@ function ConfigureService({ service, services, toast, onClose, onApplied }) {
     ...(env.recommended || []).map((f) => ({ ...f, _req: false })),
     ...(env.optional || []).map((f) => ({ ...f, _req: false })),
   ];
-  // "Needs your input" = the human-only fields not yet provided: required not set
-  // by the deployment, sensitive not set (a token/key only a human supplies), or a
-  // *_FILE document field (significant config, shown prominently with its editor).
-  // The rest (deploy-set, derivable, plain optional) is system-managed: collapsed.
-  const isFile = (f) => !!f.file_state;
-  // A file field is a "need" when the dashboard can provide it and it is missing
-  // ("absent") or only runtime-loaded ("ephemeral", persist it). "managed"/"external"
-  // are not needs. Non-file: required-or-sensitive and unset.
-  const isNeed = (f) => isFile(f) ? (f.file_state === "absent" || f.file_state === "ephemeral") : (!f.set && (f._req || f.sensitive));
-  // Three groups instead of one flat "configured/optional" dump: human-only scalars
-  // (tokens/keys) up top, the file-backed documents (the vendor schema) in their own
-  // prominent section, and everything else (deploy-set, plain optional) folded away.
-  const fileFields = all.filter(isFile);
-  const needScalars = all.filter((f) => !isFile(f) && isNeed(f));
-  const restScalars = all.filter((f) => !isFile(f) && !isNeed(f));
+  // Only the operator's own settings (see isOperatorSetting), grouped by what each
+  // field IS using signals the contract declares (`sensitive`, `required`, a
+  // *_FILE document, `role`). Nothing is inferred from a variable's name.
+  const settings = all.filter(isOperatorSetting);
+  // Read alongside the settings but not edited here: deployment wiring (all.yml)
+  // and storage paths. Folded away so the form stays about what the operator sets.
+  const wiring = all.filter((f) => !isStorageField(f) && (f.owner === "deployment" || f.managed));
+  const storage = all.filter(isStorageField);
+  const isFile = (f) => isOwnedDocument(f);
+  // Connection: the values the vendor issued for its API. They stay in their own
+  // group once set (rather than falling into the optional pile) so the operator can
+  // find and replace a rotated key.
+  const isConn = (f) => !isFile(f) && (f._req || f.sensitive);
+  const fileFields = settings.filter(isFile);
+  const connFields = settings.filter(isConn);
+  const optFields = settings.filter((f) => !isFile(f) && !isConn(f));
+  // The documents section is "Field mapping" only when it holds the vendor schema
+  // (contract role), otherwise it is just the documents this service reads.
+  const docsTitle = fileFields.some((f) => f.role === "schema") ? "Field mapping" : "Documents";
   // A *_FILE document is silently ignored when its inline twin (same name without
   // _FILE, e.g. DEVICE_REGISTRY for DEVICE_REGISTRY_FILE) carries a value: many
   // services prefer the inline scalar over the file. Surface the twin so editing
@@ -2098,9 +1937,13 @@ function ConfigureService({ service, services, toast, onClose, onApplied }) {
     const effective = entered || (t.set ? String(t.value ?? "set") : "");
     return effective ? twin : null;
   };
-  // Only an unfilled REQUIRED scalar blocks Apply; optional secrets and *_FILE
-  // documents (saved via their own editor button) do not.
-  const unfilled = needScalars.filter((f) => f._req && !((vals[f.name] ?? "").toString().trim()));
+  // Only a REQUIRED scalar that the deployment has not set and the operator has not
+  // typed blocks Apply; optional secrets and *_FILE documents (saved via their own
+  // editor button) do not.
+  const unfilled = connFields.filter((f) => f._req && !f.set && !((vals[f.name] ?? "").toString().trim()));
+  // Mapping targets the running adapter supports but the loaded schema leaves out
+  // (position fields and discover fields are reported separately).
+  const unmapped = [...(cfg?.mapping?.unmapped || []), ...(cfg?.discover_mapping?.unmapped || [])];
 
   const submit = async () => {
     // Build the apply payload: a non-empty value sets the var; emptying a var that
@@ -2124,57 +1967,86 @@ function ConfigureService({ service, services, toast, onClose, onApplied }) {
     finally { setBusy(false); }
   };
 
+  // Header line: the service's own role/subtitle/namespace (real inventory data),
+  // in place of a paragraph of boilerplate repeated for every service.
+  const roleLine = svcMeta ? [svcMeta.role, svcMeta.subtitle, svcMeta.namespace].filter(Boolean).join(" · ") : null;
+
   return (
-    <Modal
-      title={`Configure ${service}`}
-      hint="The system fills what it can from the deployment; you supply only what only you have (tokens, keys). Sensitive values go to a Secret, the rest to a ConfigMap; the pod rolls to pick them up."
-      onClose={onClose}
-    >
+    <Modal title={`Configure ${service}`} hint={roleLine} onClose={onClose}>
       {!cfg && !err && <p className="text-xs text-slate-500">Loading contract…</p>}
       {err && (
         <Banner msg={{ text: `This service cannot be configured through the guided setup: ${err}.` }} />
       )}
       {cfg?.available && (
-        <div className="flex flex-col gap-4 text-xs">
-          {cfg.description && <p className="text-[11px] leading-snug text-slate-500">{cfg.description}</p>}
+        <div className="flex flex-col text-xs">
+          {/* An adapter that holds no schema declares it (`configured: false`), so
+              there is nothing to guess: it has no vendor settings yet because the
+              document that would define them is missing. */}
+          {cfg.configured === false && (
+            <div className="mb-4 rounded border border-amber-900/50 bg-amber-950/30 px-3 py-2.5 text-[11px] leading-snug text-amber-300">
+              No vendor schema loaded. Add one under Field mapping: it declares the vendor, its endpoint, and the settings that appear here.
+            </div>
+          )}
 
-          {/* Human-only scalars: tokens/keys and required values the deployment can't fill. */}
-          <div>
-            <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wide text-rose-400">Needs your input</p>
-            {needScalars.length === 0 ? (
-              <p className="text-[11px] text-emerald-400/80">No tokens or keys required, the deployment fills the rest.</p>
-            ) : (
-              <div className="flex flex-col divide-y divide-slate-800/60">
-                {needScalars.map((f) => <ConfigField key={f.name} entry={f} required={f._req} value={vals[f.name]} onChange={setVal} upstreams={upstreams} service={service} toast={toast} onApplied={onApplied} shadowedBy={fileShadowedBy(f)} />)}
-              </div>
-            )}
-          </div>
+          {/* How the adapter reaches its source (vendor-adapter 0.17.1+). One
+              implemented transport is a fact; more than one would be chosen in the
+              schema's own `transport` field, never here. */}
+          {Array.isArray(cfg.transports) && cfg.transports.length > 0 && (
+            <p className="mb-4 text-[11px] leading-snug text-slate-500">
+              Reaches its source over <span className="font-mono text-slate-300">{(cfg.transport || cfg.transports[0]).toUpperCase()}</span>
+              {cfg.transports.length > 1
+                ? <> (this image also implements {cfg.transports.filter((t) => t !== (cfg.transport || cfg.transports[0])).map((t) => t.toUpperCase()).join(", ")}; the schema's <span className="font-mono">transport</span> field chooses)</>
+                : <> (the only transport this image implements)</>}.
+            </p>
+          )}
 
-          {/* Documents: file-backed config (the vendor schema). Prominent, not buried. */}
+          {/* Runtime choices the image declares (a list plus the active value) and
+              accepts on its own PUT /bindings: effective on the next scan, no
+              restart. Options come from the contract; nothing is typed. */}
+          {cfg.bindings && Object.keys(cfg.bindings).length > 0 && (
+            <div className="mb-4">
+              <ConfigSection tone="neutral" title="Runtime choices">
+                {Object.entries(cfg.bindings).map(([key, b]) => (
+                  <BindingSelect key={key} service={cfg.service} name={key} options={b.options} active={b.active} toast={toast}
+                    onDone={(v) => setCfg((c) => ({ ...c, bindings: { ...c.bindings, [key]: { ...c.bindings[key], active: v } } }))} />
+                ))}
+              </ConfigSection>
+            </div>
+          )}
+
+          {settings.length === 0 && (
+            <p className="text-[11px] leading-snug text-slate-500">
+              Nothing to set from here: everything this service reads is deployment wiring, listed below.
+            </p>
+          )}
+
+          {connFields.length > 0 && (
+            <ConfigSection tone="rose" title="Connection">
+              {connFields.map((f) => <ConfigField key={f.name} entry={f} required={f._req} value={vals[f.name]} onChange={setVal} upstreams={upstreamsFor(f.name)} declared={!!bindingFor(f.name)} service={service} toast={toast} onApplied={onApplied} shadowedBy={fileShadowedBy(f)} hints={cfg.capabilities_hints} />)}
+            </ConfigSection>
+          )}
+
           {fileFields.length > 0 && (
-            <div>
-              <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wide text-sky-400">Documents</p>
-              <div className="flex flex-col divide-y divide-slate-800/60">
-                {fileFields.map((f) => <ConfigField key={f.name} entry={f} required={f._req} value={vals[f.name]} onChange={setVal} upstreams={upstreams} service={service} toast={toast} onApplied={onApplied} shadowedBy={fileShadowedBy(f)} />)}
-              </div>
-            </div>
-          )}
-
-          {/* Everything else (deploy-set, plain optional): folded away. */}
-          {restScalars.length > 0 && (
-            <div>
-              <button type="button" onClick={() => setShowAll((v) => !v)} className="text-[10px] font-medium uppercase tracking-wide text-slate-500 transition-colors hover:text-slate-300">
-                {showAll ? "▾" : "▸"} Optional settings ({restScalars.length})
-              </button>
-              {showAll && (
-                <div className="mt-1 flex flex-col divide-y divide-slate-800/60">
-                  {restScalars.map((f) => <ConfigField key={f.name} entry={f} value={vals[f.name]} onChange={setVal} upstreams={upstreams} service={service} toast={toast} onApplied={onApplied} shadowedBy={fileShadowedBy(f)} />)}
-                </div>
+            <ConfigSection tone="sky" title={docsTitle}>
+              {fileFields.map((f) => <ConfigField key={f.name} entry={f} required={f._req} value={vals[f.name]} onChange={setVal} upstreams={upstreamsFor(f.name)} declared={!!bindingFor(f.name)} service={service} toast={toast} onApplied={onApplied} shadowedBy={fileShadowedBy(f)} hints={cfg.capabilities_hints} />)}
+              {/* The adapter reports what it can emit vs what this schema maps, so a
+                  field added by a newer adapter does not stay silently unmapped. */}
+              {unmapped.length > 0 && (
+                <p className="text-[10px] leading-snug text-amber-300">
+                  ⚠ this adapter can emit {unmapped.join(", ")}, the loaded schema does not map {unmapped.length > 1 ? "them" : "it"}.
+                </p>
               )}
-            </div>
+            </ConfigSection>
           )}
 
-          <div className="flex items-center gap-3 border-t border-slate-800 pt-3">
+          {optFields.length > 0 && (
+            <ConfigSection tone="neutral" title="Options">
+              {optFields.map((f) => <ConfigField key={f.name} entry={f} value={vals[f.name]} onChange={setVal} upstreams={upstreamsFor(f.name)} declared={!!bindingFor(f.name)} service={service} toast={toast} onApplied={onApplied} shadowedBy={fileShadowedBy(f)} hints={cfg.capabilities_hints} />)}
+            </ConfigSection>
+          )}
+
+          {settings.length > 0 && (
+          <div className="flex items-center gap-3 pt-4">
             <button type="button" disabled={busy || unfilled.length > 0} onClick={submit} className={btn.sky}>
               {busy ? "Applying…" : "Apply & restart"}
             </button>
@@ -2182,6 +2054,98 @@ function ConfigureService({ service, services, toast, onClose, onApplied }) {
               <span className="text-[11px] text-rose-400">fill: {unfilled.map((f) => f.name).join(", ")}</span>
             )}
           </div>
+          )}
+
+          {(wiring.length > 0 || storage.length > 0) && (
+            <details className="mt-4 border-t border-slate-800 pt-3">
+              <summary className="cursor-pointer text-[11px] text-slate-500 hover:text-slate-300">
+                Also read by this service, not editable here: {[wiring.length && `${wiring.length} set by the deployment`, storage.length && `${storage.length} storage path${storage.length > 1 ? "s" : ""}`].filter(Boolean).join(", ")}
+              </summary>
+              <div className="mt-3 flex flex-col">
+                <EnvReadGroup title="Set by the deployment" tone="neutral" rows={wiring} note="From all.yml at deploy time; change it there and re-run phase 10." />
+                <EnvReadGroup title="Storage" tone="neutral" rows={storage} />
+              </div>
+            </details>
+          )}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// Read-only companion of Configure: what the service reads and who provides it,
+// with the contract's full descriptions. Deployment wiring comes from all.yml
+// (re-run phase 10 to change it), storage paths map to volumes, settings are the
+// operator's and are edited in Configure.
+// Read-only rows for values the operator does not edit here: who provides each
+// (KELT wiring, the deployment's own ConfigMap, a volume) and its current value.
+const isStorageField = (f) => !!f.file_state && !isOwnedDocument(f);
+function EnvReadGroup({ title, tone, rows, note }) {
+  if (!rows.length) return null;
+  const shownValue = (f) => {
+    if (f.sensitive) return f.set ? "set" : "unset";
+    if (f.set) return String(f.value ?? "");
+    return f.default !== undefined && f.default !== null && f.default !== "" ? `${f.default} (default)` : "unset";
+  };
+  const sourceOf = (f) => {
+    if (isStorageField(f)) return { external: "volume (PVC or seed)", internal: "service's own file", unset: "not mounted" }[f.file_state] || f.file_state;
+    if (f.managed) return "KELT wiring";
+    return f.source || "";
+  };
+  return (
+    <ConfigSection tone={tone} title={title}>
+      {note && <p className="text-[10.5px] leading-snug text-slate-500">{note}</p>}
+      {rows.map((f) => (
+        <div key={f.name} className="flex flex-col gap-0.5">
+          <div className="flex items-start justify-between gap-3">
+            <span className="font-mono text-[12px] font-semibold text-slate-100">
+              {f.name}
+              {f._req && <span className="ml-1.5 text-[9px] font-bold uppercase tracking-wide text-rose-400">required</span>}
+              {f.sensitive && <span className="ml-1.5 text-[9.5px] font-normal text-amber-400">🔒 secret</span>}
+            </span>
+            <span className="max-w-[50%] truncate text-right font-mono text-[11px] text-slate-300" title={shownValue(f)}>{shownValue(f)}</span>
+          </div>
+          <div className="flex items-start justify-between gap-3">
+            <p className="text-[11px] leading-snug text-slate-500">{f.description || ""}</p>
+            {sourceOf(f) && <span className="shrink-0 text-[9.5px] text-slate-600">{sourceOf(f)}</span>}
+          </div>
+        </div>
+      ))}
+    </ConfigSection>
+  );
+}
+
+function ServiceInfo({ service, services, onClose }) {
+  const [cfg, setCfg] = useState(null);
+  const [err, setErr] = useState(null);
+  const svcMeta = (services || []).find((s) => s.name === service);
+  useEffect(() => {
+    let alive = true;
+    getNorthboundServiceConfig(service)
+      .then((c) => { if (!alive) return; setCfg(c); if (!c.available) setErr(c.error || "no contract"); })
+      .catch((e) => alive && setErr(e.message));
+    return () => { alive = false; };
+  }, [service]);
+  const env = cfg?.env || {};
+  const all = [
+    ...(env.required || []).map((f) => ({ ...f, _req: true })),
+    ...(env.recommended || []).map((f) => ({ ...f, _req: false })),
+    ...(env.optional || []).map((f) => ({ ...f, _req: false })),
+  ];
+  const wiring = all.filter((f) => !isStorageField(f) && (f.owner === "deployment" || f.managed));
+  const storage = all.filter(isStorageField);
+  const settings = all.filter((f) => !isStorageField(f) && isOperatorSetting(f));
+  const roleLine = svcMeta ? [svcMeta.role, svcMeta.subtitle, svcMeta.namespace].filter(Boolean).join(" · ") : null;
+  return (
+    <Modal title={`About ${service}`} hint={roleLine} onClose={onClose}>
+      {!cfg && !err && <p className="text-xs text-slate-500">Loading contract…</p>}
+      {err && <Banner msg={{ text: `No contract to read: ${err}.` }} />}
+      {cfg?.available && (
+        <div className="flex flex-col text-xs">
+          {cfg.description && <p className="mb-4 text-[11.5px] leading-snug text-slate-400">{cfg.description}</p>}
+          <EnvReadGroup title="Settings" tone="sky" rows={settings} note="Set by an admin in Configure." />
+          <EnvReadGroup title="Set by the deployment" tone="neutral" rows={wiring} note="From all.yml at deploy time; change it there and re-run phase 10." />
+          <EnvReadGroup title="Storage" tone="neutral" rows={storage} />
         </div>
       )}
     </Modal>
