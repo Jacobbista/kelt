@@ -22,6 +22,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { getDashboardComponents, updateDashboardComponent } from "../api";
 import { useToast } from "./ToastContext";
+import { useAuth } from "../auth/AuthContext";
 
 const Ctx = createContext(null);
 
@@ -32,9 +33,15 @@ const POLL_MS = 3000;
 
 export function UpdateProvider({ children }) {
   const toast = useToast();
+  const auth = useAuth();
   const [components, setComponents] = useState([]);
   const [rollout, setRollout] = useState(null); // { name, phase, since }
   const announced = useRef(false);
+  // Wait for auth before touching the API. This provider wraps the routes including
+  // the OIDC callback, so firing getDashboardComponents on mount hits the backend
+  // before a token exists — a burst of 401s on every cold load (dev and prod), and a
+  // flash before the app settles. Ready = auth off, or signed in.
+  const authReady = !auth.enabled || (!auth.loading && !!auth.user);
 
   const refresh = useCallback(async () => {
     try {
@@ -49,8 +56,10 @@ export function UpdateProvider({ children }) {
   const available = components.filter((c) => c.state === "update-available");
 
   // Announce once per page load, not per navigation: a notice that reappears on
-  // every route change reads as a fault rather than information.
+  // every route change reads as a fault rather than information. Held until auth is
+  // ready so the first call carries a token instead of 401-ing on the callback.
   useEffect(() => {
+    if (!authReady) return;
     refresh().then((list) => {
       const behind = (list || []).filter((c) => c.state === "update-available");
       if (behind.length && !announced.current) {
@@ -59,7 +68,7 @@ export function UpdateProvider({ children }) {
         toast.info(`Update available for ${names}. Open Manual to apply it.`, 8000);
       }
     });
-  }, [refresh, toast]);
+  }, [authReady, refresh, toast]);
 
   const startUpdate = useCallback(async (name) => {
     let res = null;
