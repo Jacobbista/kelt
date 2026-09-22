@@ -189,6 +189,19 @@ Vagrant.configure("2") do |config|
         end
       end
 
+      # Host-only adapter: one TCP segment per frame, else the host's TSO hands
+      # VirtualBox a multi-segment frame the VM drops (200 ms retransmit on every
+      # NodePort request with a bearer token). Host-side, idempotent, never fatal.
+      # `run` executes ONE program, not a shell script, hence the file.
+      # Workaround, see docs/known-issues/virtualbox-hostonly-tso.md
+      if name == "master"
+        host_ip = spec[:ip].sub(/\.\d+$/, '.1')
+        m.trigger.after [:up, :resume, :reload] do |t|
+          t.name = "Single-segment TSO on the host-only adapter"
+          t.run = { path: "host/hostonly-single-segment.sh", args: [host_ip] }
+        end
+      end
+
       # Persist host NIC used for RAN bridge so the dashboard can verify it (no trust required).
       # File is synced to ansible VM /vagrant and read by ran_service.
       if name == "worker"
