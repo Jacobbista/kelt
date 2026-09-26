@@ -1,4 +1,3 @@
 kubeconfig_path: "/home/vagrant/kubeconfig"
 kube_proxy_image: "registry.k8s.io/kube-proxy:v1.30.6"
-cluster_cidr: "10.42.0.0/16"
 namespace_system: "kube-system"

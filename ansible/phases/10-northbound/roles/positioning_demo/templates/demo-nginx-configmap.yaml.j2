@@ -2,7 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: location-app-nginx
-  namespace: {{ demo_namespace }}
+  namespace: {{ apps_namespace }}
 data:
   # nginx config mounted at /etc/nginx/conf.d/default.conf. This is genuine
   # deployment-specific routing (in-cluster CAMARA proxy), legitimately a file,
@@ -31,7 +31,7 @@ data:
       # CAMARA Location API. Demo code calls `${VITE_CAMARA_API_BASE}/...`
       # so the `/api/camara/` prefix is stripped before forwarding.
       location /api/camara/ {
-        proxy_pass http://camara-gateway.{{ camara_namespace | default('camara') }}.svc.cluster.local:8080/;
+        proxy_pass http://camara-gateway.{{ camara_namespace }}.svc.cluster.local:{{ camara_gateway_service_port }}/;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

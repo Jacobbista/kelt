@@ -58,22 +58,16 @@ Phase 6 has been completely refactored from a single monolithic role (`ueransim_
 │   │   └── templates/
 │   │       ├── ue-config.yaml.j2       # UERANSIM config
 │   │       └── ue-deployment.yaml.j2   # K8s Deployment
-│   ├── connectivity_validation/    # UE registration & connectivity tests
-│   │   ├── defaults/main.yml
-│   │   └── tasks/main.yml
-│   └── mec_deployment/             # MEC application (optional)
-│       ├── defaults/main.yml       # MEC variables
-│       ├── tasks/main.yml          # Deployment logic
-│       └── templates/
-│           ├── mec-deployment.yaml.j2  # K8s Deployment
-│           └── mec-service.yaml.j2     # K8s Service
-├── playbook.yml                    # Multi-play structure (5 plays)
+│   └── connectivity_validation/    # UE registration & connectivity tests
+│       ├── defaults/main.yml
+│       └── tasks/main.yml
+├── playbook.yml                    # Multi-play structure (4 plays)
 └── README.md                       # Complete documentation
 ```
 
 **Improvements**:
 
-- ✅ **5 separate roles** with clear responsibilities
+- ✅ **4 separate roles** with clear responsibilities
 - ✅ **Template-based**: All configs and manifests are Jinja2 templates
 - ✅ **No shell scripts**: Logic embedded directly in deployment `args:`
 - ✅ **Stable ConfigMap names** (`gnb-config`, `ue-config`)
@@ -143,25 +137,6 @@ Phase 6 has been completely refactored from a single monolithic role (`ueransim_
 - Test Internet connectivity via `ping -I uesimtun0 8.8.8.8`
 
 **Files**: 2 (defaults, tasks)
-
-### 5. `mec_deployment`
-
-**Purpose**: Deploys MEC application on edge node (optional, disabled by default)
-
-**Tasks**:
-
-- Deploy MEC Deployment with Multus network attachment (N6e)
-- Deploy MEC Service
-- Wait for MEC to be ready
-
-**Templates**:
-
-- `mec-deployment.yaml.j2`: Kubernetes Deployment
-- `mec-service.yaml.j2`: Kubernetes Service
-
-**Files**: 4 (defaults, tasks, 2 templates)
-
-**Note**: Disabled by default due to UPF-Edge CNI route conflict (see `docs/known-issues/upf-edge-cni-route-conflict.md`)
 
 ## Key Design Decisions
 
@@ -252,11 +227,6 @@ Phase 6 playbook now follows the Phase 5 multi-play pattern:
   hosts: masters
   become: no
   roles: [roles/connectivity_validation]
-
-- name: "PHASE 6 | Deploy MEC (optional)"
-  hosts: masters
-  become: no
-  roles: [roles/mec_deployment]
 ```
 
 **Tags**: Each play has tags for selective execution:
@@ -266,7 +236,6 @@ Phase 6 playbook now follows the Phase 5 multi-play pattern:
 - `gnb_deployment`, `gnb`
 - `ue_deployment`, `ue`
 - `connectivity_validation`, `validation`
-- `mec_deployment`, `mec`
 
 ## File Count
 
@@ -286,16 +255,16 @@ After refactoring, test with:
 
 ```bash
 # Full Phase 6
-ansible-playbook -i inventory.ini phases/06-ueransim-mec/playbook.yml
+ansible-playbook phases/06-ueransim-mec/playbook.yml
 
 # Only gNB
-ansible-playbook -i inventory.ini phases/06-ueransim-mec/playbook.yml --tags gnb
+ansible-playbook phases/06-ueransim-mec/playbook.yml --tags gnb
 
 # Only validation
-ansible-playbook -i inventory.ini phases/06-ueransim-mec/playbook.yml --tags validation
+ansible-playbook phases/06-ueransim-mec/playbook.yml --tags validation
 
 # Skip MEC
-ansible-playbook -i inventory.ini phases/06-ueransim-mec/playbook.yml --skip-tags mec
+ansible-playbook phases/06-ueransim-mec/playbook.yml --skip-tags mec
 ```
 
 ## Migration Notes

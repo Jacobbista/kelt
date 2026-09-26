@@ -9,8 +9,8 @@ upf:
     server:
       - address: {{ upf_edge_n3_ip }}
   session:
-    - subnet: 10.46.0.0/16
-      gateway: 10.46.0.1
+    - subnet: {{ ue_mec_subnet }}
+      gateway: {{ ue_mec_gateway }}
       dnn: mec
       dev: ogstun
   metrics:

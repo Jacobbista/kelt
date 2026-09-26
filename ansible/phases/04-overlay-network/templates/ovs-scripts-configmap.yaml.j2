@@ -8,5 +8,7 @@ data:
 {{ lookup('file', playbook_dir + '/scripts/ovs-setup.sh') | indent(4, True) }}
   ovs-gc.sh: |
 {{ lookup('file', playbook_dir + '/scripts/ovs-gc.sh') | indent(4, True) }}
+  plane-metrics.sh: |
+{{ lookup('file', playbook_dir + '/scripts/plane-metrics.sh') | indent(4, True) }}
   host-networkd-prepare.sh: |
 {{ lookup('file', playbook_dir + '/scripts/host-networkd-prepare.sh') | indent(4, True) }}

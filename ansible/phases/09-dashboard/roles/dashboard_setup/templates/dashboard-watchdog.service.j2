@@ -6,9 +6,13 @@ Wants=network-online.target
 [Service]
 Type=simple
 User={{ dashboard_service_user }}
-# Shared with DASHBOARD_ADMIN_TOKEN. Frontend fetches via /api/v1/admin/watchdog-token
-# (JWT admin-gated) and stores in memory so restart still works when backend is dead.
-Environment=WATCHDOG_TOKEN={{ dashboard_admin_token }}
+# Token only (DASHBOARD_ADMIN_TOKEN), root-owned 0600, read by systemd. The
+# frontend fetches it via /api/v1/admin/watchdog-token (admin) and keeps it in
+# memory, so a restart still works when the backend is dead. See docs/security/iam.md.
+EnvironmentFile=/etc/dashboard-watchdog.env
+# Management address, so the cluster frontend on the worker can proxy /watchdog.
+Environment=WATCHDOG_BIND={{ dashboard_bind_host }}
+Environment=WATCHDOG_PORT={{ dashboard_watchdog_port }}
 ExecStart=/usr/bin/python3 {{ dashboard_backend_dir }}/watchdog.py
 Restart=always
 RestartSec=3

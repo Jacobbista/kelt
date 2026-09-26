@@ -26,18 +26,17 @@ smf:
     server:
       - address: {{ smf_n4_ip }}
   session:
-    - subnet: 10.45.0.0/16
-      gateway: 10.45.0.1
+    - subnet: {{ ue_internet_subnet }}
+      gateway: {{ ue_internet_gateway }}
       dnn: internet
-    - subnet: 10.46.0.0/16
-      gateway: 10.46.0.1
+    - subnet: {{ ue_mec_subnet }}
+      gateway: {{ ue_mec_gateway }}
       dnn: mec
   dns:
-    - 8.8.8.8
-    - 8.8.4.4
-    - 2001:4860:4860::8888
-    - 2001:4860:4860::8844
-  mtu: 1400
+{% for server in ue_dns_servers %}
+    - {{ server }}
+{% endfor %}
+  mtu: {{ ue_mtu }}
   metrics:
     server:
       - address: 0.0.0.0

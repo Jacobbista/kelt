@@ -33,7 +33,7 @@ spec:
             - name: GF_USERS_ALLOW_SIGN_UP
               value: "false"
             - name: GF_SERVER_ROOT_URL
-              value: "http://192.168.56.11:{{ grafana.nodeport }}"
+              value: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ grafana.nodeport }}"
           resources:
             limits:
               cpu: 500m
@@ -53,13 +53,13 @@ spec:
           livenessProbe:
             httpGet:
               path: /api/health
-              port: 3000
+              port: {{ grafana.port }}
             initialDelaySeconds: 30
             periodSeconds: 10
           readinessProbe:
             httpGet:
               path: /api/health
-              port: 3000
+              port: {{ grafana.port }}
             initialDelaySeconds: 5
             periodSeconds: 5
       volumes:

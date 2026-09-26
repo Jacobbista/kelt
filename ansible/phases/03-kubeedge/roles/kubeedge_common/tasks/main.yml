@@ -1,27 +1,38 @@
 ---
-# keadm install (idempotent)
-- name: Download keadm archive
-  get_url:
-    url: "https://github.com/kubeedge/kubeedge/releases/download/v{{ kubeedge_version }}/keadm-v{{ kubeedge_version }}-linux-amd64.tar.gz"
-    dest: /tmp/keadm.tgz
-    mode: "0644"
-  register: dl
-  retries: 5
-  delay: 6
-  until: dl is succeeded
+# keadm install: download and install only when the installed binary is not
+# already the pinned version (/tmp does not survive a reboot, so the archive alone
+# cannot tell).
+- name: Read the installed keadm version
+  command: /usr/local/bin/keadm version
+  register: keadm_installed
+  changed_when: false
+  failed_when: false
 
-- name: Unpack keadm
-  unarchive:
-    src: /tmp/keadm.tgz
-    dest: /tmp
-    remote_src: true
+- name: Install keadm {{ kubeedge_version }}
+  when: ("GitVersion:\"v" ~ kubeedge_version ~ "\"") not in (keadm_installed.stdout | default(''))
+  block:
+    - name: Download keadm archive
+      get_url:
+        url: "https://github.com/kubeedge/kubeedge/releases/download/v{{ kubeedge_version }}/keadm-v{{ kubeedge_version }}-linux-amd64.tar.gz"
+        dest: /tmp/keadm.tgz
+        mode: "0644"
+      register: dl
+      retries: 5
+      delay: 6
+      until: dl is succeeded
 
-- name: Install keadm
-  copy:
-    src: "/tmp/keadm-v{{ kubeedge_version }}-linux-amd64/keadm/keadm"
-    dest: /usr/local/bin/keadm
-    mode: "0755"
-    remote_src: true
+    - name: Unpack keadm
+      unarchive:
+        src: /tmp/keadm.tgz
+        dest: /tmp
+        remote_src: true
+
+    - name: Install keadm
+      copy:
+        src: "/tmp/keadm-v{{ kubeedge_version }}-linux-amd64/keadm/keadm"
+        dest: /usr/local/bin/keadm
+        mode: "0755"
+        remote_src: true
 
 # Copy kubeconfig from master to current host when required
 - name: Slurp kubeconfig from master

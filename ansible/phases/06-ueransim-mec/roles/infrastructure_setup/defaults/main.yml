@@ -1,6 +1,4 @@
 ---
 # Infrastructure setup for UERANSIM
-namespace: "5g"
 kubeconfig_path: "/home/vagrant/kubeconfig"
 ueransim_image: "jacobbista/comnetsemu-ueransim:latest"
-mec_image: "jacobbista/comnetsemu-mec:latest"

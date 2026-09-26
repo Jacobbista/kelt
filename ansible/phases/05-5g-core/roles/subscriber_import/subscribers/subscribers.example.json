@@ -17,12 +17,22 @@
               "type": 3,
               "pcc_rule": [],
               "ambr": {
-                "uplink": {"value": 5, "unit": 2},
-                "downlink": {"value": 5, "unit": 2}
+                "uplink": {
+                  "value": 5,
+                  "unit": 2
+                },
+                "downlink": {
+                  "value": 5,
+                  "unit": 2
+                }
               },
               "qos": {
                 "index": 8,
-                "arp": {"priority_level": 15, "pre_emption_capability": 1, "pre_emption_vulnerability": 1}
+                "arp": {
+                  "priority_level": 15,
+                  "pre_emption_capability": 1,
+                  "pre_emption_vulnerability": 1
+                }
               }
             }
           ]
@@ -37,26 +47,42 @@
               "type": 3,
               "pcc_rule": [],
               "ambr": {
-                "uplink": {"value": 50, "unit": 2},
-                "downlink": {"value": 50, "unit": 2}
+                "uplink": {
+                  "value": 50,
+                  "unit": 2
+                },
+                "downlink": {
+                  "value": 50,
+                  "unit": 2
+                }
               },
               "qos": {
                 "index": 8,
-                "arp": {"priority_level": 15, "pre_emption_capability": 1, "pre_emption_vulnerability": 1}
+                "arp": {
+                  "priority_level": 15,
+                  "pre_emption_capability": 1,
+                  "pre_emption_vulnerability": 1
+                }
               }
             }
           ]
         }
       ],
       "ambr": {
-        "uplink": {"value": 1, "unit": 2},
-        "downlink": {"value": 1, "unit": 2}
+        "uplink": {
+          "value": 1,
+          "unit": 2
+        },
+        "downlink": {
+          "value": 1,
+          "unit": 2
+        }
       },
       "security": {
-        "k": "8baf473f2f8fd09487cccbd7097c6862",
+        "k": "",
         "amf": "8000",
-        "op": "11111111111111111111111111111111",
-        "opc": null
+        "op": null,
+        "opc": ""
       },
       "msisdn": [],
       "schema_version": 1,
@@ -79,12 +105,22 @@
               "type": 3,
               "pcc_rule": [],
               "ambr": {
-                "uplink": {"value": 5, "unit": 2},
-                "downlink": {"value": 5, "unit": 2}
+                "uplink": {
+                  "value": 5,
+                  "unit": 2
+                },
+                "downlink": {
+                  "value": 5,
+                  "unit": 2
+                }
               },
               "qos": {
                 "index": 8,
-                "arp": {"priority_level": 15, "pre_emption_capability": 1, "pre_emption_vulnerability": 1}
+                "arp": {
+                  "priority_level": 15,
+                  "pre_emption_capability": 1,
+                  "pre_emption_vulnerability": 1
+                }
               }
             }
           ]
@@ -99,26 +135,42 @@
               "type": 3,
               "pcc_rule": [],
               "ambr": {
-                "uplink": {"value": 50, "unit": 2},
-                "downlink": {"value": 50, "unit": 2}
+                "uplink": {
+                  "value": 50,
+                  "unit": 2
+                },
+                "downlink": {
+                  "value": 50,
+                  "unit": 2
+                }
               },
               "qos": {
                 "index": 8,
-                "arp": {"priority_level": 15, "pre_emption_capability": 1, "pre_emption_vulnerability": 1}
+                "arp": {
+                  "priority_level": 15,
+                  "pre_emption_capability": 1,
+                  "pre_emption_vulnerability": 1
+                }
               }
             }
           ]
         }
       ],
       "ambr": {
-        "uplink": {"value": 1, "unit": 2},
-        "downlink": {"value": 1, "unit": 2}
+        "uplink": {
+          "value": 1,
+          "unit": 2
+        },
+        "downlink": {
+          "value": 1,
+          "unit": 2
+        }
       },
       "security": {
-        "k": "8baf473f2f8fd09487cccbd7097c6862",
+        "k": "",
         "amf": "8000",
-        "op": "11111111111111111111111111111111",
-        "opc": null
+        "op": null,
+        "opc": ""
       },
       "msisdn": [],
       "schema_version": 1,
@@ -141,12 +193,22 @@
               "type": 3,
               "pcc_rule": [],
               "ambr": {
-                "uplink": {"value": 500, "unit": 2},
-                "downlink": {"value": 500, "unit": 2}
+                "uplink": {
+                  "value": 500,
+                  "unit": 2
+                },
+                "downlink": {
+                  "value": 500,
+                  "unit": 2
+                }
               },
               "qos": {
                 "index": 9,
-                "arp": {"priority_level": 15, "pre_emption_capability": 1, "pre_emption_vulnerability": 1}
+                "arp": {
+                  "priority_level": 15,
+                  "pre_emption_capability": 1,
+                  "pre_emption_vulnerability": 1
+                }
               }
             }
           ]
@@ -161,26 +223,42 @@
               "type": 3,
               "pcc_rule": [],
               "ambr": {
-                "uplink": {"value": 1000, "unit": 2},
-                "downlink": {"value": 1000, "unit": 2}
+                "uplink": {
+                  "value": 1000,
+                  "unit": 2
+                },
+                "downlink": {
+                  "value": 1000,
+                  "unit": 2
+                }
               },
               "qos": {
-                "index": 9, 
-                "arp": {"priority_level": 15, "pre_emption_capability": 1, "pre_emption_vulnerability": 1}
+                "index": 9,
+                "arp": {
+                  "priority_level": 15,
+                  "pre_emption_capability": 1,
+                  "pre_emption_vulnerability": 1
+                }
               }
             }
           ]
         }
       ],
       "ambr": {
-        "uplink": {"value": 2000, "unit": 2},
-        "downlink": {"value": 2000, "unit": 2}
+        "uplink": {
+          "value": 2000,
+          "unit": 2
+        },
+        "downlink": {
+          "value": 2000,
+          "unit": 2
+        }
       },
       "security": {
-        "k": "556599fffe16f47f9124e70cd74a4cbb",
+        "k": "",
         "amf": "8000",
-        "op": "11111111111111111111111111111111",
-        "opc": null
+        "op": null,
+        "opc": ""
       },
       "msisdn": [],
       "schema_version": 1,
@@ -203,26 +281,42 @@
               "type": 3,
               "pcc_rule": [],
               "ambr": {
-                "uplink": {"value": 100, "unit": 2},
-                "downlink": {"value": 100, "unit": 2}
+                "uplink": {
+                  "value": 100,
+                  "unit": 2
+                },
+                "downlink": {
+                  "value": 100,
+                  "unit": 2
+                }
               },
               "qos": {
                 "index": 9,
-                "arp": {"priority_level": 15, "pre_emption_capability": 1, "pre_emption_vulnerability": 1}
+                "arp": {
+                  "priority_level": 15,
+                  "pre_emption_capability": 1,
+                  "pre_emption_vulnerability": 1
+                }
               }
             }
           ]
         }
       ],
       "ambr": {
-        "uplink": {"value": 100, "unit": 2},
-        "downlink": {"value": 100, "unit": 2}
+        "uplink": {
+          "value": 100,
+          "unit": 2
+        },
+        "downlink": {
+          "value": 100,
+          "unit": 2
+        }
       },
       "security": {
-        "k": "5d3bbce75a40a75c7f6f34eaa64147c5",
+        "k": "",
         "amf": "8000",
-        "op": "11111111111111111111111111111111",
-        "opc": null
+        "op": null,
+        "opc": ""
       },
       "msisdn": [],
       "schema_version": 1,

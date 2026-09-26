@@ -2,7 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: location-app-wiring
-  namespace: {{ demo_namespace }}
+  namespace: {{ apps_namespace }}
 data:
   # Deployment wiring: owned by this role, rewritten on every run from all.yml.
   # Site parameters (frame origin, floor size, accuracy cut-off) live in

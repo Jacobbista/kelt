@@ -11,7 +11,7 @@ spec:
     app: oauth2-proxy-{{ gate_name }}
   ports:
     - protocol: TCP
-      port: 4180
-      targetPort: 4180
+      port: {{ oauth2_proxy_port }}
+      targetPort: {{ oauth2_proxy_port }}
       nodePort: {{ gate_nodeport }}
       name: http

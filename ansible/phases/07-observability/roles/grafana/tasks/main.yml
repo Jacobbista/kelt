@@ -49,7 +49,7 @@
       ========================================
       Grafana is ready!
       
-      URL: http://192.168.56.11:{{ grafana.nodeport }}
+      URL: http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ grafana.nodeport }}
       Username: {{ grafana.admin_user }}
       Password: {{ grafana.admin_password }}
       ========================================

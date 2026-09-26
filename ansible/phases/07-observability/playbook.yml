@@ -4,11 +4,6 @@
 - name: Deploy Observability Stack
   hosts: master
   gather_facts: true
-  vars:
-    monitoring_namespace: monitoring
-    grafana_nodeport: 30300
-    prometheus_nodeport: 30090
-    
   tasks:
     - name: Create monitoring namespace
       kubernetes.core.k8s:

@@ -26,6 +26,9 @@ spec:
             - --path.sysfs=/host/sys
             - --path.rootfs=/host/root
             - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+            # Node-local metrics written as files, e.g. the plane filter counters
+            # (docs/architecture/plane-isolation.md). Read through the rootfs mount.
+            - --collector.textfile.directory=/host/root{{ node_exporter_textfile_dir }}
           ports:
             - containerPort: {{ node_exporter.port }}
               hostPort: {{ node_exporter.port }}

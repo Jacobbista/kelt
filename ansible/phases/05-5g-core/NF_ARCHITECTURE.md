@@ -381,18 +381,16 @@ AUSF → AMF: 200 OK {result: "AUTHENTICATION_SUCCESS"}
 
 **Two Instances**:
 
-1. **UPF-Cloud** (worker node):
+1. **UPF-Cloud** (worker node): fixed N3 and N4 addresses on `n3-static` and
+   `n4-static`, N6 on `n6c-net` (internet, NATed) and a fixed N6m address on
+   `5g/n6m-static` (MEC data network, routed; both DNNs reach it, see
+   docs/architecture/5g-interfaces.md#data-networks).
 
-   - N3: `10.203.0.101/24`
-   - N4: `10.204.0.102/24`
-   - N6: `10.207.0.x/24` (n6-cld-net)
-   - DNN: `internet` (default data network)
+2. **UPF-Edge** (edge node, disabled, see docs/known-issues/upf-edge-cni-route-conflict.md):
+   fixed N3 and N4 addresses, N6 on `n6e-net` (DNN `mec`).
 
-2. **UPF-Edge** (edge node):
-   - N3: `10.203.0.100/24`
-   - N4: `10.204.0.101/24`
-   - N6: `10.206.0.x/24` (n6-mec-net)
-   - DNN: `mec` (MEC applications, low-latency)
+The addresses are in the 5G network plan in `ansible/group_vars/all.yml`,
+explained in docs/architecture/5g-interfaces.md.
 
 **Packet Processing Pipeline**:
 

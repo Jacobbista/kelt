@@ -48,7 +48,7 @@ spec:
           # blueprint model (docs/blueprint-vs-bindings.md, 5g-northbound).
           env:
             - name: POSITIONING_ENGINE_URL
-              value: "http://positioning-engine.{{ positioning_namespace }}.svc.cluster.local:8080"
+              value: "http://positioning-engine.{{ positioning_namespace }}.svc.cluster.local:{{ positioning_engine_service_port }}"
           readinessProbe:
             httpGet:
               path: /health

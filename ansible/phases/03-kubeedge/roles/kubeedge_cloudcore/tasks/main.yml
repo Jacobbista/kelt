@@ -7,7 +7,7 @@
     definition:
       apiVersion: v1
       kind: Namespace
-      metadata: { name: kubeedge }
+      metadata: { name: "{{ kubeedge_namespace }}" }
     kubeconfig: "{{ kubeconfig_path }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
@@ -18,7 +18,7 @@
       kubernetes.core.k8s_info:
         api_version: v1
         kind: Pod
-        namespace: kubeedge
+        namespace: "{{ kubeedge_namespace }}"
         kubeconfig: "{{ kubeconfig_path }}"
       register: pods
       delegate_to: "{{ groups['masters'][0] }}"
@@ -38,7 +38,7 @@
       kubernetes.core.k8s_info:
         api_version: v1
         kind: Pod
-        namespace: kubeedge
+        namespace: "{{ kubeedge_namespace }}"
         kubeconfig: "{{ kubeconfig_path }}"
       register: pods_after
       retries: 36
@@ -51,30 +51,25 @@
         api_version: apps/v1
         kind: Deployment
         name: cloudcore
-        namespace: kubeedge
+        namespace: "{{ kubeedge_namespace }}"
         kubeconfig: "{{ kubeconfig_path }}"
         definition:
           spec:
+            # CloudCore uses hostNetwork ports: on a single eligible node a rolling
+            # update can never schedule the new pod next to the old one.
+            strategy:
+              type: Recreate
+              rollingUpdate: null
             template:
               spec:
                 nodeSelector:
                   node-type: worker
       delegate_to: "{{ groups['masters'][0] }}"
 
-- name: Open CloudCore port (TCP/UDP 10000)
-  iptables:
-    chain: INPUT
-    protocol: "{{ item.proto }}"
-    destination_port: "{{ cloudcore_port }}"
-    jump: ACCEPT
-    comment: "KubeEdge CloudCore {{ item.proto }} {{ cloudcore_port }}"
-  loop:
-    - { proto: tcp }
-    - { proto: udp }
-
 - name: Get edge join token
   shell: /usr/local/bin/keadm gettoken --kube-config={{ kubeconfig_path }}
   register: token
+  changed_when: false
   retries: 20
   delay: 3
   until: token.rc == 0 and (token.stdout | length) > 0

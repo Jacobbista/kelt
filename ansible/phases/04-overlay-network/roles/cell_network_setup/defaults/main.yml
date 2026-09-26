@@ -1,19 +1,14 @@
 ---
 # Cell network setup defaults
 kubeconfig_path: "/home/vagrant/kubeconfig"
-namespace: "5g"
 
-# Subnet allocation per cell (Cell N → .N.0/24)
-cell_n2_subnet_prefix: "10.202"
-cell_n3_subnet_prefix: "10.203"
+# Subnet allocation per cell (Cell N -> {cell_n2_subnet_prefix}.N.0/24): the
+# prefixes, pool bounds and suffixes are in the 5G network plan in all.yml.
 subnet_mask: "24"
-# Start dynamic range at .20 to reserve .10-.19 for static IPs (AMF uses .10)
-ip_range_start: "20"
-ip_range_end: "250"
 
 # OVS bridge name prefixes
 ovs_bridge_prefix_n2: "br-n2-cell-"
 ovs_bridge_prefix_n3: "br-n3-cell-"
 
 # MTU for cell interfaces
-cell_mtu: 1450
+cell_mtu: "{{ overlay_mtu }}"

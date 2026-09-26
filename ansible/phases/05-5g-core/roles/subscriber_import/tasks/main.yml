@@ -1,9 +1,26 @@
 ---
 # Import Open5GS subscribers into MongoDB using an in-cluster Job (Python + pymongo), script via ConfigMap
 
-- name: Read subscribers JSON from role directory (controller)
+# SIM keys never live in the repo: the subscribers come from the local, gitignored
+# subscribers_file (see all.yml), which `testbed` generates from the repo template.
+- name: Check the local subscribers file
+  stat:
+    path: "{{ subscribers_file }}"
+  register: subs_file
+  run_once: true
+  delegate_to: localhost
+
+- name: Fail when the local subscribers file is missing
+  fail:
+    msg: >-
+      {{ subscribers_file }} is missing. Run `testbed provision` (or `testbed up`) on
+      the host: it generates it from subscribers.example.json with random keys.
+  when: not subs_file.stat.exists
+  run_once: true
+
+- name: Read the local subscribers file (controller)
   slurp:
-    src: "{{ role_path }}/subscribers/subscribers.json"
+    src: "{{ subscribers_file }}"
   register: subs_json
   run_once: true
   delegate_to: localhost
@@ -23,36 +40,63 @@
       }}
   run_once: true
 
-# Seed the dashboard-managed subscriber snapshot ConfigMap from the repo JSON,
-# but only if it does not exist yet. Once the dashboard starts managing it,
-# playbook re-runs must not clobber UI changes.
+# The subscriber snapshot (the dashboard-managed copy MongoDB reconciles from) is
+# a Secret: it holds SIM keys. Seed it only when missing, so playbook re-runs never
+# clobber dashboard changes. An older deploy kept it in a ConfigMap: its content,
+# which carries those changes, seeds the Secret, then the ConfigMap is removed.
 # See docs/architecture/subscriber-persistence.md
-- name: Look up existing subscribers-snapshot ConfigMap
+- name: Look up the subscriber snapshot Secret
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ subscriber_snapshot_secret }}"
+    namespace: "{{ namespace_5g }}"
+    kubeconfig: "/home/vagrant/kubeconfig"
+  register: existing_snapshot_secret
+  run_once: true
+
+- name: Look up a snapshot ConfigMap left by an older deploy
   kubernetes.core.k8s_info:
     api_version: v1
     kind: ConfigMap
-    name: subscribers-snapshot
-    namespace: 5g
+    name: "{{ subscriber_snapshot_secret }}"
+    namespace: "{{ namespace_5g }}"
     kubeconfig: "/home/vagrant/kubeconfig"
-  register: existing_snapshot_cm
+  register: legacy_snapshot_cm
   run_once: true
 
-- name: Seed subscribers-snapshot ConfigMap from repo JSON (first deploy only)
+- name: Seed the subscriber snapshot Secret (first deploy, or moved from the ConfigMap)
   kubernetes.core.k8s:
     state: present
     kubeconfig: "/home/vagrant/kubeconfig"
     definition:
       apiVersion: v1
-      kind: ConfigMap
+      kind: Secret
+      type: Opaque
       metadata:
-        name: subscribers-snapshot
-        namespace: 5g
+        name: "{{ subscriber_snapshot_secret }}"
+        namespace: "{{ namespace_5g }}"
         labels:
           app.kubernetes.io/name: subscriber-snapshot
           app.kubernetes.io/managed-by: ansible
+      # base64 in `data`: as stringData Ansible would parse the JSON text into an object.
       data:
-        snapshot.json: "{{ {'subscribers': subs_array} | to_nice_json }}"
-  when: (existing_snapshot_cm.resources | length) == 0
+        snapshot.json: >-
+          {{ (legacy_snapshot_cm.resources[0].data['snapshot.json']
+              if (legacy_snapshot_cm.resources | length) > 0
+              else ({'subscribers': subs_array} | to_nice_json)) | b64encode }}
+  when: (existing_snapshot_secret.resources | length) == 0
+  run_once: true
+
+- name: Remove the snapshot ConfigMap once the Secret holds its content
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: ConfigMap
+    name: "{{ subscriber_snapshot_secret }}"
+    namespace: "{{ namespace_5g }}"
+    state: absent
+    kubeconfig: "/home/vagrant/kubeconfig"
+  when: (legacy_snapshot_cm.resources | length) > 0
   run_once: true
 
 # Optional: wait for MongoDB to be ready (1 pod Ready with label app=mongodb)
@@ -60,7 +104,7 @@
   kubernetes.core.k8s_info:
     api_version: v1
     kind: Pod
-    namespace: 5g
+    namespace: "{{ namespace_5g }}"
     label_selectors: ["app=mongodb"]
     kubeconfig: "/home/vagrant/kubeconfig"
   register: mongo_pods
@@ -75,20 +119,21 @@
       ) >= 1
     )
 
-- name: Create ConfigMap with subscribers JSON
+- name: Create Secret with the subscribers JSON (it carries SIM keys)
   kubernetes.core.k8s:
     api_version: v1
-    kind: ConfigMap
+    kind: Secret
     name: "subscribers-json-{{ subs_checksum }}"
-    namespace: 5g
+    namespace: "{{ namespace_5g }}"
     state: present
     definition:
+      type: Opaque
       metadata:
         labels:
           app.kubernetes.io/name: subscriber-import
           app.kubernetes.io/component: bootstrap
       data:
-        subs.json: "{{ subs_array | to_json }}"
+        subs.json: "{{ subs_array | to_json | b64encode }}"
     kubeconfig: "/home/vagrant/kubeconfig"
 
 - name: Create ConfigMap with importer script
@@ -96,7 +141,7 @@
     api_version: v1
     kind: ConfigMap
     name: "subscriber-importer-script-{{ subs_checksum }}"
-    namespace: 5g
+    namespace: "{{ namespace_5g }}"
     state: present
     definition:
       metadata:
@@ -111,7 +156,7 @@
   kubernetes.core.k8s_info:
     api_version: batch/v1
     kind: Job
-    namespace: 5g
+    namespace: "{{ namespace_5g }}"
     kubeconfig: "/home/vagrant/kubeconfig"
   register: existing_jobs
 
@@ -131,7 +176,7 @@
     api_version: batch/v1
     kind: Job
     name: "{{ item }}"
-    namespace: 5g
+    namespace: "{{ namespace_5g }}"
     state: absent
     kubeconfig: "/home/vagrant/kubeconfig"
   loop: "{{ stale_sub_import_jobs }}"
@@ -143,7 +188,7 @@
     api_version: batch/v1
     kind: Job
     name: "sub-import-{{ subs_checksum }}"
-    namespace: 5g
+    namespace: "{{ namespace_5g }}"
     state: absent
     kubeconfig: "/home/vagrant/kubeconfig"
 
@@ -151,7 +196,7 @@
   kubernetes.core.k8s_info:
     api_version: v1
     kind: Pod
-    namespace: 5g
+    namespace: "{{ namespace_5g }}"
     kubeconfig: "/home/vagrant/kubeconfig"
   register: existing_sub_import_pods
 
@@ -170,7 +215,7 @@
     api_version: v1
     kind: Pod
     name: "{{ item }}"
-    namespace: 5g
+    namespace: "{{ namespace_5g }}"
     state: absent
     kubeconfig: "/home/vagrant/kubeconfig"
   loop: "{{ stale_sub_import_pods }}"
@@ -181,18 +226,18 @@
   kubernetes.core.k8s_info:
     api_version: v1
     kind: ConfigMap
-    namespace: 5g
+    namespace: "{{ namespace_5g }}"
     label_selectors: ["app.kubernetes.io/name=subscriber-import"]
     kubeconfig: "/home/vagrant/kubeconfig"
   register: existing_sub_cms
 
+# Any subscribers-json ConfigMap is stale: the subscribers now travel in a Secret.
 - name: Build stale subscriber ConfigMap list
   set_fact:
     stale_sub_cms: >-
       {{
         existing_sub_cms.resources
         | map(attribute='metadata.name')
-        | reject('equalto', 'subscribers-json-' ~ subs_checksum)
         | reject('equalto', 'subscriber-importer-script-' ~ subs_checksum)
         | list
       }}
@@ -202,10 +247,31 @@
     api_version: v1
     kind: ConfigMap
     name: "{{ item }}"
-    namespace: 5g
+    namespace: "{{ namespace_5g }}"
     state: absent
     kubeconfig: "/home/vagrant/kubeconfig"
   loop: "{{ stale_sub_cms }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Get existing Secrets for subscriber import cleanup
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    namespace: "{{ namespace_5g }}"
+    label_selectors: ["app.kubernetes.io/name=subscriber-import"]
+    kubeconfig: "/home/vagrant/kubeconfig"
+  register: existing_sub_secrets
+
+- name: Delete stale subscriber Secrets
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Secret
+    name: "{{ item }}"
+    namespace: "{{ namespace_5g }}"
+    state: absent
+    kubeconfig: "/home/vagrant/kubeconfig"
+  loop: "{{ existing_sub_secrets.resources | map(attribute='metadata.name') | reject('equalto', 'subscribers-json-' ~ subs_checksum) | list }}"
   loop_control:
     label: "{{ item }}"
 
@@ -214,7 +280,7 @@
     api_version: batch/v1
     kind: Job
     name: "sub-import-{{ subs_checksum }}"
-    namespace: 5g
+    namespace: "{{ namespace_5g }}"
     state: present
     definition:
       metadata:
@@ -256,8 +322,8 @@
                     mountPath: /script
             volumes:
               - name: subs
-                configMap:
-                  name: "subscribers-json-{{ subs_checksum }}"
+                secret:
+                  secretName: "subscribers-json-{{ subs_checksum }}"
               - name: script
                 configMap:
                   name: "subscriber-importer-script-{{ subs_checksum }}"
@@ -269,7 +335,7 @@
     api_version: batch/v1
     kind: Job
     name: "sub-import-{{ subs_checksum }}"
-    namespace: 5g
+    namespace: "{{ namespace_5g }}"
     kubeconfig: "/home/vagrant/kubeconfig"
   register: job_info
   retries: 20
@@ -284,7 +350,7 @@
   kubernetes.core.k8s_info:
     api_version: v1
     kind: Pod
-    namespace: 5g
+    namespace: "{{ namespace_5g }}"
     label_selectors: ["job-name=sub-import-{{ subs_checksum }}"]
     kubeconfig: "/home/vagrant/kubeconfig"
   register: job_pods

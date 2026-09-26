@@ -15,8 +15,8 @@ Environment=DASHBOARD_PORT={{ dashboard_backend_port }}
 Environment=DASHBOARD_KUBECONFIG_PATH={{ kubeconfig_path | default('/vagrant/tests/kubeconfig') }}
 Environment=DASHBOARD_WORKER_SSH_HOST=worker
 Environment=DASHBOARD_ALLOW_CONFIGMAP_WRITE={{ dashboard_allow_configmap_write | bool | lower }}
-Environment=DASHBOARD_PROMETHEUS_URL=http://{{ worker_ip | default('192.168.56.11') }}:30090
-Environment=DASHBOARD_MONGODB_URL=mongodb://{{ worker_ip | default('192.168.56.11') }}:30017/open5gs
+Environment=DASHBOARD_PROMETHEUS_URL=http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ prometheus_nodeport }}
+Environment=DASHBOARD_MONGODB_URL=mongodb://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ mongodb_nodeport }}/open5gs
 Environment=DASHBOARD_CORS_ORIGIN=http://{{ dashboard_bind_host }}:{{ dashboard_frontend_port }}
 EnvironmentFile=-{{ dashboard_backend_dir }}/.env.runtime
 ExecStart={{ dashboard_backend_venv }}/bin/uvicorn app.main:app --host 0.0.0.0 --port {{ dashboard_backend_port }} --timeout-graceful-shutdown 5

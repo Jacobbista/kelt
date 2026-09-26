@@ -63,7 +63,7 @@ data:
         # via the dashboard backend's unauthenticated endpoint. Same data the
         # static catalogue shows; the page fetches it client-side.
         location = /apps.json {
-          set $up http://dashboard-frontend.{{ frontdoor_dashboard_namespace }}.svc.cluster.local:{{ frontdoor_dashboard_port }}/api/v1/apps/public;
+          set $up http://dashboard-frontend.{{ dashboard_namespace }}.svc.cluster.local:{{ dashboard_frontend_service_port }}/api/v1/apps/public;
           proxy_pass $up;
         }
 {% endif %}
@@ -92,7 +92,7 @@ data:
         listen 80;
         server_name {{ dashboard_subdomain }}.{{ external_base_domain }};
         location / {
-          set $up http://dashboard-frontend.{{ frontdoor_dashboard_namespace }}.svc.cluster.local:{{ frontdoor_dashboard_port }};
+          set $up http://dashboard-frontend.{{ dashboard_namespace }}.svc.cluster.local:{{ dashboard_frontend_service_port }};
           proxy_pass $up;
         }
       }
@@ -103,7 +103,7 @@ data:
         listen 80;
         server_name {{ camara_subdomain }}.{{ external_base_domain }};
         location / {
-          set $up http://camara-gateway.{{ frontdoor_camara_namespace }}.svc.cluster.local:{{ frontdoor_camara_port }};
+          set $up http://camara-gateway.{{ camara_namespace }}.svc.cluster.local:{{ camara_gateway_service_port }};
           proxy_pass $up;
         }
       }
@@ -115,7 +115,7 @@ data:
         listen 80;
         server_name {{ positioning_demo_subdomain }}.{{ external_base_domain }};
         location / {
-          set $up http://{{ frontdoor_demo_service }}.{{ frontdoor_demo_namespace }}.svc.cluster.local:{{ frontdoor_demo_port }};
+          set $up http://{{ frontdoor_demo_service }}.{{ apps_namespace }}.svc.cluster.local:{{ positioning_demo_service_port }};
           proxy_pass $up;
         }
       }
@@ -127,7 +127,7 @@ data:
         listen 80;
         server_name {{ placement_editor_subdomain }}.{{ external_base_domain }};
         location / {
-          set $up http://oauth2-proxy-placement.{{ frontdoor_placement_namespace }}.svc.cluster.local:{{ frontdoor_placement_port }};
+          set $up http://oauth2-proxy-placement.{{ positioning_namespace }}.svc.cluster.local:{{ oauth2_proxy_port }};
           proxy_pass $up;
         }
       }
@@ -329,8 +329,15 @@ data:
       <script>
         // Deployed edge apps (live, from the dashboard's unauthenticated list).
         // Rendered as their own group so they never blur into the core services.
-        // Hidden entirely when none are deployed.
-        fetch('/apps.json', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : { apps: [] }; }).then(function (d) {
+        // Hidden when none are deployed; when the list cannot be read (dashboard
+        // restarting, API unreachable) the page says so rather than showing none.
+        var showAppsUnavailable = function () {
+          document.getElementById('edge-apps').innerHTML =
+            '<p style="color:#64748b;font-size:.8rem;margin:.25rem 0">Edge app list temporarily unavailable, reload in a moment.</p>';
+          document.getElementById('edge-apps-section').style.display = 'block';
+        };
+        fetch('/apps.json', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : { apps: [], unavailable: true }; }).then(function (d) {
+          if (d && d.unavailable) { showAppsUnavailable(); return; }
           var apps = (d && d.apps) || [];
           if (!apps.length) return;
           var host = function (u) { return u.replace(/^https?:\/\//, ''); };
@@ -342,7 +349,7 @@ data:
               + '<span class="desc">' + (a.ready ? 'edge app' : 'starting…') + '</span></a>';
           }).join('');
           document.getElementById('edge-apps-section').style.display = 'block';
-        }).catch(function () {});
+        }).catch(showAppsUnavailable);
       </script>
 {% endif %}
     </body>

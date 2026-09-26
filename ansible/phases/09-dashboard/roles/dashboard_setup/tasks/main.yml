@@ -4,6 +4,16 @@
 # (cluster pod = worker NodePort, Vite dev = ansible VM port) so no
 # port conflict and either can be reached at any time.
 
+- name: Require a generated admin token
+  ansible.builtin.assert:
+    that:
+      - dashboard_admin_token | length > 0
+      - dashboard_admin_token != 'change-me'
+    fail_msg: >-
+      DASHBOARD_ADMIN_TOKEN is not set. Run any kelt command (for example
+      `kelt secrets generate-missing`) to generate it into .testbed.secrets.
+    quiet: true
+
 - name: Ensure system prerequisites
   become: true
   ansible.builtin.apt:
@@ -17,21 +27,31 @@
     state: present
     update_cache: true
 
-- name: Add NodeSource 20.x repository
-  become: true
-  ansible.builtin.shell: |
-    set -euo pipefail
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-  args:
-    executable: /bin/bash
-    creates: /etc/apt/sources.list.d/nodesource.list
+# The NodeSource setup script names its apt source differently across versions,
+# so the installed Node major is what decides whether to run it.
+- name: Read the installed Node.js version
+  ansible.builtin.command: node --version
+  register: _node_version
+  changed_when: false
+  failed_when: false
 
-- name: Install Node.js 20
-  become: true
-  ansible.builtin.apt:
-    name: nodejs
-    state: present
-    update_cache: true
+- name: Install Node.js 20 from NodeSource
+  when: not (_node_version.stdout | default('')).startswith('v20.')
+  block:
+    - name: Add NodeSource 20.x repository
+      become: true
+      ansible.builtin.shell: |
+        set -euo pipefail
+        curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+      args:
+        executable: /bin/bash
+
+    - name: Install Node.js 20
+      become: true
+      ansible.builtin.apt:
+        name: nodejs
+        state: present
+        update_cache: true
 
 - name: Fetch kubeconfig from master for dashboard backend
   ansible.builtin.slurp:
@@ -45,18 +65,11 @@
     mode: "0600"
     content: "{{ _dashboard_kubeconfig.content | b64decode | regex_replace('https://127\\.0\\.0\\.1:6443', 'https://' + hostvars[groups['masters'][0]]['ansible_host'] + ':6443') }}"
 
-- name: Stop dashboard backend before redeployment
-  become: true
-  ansible.builtin.systemd:
-    name: "{{ dashboard_backend_service_name }}"
-    state: stopped
-  failed_when: false
-
+# No mode: rsync -a gives the directory the source's mode on every sync.
 - name: Ensure dashboard work directory exists
   ansible.builtin.file:
     path: "{{ dashboard_work_dir }}"
     state: directory
-    mode: "0755"
 
 - name: Sync dashboard sources from ansible-ro to writable workspace
   ansible.builtin.command:
@@ -64,21 +77,18 @@
       rsync -a -i --delete
       --exclude node_modules
       --exclude venv
+      --exclude __pycache__
+      --exclude /backend/logs/
+      --exclude /backend/.env.runtime
       "{{ dashboard_source_dir }}/"
       "{{ dashboard_work_dir }}/"
   register: dashboard_sync
   # -i itemizes changes; non-empty stdout means files actually changed, so the
   # backend restart below fires only on a real source edit (keeps re-runs idempotent
-  # while making `run-phase 09-dashboard` a working backend refresh).
+  # while making `run-phase 09-dashboard` a working backend refresh). The excluded
+  # paths are written at runtime (audit log) or by this role (.env.runtime); an
+  # excluded path is also safe from --delete.
   changed_when: (dashboard_sync.stdout | default('') | trim) | length > 0
-
-- name: Ensure dashboard launcher scripts are executable
-  ansible.builtin.file:
-    path: "{{ item }}"
-    mode: "0755"
-  loop:
-    - "{{ dashboard_work_dir }}/run-backend.sh"
-    - "{{ dashboard_work_dir }}/run-frontend.sh"
 
 - name: Ensure shared backend venv parent exists
   ansible.builtin.file:
@@ -114,13 +124,13 @@
       DASHBOARD_KEYCLOAK_PATH_PREFIX={{ dashboard_keycloak_path_prefix }}
       DASHBOARD_CORS_ORIGIN={{ dashboard_cors_origin }}
       DASHBOARD_DEV_EXTERNAL_URL={{ dashboard_dev_external_url }}
-      DASHBOARD_APPS_NAMESPACE={{ apps_namespace | default('apps') }}
       DASHBOARD_APPS_REGISTRY_HOST={{ apps_registry_host | default('') }}
       DASHBOARD_APPS_REGISTRY_USERNAME={{ apps_registry_username | default('') }}
       DASHBOARD_APPS_REGISTRY_PASSWORD={{ apps_registry_password | default('') }}
       DASHBOARD_EXTERNAL_BASE_DOMAIN={{ external_base_domain | default('') }}
       DASHBOARD_EXTERNAL_SCHEME={{ external_scheme | default('https') }}
       DASHBOARD_N6M_NAD_NAME={{ nad_n6m_name }}
+      DASHBOARD_N6M_STATIC_NAD_NAME={{ nad_n6m_static_name }}
       DASHBOARD_N6M_NAD_NAMESPACE={{ nad_n6m_namespace }}
       DASHBOARD_N6M_PUSH_ADAPTERS={% for k, v in (n6m_push_adapters | default({})).items() %}{{ k }}={{ v }}{{ "," if not loop.last else "" }}{% endfor %}
 
@@ -140,6 +150,7 @@
       # irrelevant in the prod path.
       VITE_FRONTEND_MODE=dev
       VITE_BACKEND_TARGET=http://127.0.0.1:{{ dashboard_backend_port }}
+      VITE_WATCHDOG_TARGET=http://{{ dashboard_bind_host }}:{{ dashboard_watchdog_port }}
       VITE_AUTH_ENABLED={{ dashboard_auth_enabled | bool | lower }}
       VITE_KEYCLOAK_AUTHORITY={{ dashboard_keycloak_external_url }}{{ dashboard_keycloak_path_prefix }}/realms/{{ dashboard_keycloak_realm }}
       VITE_KEYCLOAK_CLIENT_ID={{ dashboard_keycloak_client_id }}
@@ -155,6 +166,9 @@
       VITE_CAMARA_ORG={{ camara_org }}
       # Seed tenant account the IAM page points the operator at (phase 08 creates it).
       VITE_IAM_TENANT_USER={{ camara_tenant_username }}
+      # HTTPS origin of this frontend: sign-in needs a secure context, so a plain
+      # HTTP visit (the LAN NodePort) is sent here. Empty without HTTPS.
+      VITE_SECURE_URL={{ dashboard_dev_external_url if dashboard_dev_external_url.startswith('https://') else '' }}
   register: frontend_env_file
   when: dashboard_dev_enabled | bool
 
@@ -201,6 +215,20 @@
     mode: "0644"
   register: frontend_service_unit
   when: dashboard_dev_enabled | bool
+
+# Only the token, for the watchdog: systemd reads the file as root before it
+# starts the service, so no other process of the service user needs it.
+- name: Write the watchdog token file
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/dashboard-watchdog.env
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      DASHBOARD_ADMIN_TOKEN={{ dashboard_admin_token }}
+  no_log: true
+  register: watchdog_env_file
 
 - name: Install watchdog systemd service
   become: true
@@ -268,12 +296,24 @@
   failed_when: false
   when: not (dashboard_dev_enabled | bool)
 
+- name: Read the watchdog's listening socket
+  ansible.builtin.command: ss -Hltn "sport = :{{ dashboard_watchdog_port }}"
+  register: watchdog_socket
+  changed_when: false
+
+# Restart when its unit, its script or its token file changed, or when it is not listening where
+# the unit says; `started` alone would leave a running process on old code.
 - name: Enable and start dashboard watchdog service
   become: true
   ansible.builtin.systemd:
     name: dashboard-watchdog
     enabled: true
-    state: started
+    state: >-
+      {{ 'restarted' if (watchdog_service_unit.changed
+         or watchdog_env_file.changed
+         or 'backend/watchdog.py' in (dashboard_sync.stdout | default(''))
+         or (dashboard_bind_host ~ ':' ~ dashboard_watchdog_port) not in watchdog_socket.stdout)
+         else 'started' }}
 
 - name: Ensure dashboard services are healthy
   ansible.builtin.command:
@@ -389,16 +429,43 @@
   when: dashboard_cluster_enabled | bool and (dashboard_docs_enabled | default(true) | bool)
 
 # Docs use :latest (imagePullPolicy: Always). Docs publish automatically on push
-# (the docs-site workflow rebuilds kelt-docs); this forced rollout makes a phase
-# 09 re-run pull the freshly built image into the live pod.
-- name: Rollout restart dashboard docs Deployment
+# (the docs-site workflow rebuilds kelt-docs). The pre-pull above fetched the
+# current build; the pod is restarted only when it runs a different digest.
+- name: Read the digest of the pulled docs image
+  ansible.builtin.command:
+    cmd: "k3s ctr -n k8s.io images ls name=={{ kelt_docs_image }}"
+  delegate_to: "{{ groups['workers'][0] }}"
+  become: true
+  run_once: true
+  register: _docs_pulled
+  changed_when: false
+  when: dashboard_cluster_enabled | bool and (dashboard_docs_enabled | default(true) | bool)
+
+- name: Read the digest the docs pod runs
+  kubernetes.core.k8s_info:
+    kind: Pod
+    namespace: "{{ dashboard_namespace }}"
+    label_selectors: ["app=dashboard-docs"]
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: _docs_pods
+  when: dashboard_cluster_enabled | bool and (dashboard_docs_enabled | default(true) | bool)
+
+- name: Restart the docs pod onto the newly pulled build
   ansible.builtin.command:
     cmd: >-
       k3s kubectl -n {{ dashboard_namespace }} rollout restart deploy/dashboard-docs
   delegate_to: "{{ groups['masters'][0] }}"
   become: true
-  changed_when: true
-  when: dashboard_cluster_enabled | bool and (dashboard_docs_enabled | default(true) | bool)
+  vars:
+    _pulled_ids: "{{ _docs_pulled.stdout | default('') | regex_findall('sha256:[0-9a-f]{64}') }}"
+    _running_ids: >-
+      {{ _docs_pods.resources | default([])
+         | map(attribute='status.containerStatuses') | select('defined') | flatten
+         | map(attribute='imageID') | map('regex_replace', '^.*@', '') | list }}
+  when:
+    - dashboard_cluster_enabled | bool and (dashboard_docs_enabled | default(true) | bool)
+    - _pulled_ids | length > 0
+    - (_running_ids | intersect(_pulled_ids)) | length == 0
 
 - name: Wait for dashboard frontend pod ready
   kubernetes.core.k8s_info:
@@ -453,4 +520,4 @@
       - "Cluster UI (prod):     http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ dashboard_cluster_nodeport }}  (cluster_enabled={{ dashboard_cluster_enabled }})"
       - "Vite dev UI:           http://{{ dashboard_bind_host }}:{{ dashboard_frontend_port }}  (dev_enabled={{ dashboard_dev_enabled }})"
       - "Backend API:           http://{{ dashboard_bind_host }}:{{ dashboard_backend_port }}"
-      - "Backend API docs:      http://{{ dashboard_bind_host }}:{{ dashboard_backend_port }}/docs"
+      - "Backend API schema:    http://{{ dashboard_bind_host }}:{{ dashboard_backend_port }}/api/v1/openapi.json  (login required)"

@@ -1,6 +1,5 @@
 # Exporters defaults
 ---
-monitoring_namespace: monitoring
 
 node_exporter:
   image: prom/node-exporter:v1.7.0

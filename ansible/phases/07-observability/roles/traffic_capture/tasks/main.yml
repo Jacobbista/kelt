@@ -23,8 +23,8 @@
       Traffic Capture enabled!
       
       PCAP files location:
-        Worker: 192.168.56.11:{{ traffic_capture.capture_path }}
-        Edge:   192.168.56.12:{{ traffic_capture.capture_path }}
+        Worker: {{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ traffic_capture.capture_path }}
+        {{ ('Edge:   ' ~ hostvars[groups['edges'][0]]['ansible_host'] ~ ':' ~ traffic_capture.capture_path) if groups.get('edges', []) else '' }}
       
       Captured protocols:
         - SCTP/38412 (NGAP - N2)

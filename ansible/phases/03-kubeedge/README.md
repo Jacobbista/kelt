@@ -37,7 +37,7 @@ Running both k3s-agent and EdgeCore on the same node causes:
 | -------------------- | --------------------------------------------------------------------------------------- |
 | `kubeedge_common`    | Installs `keadm` tool and distributes kubeconfig to worker and edge                     |
 | `edge_containerd`    | **NEW**: Installs and configures standalone containerd on edge (with systemd cgroups)   |
-| `kubeedge_cloudcore` | Deploys CloudCore on worker, opens port 10000, generates and stores edge join token     |
+| `kubeedge_cloudcore` | Deploys CloudCore on worker (port 10000), generates and stores edge join token         |
 | `kubeedge_edgecore`  | Joins edge to cluster via `keadm join` using standalone containerd (not k3s containerd) |
 
 ### Key Implementation Details

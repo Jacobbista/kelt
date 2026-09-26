@@ -39,13 +39,13 @@ spec:
           livenessProbe:
             httpGet:
               path: /ready
-              port: 3100
+              port: {{ loki.port }}
             initialDelaySeconds: 45
             periodSeconds: 10
           readinessProbe:
             httpGet:
               path: /ready
-              port: 3100
+              port: {{ loki.port }}
             initialDelaySeconds: 45
             periodSeconds: 5
       volumes:

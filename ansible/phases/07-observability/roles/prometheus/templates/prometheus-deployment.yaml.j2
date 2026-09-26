@@ -7,6 +7,11 @@ metadata:
     app: prometheus
 spec:
   replicas: 1
+  # The TSDB takes an exclusive lock on its volume: a rolling update would start the
+  # new pod while the old one still holds it, and the new pod crash-loops.
+  strategy:
+    type: Recreate
+    rollingUpdate: null   # clears the field a live RollingUpdate Deployment still has
   selector:
     matchLabels:
       app: prometheus
@@ -15,7 +20,7 @@ spec:
       labels:
         app: prometheus
       annotations:
-        checksum/config: "{{ lookup('file', role_path + '/templates/prometheus-config.yaml.j2') | hash('sha256') }}"
+        checksum/config: "{{ lookup('template', 'prometheus-config.yaml.j2') | hash('sha256') }}"
     spec:
       serviceAccountName: prometheus
       nodeSelector:
@@ -58,18 +63,18 @@ spec:
           startupProbe:
             httpGet:
               path: /-/healthy
-              port: 9090
+              port: {{ prometheus.port }}
             periodSeconds: 10
             failureThreshold: {{ prometheus.startup_failure_threshold | default(90) }}
           livenessProbe:
             httpGet:
               path: /-/healthy
-              port: 9090
+              port: {{ prometheus.port }}
             periodSeconds: 10
           readinessProbe:
             httpGet:
               path: /-/ready
-              port: 9090
+              port: {{ prometheus.port }}
             initialDelaySeconds: 5
             periodSeconds: 5
       volumes:

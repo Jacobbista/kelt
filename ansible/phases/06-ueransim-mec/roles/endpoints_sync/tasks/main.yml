@@ -16,7 +16,7 @@
   kubernetes.core.k8s_info:
     api_version: v1
     kind: Pod
-    namespace: "{{ namespace }}"
+    namespace: "{{ namespace_5g }}"
     label_selectors: ["app={{ item }}"]
     field_selectors: ["status.phase=Running"]
     kubeconfig: "{{ kubeconfig_path }}"
@@ -60,7 +60,7 @@
     api_version: batch/v1
     kind: CronJob
     name: gnb-endpoints-sync
-    namespace: "{{ namespace }}"
+    namespace: "{{ namespace_5g }}"
     state: absent
     kubeconfig: "{{ kubeconfig_path }}"
   delegate_to: "{{ groups['masters'][0] }}"
@@ -73,7 +73,7 @@
   kubernetes.core.k8s_info:
     api_version: batch/v1
     kind: Job
-    namespace: "{{ namespace }}"
+    namespace: "{{ namespace_5g }}"
     kubeconfig: "{{ kubeconfig_path }}"
   register: endpoints_sync_jobs
   delegate_to: "{{ groups['masters'][0] }}"
@@ -101,7 +101,7 @@
     api_version: batch/v1
     kind: Job
     name: "{{ item }}"
-    namespace: "{{ namespace }}"
+    namespace: "{{ namespace_5g }}"
     state: absent
     kubeconfig: "{{ kubeconfig_path }}"
   loop: "{{ stale_endpoints_sync_jobs | default([]) }}"
@@ -117,7 +117,7 @@
   kubernetes.core.k8s_info:
     api_version: v1
     kind: Pod
-    namespace: "{{ namespace }}"
+    namespace: "{{ namespace_5g }}"
     kubeconfig: "{{ kubeconfig_path }}"
   register: endpoints_sync_pods
   delegate_to: "{{ groups['masters'][0] }}"
@@ -145,7 +145,7 @@
     api_version: v1
     kind: Pod
     name: "{{ item }}"
-    namespace: "{{ namespace }}"
+    namespace: "{{ namespace_5g }}"
     state: absent
     kubeconfig: "{{ kubeconfig_path }}"
   loop: "{{ stale_endpoints_sync_pods | default([]) }}"
@@ -162,7 +162,7 @@
     api_version: v1
     kind: ConfigMap
     name: endpoints-sync-scripts
-    namespace: "{{ namespace }}"
+    namespace: "{{ namespace_5g }}"
     state: absent
     kubeconfig: "{{ kubeconfig_path }}"
   delegate_to: "{{ groups['masters'][0] }}"
@@ -176,7 +176,7 @@
     api_version: rbac.authorization.k8s.io/v1
     kind: RoleBinding
     name: "{{ rbac_name }}"
-    namespace: "{{ namespace }}"
+    namespace: "{{ namespace_5g }}"
     state: absent
     kubeconfig: "{{ kubeconfig_path }}"
   delegate_to: "{{ groups['masters'][0] }}"
@@ -190,7 +190,7 @@
     api_version: rbac.authorization.k8s.io/v1
     kind: Role
     name: "{{ rbac_name }}"
-    namespace: "{{ namespace }}"
+    namespace: "{{ namespace_5g }}"
     state: absent
     kubeconfig: "{{ kubeconfig_path }}"
   delegate_to: "{{ groups['masters'][0] }}"
@@ -204,7 +204,7 @@
     api_version: v1
     kind: ServiceAccount
     name: "{{ service_account_name }}"
-    namespace: "{{ namespace }}"
+    namespace: "{{ namespace_5g }}"
     state: absent
     kubeconfig: "{{ kubeconfig_path }}"
   delegate_to: "{{ groups['masters'][0] }}"
@@ -239,7 +239,7 @@
       kind: ConfigMap
       metadata:
         name: endpoints-sync-scripts
-        namespace: "{{ namespace }}"
+        namespace: "{{ namespace_5g }}"
       data:
         sync_endpoints.py: "{{ lookup('template', 'templates/sync_endpoints.py.j2') }}"
   delegate_to: "{{ groups['masters'][0] }}"

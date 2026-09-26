@@ -28,14 +28,14 @@
         definition:
           apiVersion: v1
           kind: Namespace
-          metadata: { name: kubeedge }
+          metadata: { name: "{{ kubeedge_namespace }}" }
         kubeconfig: "/home/vagrant/kubeconfig"
 
     - name: Get CloudCore pod(s)
       kubernetes.core.k8s_info:
         api_version: v1
         kind: Pod
-        namespace: kubeedge
+        namespace: "{{ kubeedge_namespace }}"
         kubeconfig: "/home/vagrant/kubeconfig"
       register: ke_pods
 

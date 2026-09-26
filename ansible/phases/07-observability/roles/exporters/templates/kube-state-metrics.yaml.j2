@@ -98,13 +98,13 @@ spec:
           livenessProbe:
             httpGet:
               path: /healthz
-              port: 8080
+              port: {{ kube_state_metrics.port }}
             initialDelaySeconds: 5
             timeoutSeconds: 5
           readinessProbe:
             httpGet:
               path: /
-              port: 8080
+              port: {{ kube_state_metrics.port }}
             initialDelaySeconds: 5
             timeoutSeconds: 5
           resources:
@@ -127,7 +127,7 @@ spec:
     app: kube-state-metrics
   ports:
     - name: http-metrics
-      port: 8080
+      port: {{ kube_state_metrics_port }}
       targetPort: http-metrics
     - name: telemetry
       port: 8081

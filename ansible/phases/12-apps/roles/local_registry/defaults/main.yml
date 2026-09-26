@@ -5,8 +5,11 @@
 # Cloudflare tunnel: it speaks plain HTTP and is protected by basic-auth + the
 # trusted LAN/Tailscale transport. See docs/architecture/edge-apps.md.
 
-registry_namespace: "{{ apps_registry_namespace }}"
 registry_app_name: registry
+# Namespace the registry lived in before `registry_namespace`; phase 12 moves it
+# (data included) when found there. Staging dir on the worker for that move.
+registry_legacy_namespace: apps
+registry_move_staging_dir: /var/lib/kelt-registry-move
 registry_container_port: 5000
 registry_htpasswd_realm: "KELT Registry"
 # Where k3s reads its registry mirror config on the worker.

@@ -1,0 +1,80 @@
+{# Policies of one namespace. Inputs: np (an entry of network_policy_ingress),
+   np_trusted_cidrs (management network + node addresses on the pod network). #}
+{% set labels = {'app.kubernetes.io/managed-by': network_policy_owner_label} %}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: {{ np.ns }}
+  labels: {{ labels | to_json }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-common-ingress
+  namespace: {{ np.ns }}
+  labels: {{ labels | to_json }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        # the namespace's own pods
+        - podSelector: {}
+        # metrics scrapes
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ monitoring_namespace }}}}
+        # kubelet probes and NodePort clients: the management network, and the
+        # node addresses kube-proxy/flannel put on traffic that crosses nodes
+{% for cidr in np_trusted_cidrs %}
+        - ipBlock: {cidr: {{ cidr }}}
+{% endfor %}
+{% for a in np.allow | default([]) %}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-{{ 'all' if a.to == '*' else a.to }}-ingress
+  namespace: {{ np.ns }}
+  labels: {{ labels | to_json }}
+spec:
+  podSelector: {{ {} | to_json if a.to == '*' else {'matchLabels': {'app': a.to}} | to_json }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+{% for src in a.from %}
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ src }}}}
+{% endfor %}
+{% endfor %}
+{% if np.ns == apps_namespace %}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-declared-egress
+  namespace: {{ np.ns }}
+  labels: {{ labels | to_json }}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    # the northbound API and the identity provider, pod by pod
+    - to:
+{% for dst in network_policy_apps_egress %}
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{ dst.ns }}}}
+          podSelector: {matchLabels: {app: {{ dst.app }}}}
+{% endfor %}
+    # public addresses only
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: {{ network_policy_private_ranges | to_json }}
+{% endif %}

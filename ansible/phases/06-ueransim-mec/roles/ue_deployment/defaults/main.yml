@@ -1,66 +1,13 @@
 ---
 # UE deployment defaults
 kubeconfig_path: "/home/vagrant/kubeconfig"
-namespace: "5g"
 ueransim_image: "jacobbista/comnetsemu-ueransim:latest"
-
-# K8s API server address (for edge node discovery queries)
-k8s_api_server: "192.168.56.10:6443"
 
 # UE deployment configuration
 ue_name: "ue"
 ue_replicas: 1
 ue_node: "worker"
 ue_privileged: true
-
-# UE UERANSIM configuration
-ue_config:
-  supi: "imsi-001011234567895"
-  mcc: "001"
-  mnc: "01"
-  protectionScheme: 0 # 0: Null-scheme, 1: Profile A, 2: Profile B
-  homeNetworkPublicKey: "5a8d38864820197c3394b92613b20b91633cbd897119273bf8e4a6f4eec0a650"
-  homeNetworkPublicKeyId: 1
-  routingIndicator: "0000"
-  key: "8baf473f2f8fd09487cccbd7097c6862"
-  op: "11111111111111111111111111111111"
-  opType: "OP"
-  amf: "8000"
-  imei: "356938035643803"
-  imeiSv: "4370816125816151"
-  tunNetmask: "255.255.255.0"
-  gnbSearchList:
-    - gnb
-  uacAic:
-    mps: false
-    mcs: false
-  uacAcc:
-    normalClass: 0
-    class11: false
-    class12: false
-    class13: false
-    class14: false
-    class15: false
-  sessions:
-    - { type: "IPv4", apn: "internet", sst: 1, sd: 1 }
-    # MEC session disabled by default (requires UPF-Edge)
-    # - { type: "IPv4", apn: "mec", sst: 2, sd: 1 }
-  configured_nssai:
-    - { sst: 1, sd: 1 }
-    # - { sst: 2, sd: 1 }  # MEC slice
-  default_nssai:
-    - { sst: 1, sd: 1 }
-  integrity:
-    IA1: true
-    IA2: true
-    IA3: true
-  ciphering:
-    EA1: true
-    EA2: true
-    EA3: true
-  integrityMaxRate:
-    uplink: "full"
-    downlink: "full"
 
 # Paths inside container
 ue_config_path: "/UERANSIM/config/ue.yaml"

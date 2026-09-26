@@ -1,8 +1,72 @@
 ---
 # LOCAL REGISTRY
-# registry:2 in the apps namespace (insecure HTTP + basic-auth, NodePort only) plus
+# registry:2 in its own namespace (insecure HTTP + basic-auth, NodePort only) plus
 # the worker's registries.yaml mirror so k3s containerd can pull pushed images. The
 # registry is never fronted by the tunnel. See docs/architecture/edge-apps.md.
+
+# ── Move from the legacy namespace ──────────────────────────────────────────
+# The registry used to live in `apps`. Its images sit on a local-path volume that
+# is deleted with its claim, and its NodePort would clash with the new Service, so
+# the move is: stop it, stage its data on the worker, drop the legacy namespace,
+# deploy here, then restore the data into the new volume.
+- name: Look for a registry in the legacy namespace
+  kubernetes.core.k8s_info:
+    kind: PersistentVolumeClaim
+    name: "{{ registry_app_name }}-data"
+    namespace: "{{ registry_legacy_namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: legacy_registry_pvc
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Decide whether the registry moves
+  set_fact:
+    registry_move: "{{ registry_legacy_namespace != registry_namespace and legacy_registry_pvc.resources | length > 0 }}"
+  run_once: true
+
+- name: Stage the legacy registry data
+  when: registry_move
+  block:
+    - name: Read the legacy registry volume
+      kubernetes.core.k8s_info:
+        kind: PersistentVolume
+        name: "{{ legacy_registry_pvc.resources[0].spec.volumeName }}"
+        kubeconfig: "{{ kubeconfig_path }}"
+      register: legacy_registry_pv
+      delegate_to: "{{ groups['masters'][0] }}"
+      run_once: true
+
+    - name: Stop the legacy registry
+      kubernetes.core.k8s_scale:
+        kind: Deployment
+        name: "{{ registry_app_name }}"
+        namespace: "{{ registry_legacy_namespace }}"
+        replicas: 0
+        wait: true
+        kubeconfig: "{{ kubeconfig_path }}"
+      delegate_to: "{{ groups['masters'][0] }}"
+      run_once: true
+
+    - name: Copy the legacy registry data to the staging directory
+      ansible.builtin.shell: |
+        set -e
+        rm -rf "{{ registry_move_staging_dir }}"
+        mkdir -p "{{ registry_move_staging_dir }}"
+        cp -a "{{ legacy_registry_pv.resources[0].spec.local.path }}/." "{{ registry_move_staging_dir }}/"
+      become: true
+      delegate_to: "{{ groups['workers'][0] }}"
+      run_once: true
+
+    - name: Delete the legacy namespace
+      kubernetes.core.k8s:
+        kind: Namespace
+        name: "{{ registry_legacy_namespace }}"
+        state: absent
+        wait: true
+        wait_timeout: 300
+        kubeconfig: "{{ kubeconfig_path }}"
+      delegate_to: "{{ groups['masters'][0] }}"
+      run_once: true
 
 # ── In-cluster registry (applied once from the master) ──────────────────────
 - name: Apply registry PVC
@@ -53,6 +117,63 @@
     definition: "{{ lookup('template', role_path + '/templates/registry-service.yaml.j2') | from_yaml }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
+
+- name: Restore the staged registry data
+  when: registry_move
+  block:
+    - name: Wait for the registry volume to be bound
+      kubernetes.core.k8s_info:
+        kind: PersistentVolumeClaim
+        name: "{{ registry_app_name }}-data"
+        namespace: "{{ registry_namespace }}"
+        kubeconfig: "{{ kubeconfig_path }}"
+      register: registry_pvc
+      until: registry_pvc.resources | length > 0 and registry_pvc.resources[0].status.phase == 'Bound'
+      retries: 30
+      delay: 5
+      delegate_to: "{{ groups['masters'][0] }}"
+      run_once: true
+
+    - name: Read the registry volume
+      kubernetes.core.k8s_info:
+        kind: PersistentVolume
+        name: "{{ registry_pvc.resources[0].spec.volumeName }}"
+        kubeconfig: "{{ kubeconfig_path }}"
+      register: registry_pv
+      delegate_to: "{{ groups['masters'][0] }}"
+      run_once: true
+
+    - name: Stop the registry while its data is restored
+      kubernetes.core.k8s_scale:
+        kind: Deployment
+        name: "{{ registry_app_name }}"
+        namespace: "{{ registry_namespace }}"
+        replicas: 0
+        wait: true
+        kubeconfig: "{{ kubeconfig_path }}"
+      delegate_to: "{{ groups['masters'][0] }}"
+      run_once: true
+
+    - name: Restore the data into the registry volume
+      ansible.builtin.shell: |
+        set -e
+        cp -a "{{ registry_move_staging_dir }}/." "{{ registry_pv.resources[0].spec.local.path }}/"
+        rm -rf "{{ registry_move_staging_dir }}"
+      become: true
+      delegate_to: "{{ groups['workers'][0] }}"
+      run_once: true
+
+    - name: Start the registry
+      kubernetes.core.k8s_scale:
+        kind: Deployment
+        name: "{{ registry_app_name }}"
+        namespace: "{{ registry_namespace }}"
+        replicas: 1
+        wait: true
+        wait_timeout: 180
+        kubeconfig: "{{ kubeconfig_path }}"
+      delegate_to: "{{ groups['masters'][0] }}"
+      run_once: true
 
 # ── Worker containerd mirror (the only node-level change) ───────────────────
 - name: Ensure k3s config dir on worker

@@ -6,7 +6,7 @@ timezone_name: "Etc/UTC"
 ntp_pool: "pool.ntp.org"
 
 # Internal cluster time source: master node private IP
-cluster_ntp_server: "{{ hostvars[groups['masters'][0]]['ansible_host'] | default('192.168.56.10') }}"
+cluster_ntp_server: "{{ hostvars[groups['masters'][0]]['ansible_host'] }}"
 
 # Packages
 packages_common:

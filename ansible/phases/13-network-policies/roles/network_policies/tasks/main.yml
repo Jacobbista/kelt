@@ -1,0 +1,83 @@
+---
+- name: Read the namespaces that exist
+  kubernetes.core.k8s_info:
+    kind: Namespace
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: np_namespaces
+
+- name: Read the nodes
+  kubernetes.core.k8s_info:
+    kind: Node
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: np_nodes
+
+# kubelet probes come from the node itself, NodePort clients from the management
+# network, and traffic that crosses nodes carries the other node's flannel/cni0
+# address (the first two addresses of its podCIDR). Measured on k3s + kube-router.
+- name: Collect the trusted sources on the pod network
+  set_fact:
+    np_trusted_cidrs: >-
+      {%- set out = [mgmt_subnet] -%}
+      {%- for n in np_nodes.resources if n.spec.podCIDR is defined -%}
+        {%- set base = n.spec.podCIDR.split('/')[0].split('.') -%}
+        {%- set _ = out.append(base | join('.') ~ '/32') -%}
+        {%- set _ = out.append(base[:3] | join('.') ~ '.' ~ (base[3] | int + 1) ~ '/32') -%}
+      {%- endfor -%}
+      {{ out }}
+    np_existing: "{{ np_namespaces.resources | map(attribute='metadata.name') | list }}"
+
+- name: Select the namespaces to apply
+  set_fact:
+    np_apply: "{{ network_policy_ingress | selectattr('ns', 'in', np_existing) | list if network_policies_enabled | bool else [] }}"
+
+- name: Report declared namespaces that do not exist yet
+  debug:
+    msg: "No policies for {{ item.ns }}: the namespace does not exist yet (re-run this phase after it is created)."
+  loop: "{{ network_policy_ingress | rejectattr('ns', 'in', np_existing) | list }}"
+  loop_control:
+    label: "{{ item.ns }}"
+  when: network_policies_enabled | bool
+
+- name: Render the declared policies
+  set_fact:
+    np_rendered: >-
+      {%- set out = [] -%}
+      {%- for np in np_apply -%}
+        {%- for d in lookup('template', 'namespace-policies.yaml.j2', template_vars={'np': np}) | from_yaml_all -%}
+          {%- if d -%}{%- set _ = out.append(d) -%}{%- endif -%}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Apply the declared policies
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition: "{{ item }}"
+  loop: "{{ np_rendered }}"
+  loop_control:
+    label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
+
+# Remove what this role manages but no longer declares (a namespace dropped from
+# the table, an allow entry removed, or network_policies_enabled turned off).
+- name: Read the policies this role manages
+  kubernetes.core.k8s_info:
+    kind: NetworkPolicy
+    label_selectors: ["app.kubernetes.io/managed-by={{ network_policy_owner_label }}"]
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: np_managed
+
+- name: Remove managed policies that are no longer declared
+  kubernetes.core.k8s:
+    state: absent
+    kind: NetworkPolicy
+    name: "{{ item.metadata.name }}"
+    namespace: "{{ item.metadata.namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  loop: "{{ np_managed.resources }}"
+  loop_control:
+    label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
+  when: (item.metadata.namespace ~ '/' ~ item.metadata.name) not in np_declared
+  vars:
+    np_declared: "{{ np_rendered | map(attribute='metadata.namespace') | zip(np_rendered | map(attribute='metadata.name')) | map('join', '/') | list }}"

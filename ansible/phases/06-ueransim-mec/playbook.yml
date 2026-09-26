@@ -65,16 +65,3 @@
   roles:
     - role: roles/connectivity_validation
       when: ueransim_enabled | default(false) | bool
-
-- name: "PHASE 6 | Deploy MEC Application (optional)"
-  hosts: masters
-  become: false
-  tags:
-    - phase6
-    - mec_deployment
-    - mec
-  vars_files:
-    - vars/topology.yml
-  roles:
-    - role: roles/mec_deployment
-      when: ueransim_enabled | default(false) | bool

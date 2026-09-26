@@ -1,10 +1,9 @@
 ---
 # Network Functions deployment defaults
-# Per-NF secondary networks and their static IPs (the `networks:`/`ips:` below) are
-# the interface matrix owned by docs/architecture/5g-interfaces.md (static-IP table
-# + Whereabouts-exclusion convention). Read it before changing addresses/NADs here.
+# Per-NF secondary networks (the `networks:` below) follow the interface matrix in
+# docs/architecture/5g-interfaces.md: a fixed endpoint attaches to the plane's
+# `-static` NAD with its address from all.yml; anything else takes the `-net` pool.
 kubeconfig_path: "/home/vagrant/kubeconfig"
-namespace_5g: "5g"
 
 # Container images
 # mongodb_image defined in all.yml (shared across roles)
@@ -16,9 +15,6 @@ namespace_5g: "5g"
 mongodb_pvc_name: "mongodb-data"
 mongodb_pvc_size: "1Gi"
 mongodb_pvc_storage_class: "local-path"
-
-# Subscriber snapshot ConfigMap (see docs/architecture/subscriber-persistence.md)
-subscriber_snapshot_configmap: "subscribers-snapshot"
 
 # Network Functions definitions
 network_functions:
@@ -50,8 +46,8 @@ network_functions:
       - { port: 38412, name: ngap, protocol: SCTP }
       - { port: 9090, name: metrics }
     networks:
-      - { name: "n1-net", interface: "n1", ips: ["{{ amf_n1_ip }}/24"] }
-      - { name: "n2-net", interface: "n2", ips: ["{{ amf_n2_ip }}/24"] }
+      - { name: "n1-static", interface: "n1", ips: ["{{ amf_n1_ip }}/{{ n1_subnet.split('/')[1] }}"] }
+      - { name: "n2-static", interface: "n2", ips: ["{{ amf_n2_ip }}/{{ n2_subnet.split('/')[1] }}"] }
     # Per-cell N2 interfaces will be added dynamically via amf_cell_networks
     wait_interfaces: ["n2"]
     extra_env:
@@ -69,7 +65,7 @@ network_functions:
       - { port: 8805, name: pfcp, protocol: UDP }
       - { port: 9090, name: metrics }
     networks:
-      - { name: "n4-net", interface: "n4", ips: ["{{ smf_n4_ip }}/24"] }
+      - { name: "n4-static", interface: "n4", ips: ["{{ smf_n4_ip }}/{{ n4_subnet.split('/')[1] }}"] }
 
   # UPF Edge (User Plane Function - Edge)
   # DISABLED: CNI route conflict on edge node - see docs/known-issues/upf-edge-cni-route-conflict.md
@@ -83,14 +79,21 @@ network_functions:
       - { port: 8805, name: pfcp, protocol: UDP }
       - { port: 9090, name: metrics }
     networks:
-      - { name: "n3-net", interface: "n3", ips: ["{{ upf_edge_n3_ip }}/24"] }
-      - { name: "n4-net", interface: "n4", ips: ["{{ upf_edge_n4_ip }}/24"] }
+      - { name: "n3-static", interface: "n3", ips: ["{{ upf_edge_n3_ip }}/{{ n3_subnet.split('/')[1] }}"] }
+      - { name: "n4-static", interface: "n4", ips: ["{{ upf_edge_n4_ip }}/{{ n4_subnet.split('/')[1] }}"] }
       - { name: "n6e-net", namespace: "mec", interface: "n6" }
     wait_interfaces: ["n3", "n6"]
     setup_script: "upf_edge_init.sh"
+    # Network plan for upf_edge_init.sh (the network-setup init container reads extra_env)
+    extra_env:
+      - { name: "UE_MEC_SUBNET", value: "{{ ue_mec_subnet }}" }
+      - { name: "UE_MEC_GATEWAY", value: "{{ ue_mec_gateway }}" }
+      - { name: "UE_MTU", value: "{{ ue_mtu }}" }
+      - { name: "N3_GATEWAY", value: "{{ n3_gateway }}" }
+      - { name: "N6_GATEWAY", value: "{{ n6e_gateway }}" }
     # iperf3 server runs in main container cgroup (postStart -D daemonize survives).
     # Started here, not in init script, because initContainers terminate child procs on exit.
-    lifecycle_post_start: "mkdir -p /var/log && iperf3 -s -B 10.46.0.1 -fm --logfile /var/log/iperf3-server.log -D"
+    lifecycle_post_start: "mkdir -p /var/log && iperf3 -s -B {{ ue_mec_gateway }} -fm --logfile /var/log/iperf3-server.log -D"
 
   # UPF Cloud (User Plane Function - Cloud)
   - name: upf-cloud
@@ -103,15 +106,25 @@ network_functions:
       - { port: 8805, name: pfcp, protocol: UDP }
       - { port: 9090, name: metrics }
     networks:
-      - { name: "n3-net", interface: "n3", ips: ["{{ upf_cloud_n3_ip }}/24"] }
-      - { name: "n4-net", interface: "n4", ips: ["{{ upf_cloud_n4_ip }}/24"] }
+      - { name: "n3-upf-static", interface: "n3", ips: ["{{ upf_cloud_n3_ip }}/{{ n3_subnet.split('/')[1] }}"] }
+      - { name: "n4-static", interface: "n4", ips: ["{{ upf_cloud_n4_ip }}/{{ n4_subnet.split('/')[1] }}"] }
       - { name: "n6c-net", interface: "n6" }
-      - { name: "n6m-net", namespace: "mec", interface: "n6m" }
+      - { name: "n6m-static", interface: "n6m", ips: ["{{ upf_cloud_n6m_ip }}/{{ n6m_subnet.split('/')[1] }}"] }
     wait_interfaces: ["n3", "n6"]
     setup_script: "upf_cloud_init.sh"
+    # Network plan for upf_cloud_init.sh (the network-setup init container reads extra_env).
+    extra_env:
+      - { name: "UE_INTERNET_SUBNET", value: "{{ ue_internet_subnet }}" }
+      - { name: "UE_INTERNET_GATEWAY", value: "{{ ue_internet_gateway }}" }
+      - { name: "UE_MEC_SUBNET", value: "{{ ue_mec_subnet }}" }
+      - { name: "UE_MEC_GATEWAY", value: "{{ ue_mec_gateway }}" }
+      - { name: "UE_MTU", value: "{{ ue_mtu }}" }
+      - { name: "N3_GATEWAY", value: "{{ n3_gateway }}" }
+      - { name: "N6_GATEWAY", value: "{{ n6c_gateway }}" }
+      - { name: "N6M_SUBNET", value: "{{ n6m_subnet }}" }
     # iperf3 server runs in main container cgroup (postStart -D daemonize survives).
     # Started here, not in init script, because initContainers terminate child procs on exit.
-    lifecycle_post_start: "mkdir -p /var/log && iperf3 -s -B 10.45.0.1 -fm -i 0.1 --logfile /var/log/iperf3-server.log -D"
+    lifecycle_post_start: "mkdir -p /var/log && iperf3 -s -B {{ ue_internet_gateway }} -fm -i 0.1 --logfile /var/log/iperf3-server.log -D"
 
   # UDM (Unified Data Management)
   - name: udm

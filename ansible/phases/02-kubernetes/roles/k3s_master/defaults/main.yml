@@ -11,13 +11,13 @@ k3s_install_dir: "/usr/local/bin"
 k3s_bind_address: "{{ ansible_host }}"
 k3s_advertise_address: "{{ ansible_host }}"
 k3s_node_ip: "{{ ansible_host }}"
-cluster_cidr: "10.42.0.0/16"
-service_cidr: "10.43.0.0/16"
 flannel_backend: "vxlan"
 # local-storage intentionally NOT disabled: it ships the "local-path" StorageClass
 # and provisioner used by PVCs in this testbed (MongoDB persistence, Prometheus
 # retention). See docs/architecture/subscriber-persistence.md.
+# `disable` takes only packaged components. The embedded network policy
+# controller stays on: it enforces the phase 13 NetworkPolicies.
 disable_components:
-  [traefik, servicelb, cloud-controller, network-policy]
+  [traefik, servicelb]
 kubeconfig_path: "/home/vagrant/kubeconfig"
 token_export_path: "/home/vagrant/k3s_token"

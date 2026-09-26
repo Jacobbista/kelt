@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: location-app
-  namespace: {{ demo_namespace }}
+  namespace: {{ apps_namespace }}
   labels:
     app: location-app
     kelt.io/role: app

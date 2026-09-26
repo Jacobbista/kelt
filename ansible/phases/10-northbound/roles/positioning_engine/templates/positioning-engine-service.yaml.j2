@@ -10,7 +10,7 @@ spec:
     app: positioning-engine
   ports:
     - protocol: TCP
-      port: 8080
+      port: {{ positioning_engine_service_port }}
       targetPort: 8080
       nodePort: {{ positioning_engine_nodeport }}
       name: http

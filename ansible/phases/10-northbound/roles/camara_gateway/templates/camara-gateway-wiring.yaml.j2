@@ -8,7 +8,7 @@ data:
   # Operator settings live in camara-gateway-config (seeded once, then owned by
   # the dashboard). See docs/architecture/positioning-adapters.md.
   POSITIONING_ENGINE_URL: "{{ positioning_engine_url }}"
-  KEYCLOAK_URL: "http://keycloak.{{ iam_namespace }}.svc.cluster.local:8080{{ keycloak_path_prefix }}"
+  KEYCLOAK_URL: "http://keycloak.{{ iam_namespace }}.svc.cluster.local:{{ keycloak_service_port }}{{ keycloak_path_prefix }}"
   KEYCLOAK_REALM: "{{ keycloak_realm }}"
   # Realm role a Bearer token must carry to call the Location endpoints.
   REQUIRED_ROLE: "{{ camara_required_role }}"

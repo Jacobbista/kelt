@@ -79,7 +79,7 @@ spec:
         persistentVolumeClaim:
           claimName: {{ mongodb_pvc_name }}
       - name: subscribers-snapshot
-        configMap:
+        secret:
           # optional=true so the pod starts even before the subscriber_import role seeds the snapshot
-          name: {{ subscriber_snapshot_configmap }}
+          secretName: {{ subscriber_snapshot_secret }}
           optional: true

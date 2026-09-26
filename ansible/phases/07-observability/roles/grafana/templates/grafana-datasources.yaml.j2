@@ -13,7 +13,7 @@ data:
         uid: prometheus
         type: prometheus
         access: proxy
-        url: http://prometheus.{{ monitoring_namespace }}.svc:9090
+        url: http://prometheus.{{ monitoring_namespace }}.svc:{{ prometheus_service_port }}
         isDefault: true
         editable: false
         jsonData:
@@ -23,7 +23,7 @@ data:
         uid: loki
         type: loki
         access: proxy
-        url: http://loki.{{ monitoring_namespace }}.svc:3100
+        url: http://loki.{{ monitoring_namespace }}.svc:{{ loki_service_port }}
         editable: false
         jsonData:
           maxLines: 1000

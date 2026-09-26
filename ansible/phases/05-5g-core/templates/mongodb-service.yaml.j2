@@ -10,6 +10,6 @@ spec:
   - protocol: TCP
     port: 27017
     targetPort: 27017
-    nodePort: 30017
+    nodePort: {{ mongodb_nodeport }}
     name: mongodb
   type: NodePort

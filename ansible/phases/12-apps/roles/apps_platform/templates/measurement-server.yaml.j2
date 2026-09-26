@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: measurement-server
+  namespace: {{ apps_namespace }}
+  labels:
+    app: measurement-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: measurement-server
+  template:
+    metadata:
+      labels:
+        app: measurement-server
+      annotations:
+        k8s.v1.cni.cncf.io/networks: |
+          [{"name": "{{ nad_n6m_static_name }}", "namespace": "{{ nad_n6m_namespace }}", "interface": "n6m",
+            "ips": ["{{ apps_measurement_server_n6m_ip }}"]}]
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: worker
+      terminationGracePeriodSeconds: 5
+      initContainers:
+        # Same pattern as the netshoot probe (phase 05): a pod starts from the
+        # worker's forwarding=1, and a server on n6m must not route.
+        - name: sysctl-init
+          image: {{ network_setup_image }}
+          imagePullPolicy: IfNotPresent
+          command: ["sysctl", "-w", "net.ipv4.ip_forward=0"]
+          securityContext:
+            privileged: true
+      containers:
+        - name: iperf3
+          image: {{ network_setup_image }}
+          imagePullPolicy: IfNotPresent
+          command: ["iperf3", "-s", "-p", "5201"]
+          readinessProbe:
+            exec:
+              command: ["true"]
+            initialDelaySeconds: 3
+            periodSeconds: 10

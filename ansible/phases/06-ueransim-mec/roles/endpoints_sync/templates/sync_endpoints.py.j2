@@ -10,7 +10,7 @@ See roles/endpoints_sync/README.md for architecture details.
 from kubernetes import client, config
 import json
 
-NAMESPACE = "{{ namespace }}"
+NAMESPACE = "{{ namespace_5g }}"
 
 def get_multus_n2_ip(pod):
     ann = pod.metadata.annotations or {}

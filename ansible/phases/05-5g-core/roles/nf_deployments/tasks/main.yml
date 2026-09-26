@@ -9,8 +9,8 @@
 
 - name: Build per-cell N2 networks for AMF
   set_fact:
-    # Dynamic IP from Whereabouts - gNB discovers AMF IP via init container
-    # No static IPs - fully cloud-native and scalable
+    # Pool address: the UERANSIM gNB discovers the AMF per-cell IP at runtime
+    # through the Kubernetes API (amf-discovery init container), so it is not fixed.
     amf_cell_n2_networks: >-
       {{ amf_cell_n2_networks | default([]) + [{
         'name': 'n2-cell-' ~ item.id,
@@ -50,7 +50,7 @@
     amf_physical_ran_network:
       - name: "n2-physical"
         interface: "n2phy"
-        ips: ["{{ amf_physical_ran_ip }}/24"]
+        ips: ["{{ amf_physical_ran_ip }}/{{ physical_ran_subnet.split('/')[1] }}"]
   when:
     - physical_ran_enabled | default(false) | bool
     - (physical_ran_skip_bridge_check | default(false) | bool) or (physical_ran_bridge_available | default(false) | bool)
@@ -82,39 +82,6 @@
 - name: Replace network_functions with physical RAN version
   set_fact:
     network_functions: "{{ network_functions_with_physical }}"
-  when:
-    - physical_ran_enabled | default(false) | bool
-    - (physical_ran_skip_bridge_check | default(false) | bool) or (physical_ran_bridge_available | default(false) | bool)
-  run_once: true
-
-# Pass PHYSICAL_RAN_SUBNET to UPF-Cloud so its init script can add a
-# return route to the gNB subnet through the worker's br-n3 gateway.
-- name: Init UPF physical RAN env list
-  set_fact:
-    network_functions_with_upf_ran: []
-  when:
-    - physical_ran_enabled | default(false) | bool
-    - (physical_ran_skip_bridge_check | default(false) | bool) or (physical_ran_bridge_available | default(false) | bool)
-  run_once: true
-
-- name: Add PHYSICAL_RAN_SUBNET env to UPF-Cloud
-  set_fact:
-    network_functions_with_upf_ran: >-
-      {{ network_functions_with_upf_ran +
-         [item | combine({'extra_env': item.extra_env + [{'name': 'PHYSICAL_RAN_SUBNET', 'value': physical_ran_subnet}]})]
-         if item.name == 'upf-cloud'
-         else network_functions_with_upf_ran + [item] }}
-  loop: "{{ network_functions }}"
-  loop_control:
-    label: "{{ item.name }}"
-  when:
-    - physical_ran_enabled | default(false) | bool
-    - (physical_ran_skip_bridge_check | default(false) | bool) or (physical_ran_bridge_available | default(false) | bool)
-  run_once: true
-
-- name: Replace network_functions with UPF RAN version
-  set_fact:
-    network_functions: "{{ network_functions_with_upf_ran }}"
   when:
     - physical_ran_enabled | default(false) | bool
     - (physical_ran_skip_bridge_check | default(false) | bool) or (physical_ran_bridge_available | default(false) | bool)
@@ -164,6 +131,22 @@
     state: present
     kubeconfig: "{{ kubeconfig_path }}"
     template: "{{ playbook_dir }}/templates/mongodb-service.yaml.j2"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+# Applying a Service merges its ports, so a port an earlier deploy added (a
+# `webui` NodePort once) stays open forever. Set the ports to exactly the ones
+# the template declares; a no-op when they already match.
+- name: Keep only the declared MongoDB Service ports
+  kubernetes.core.k8s_json_patch:
+    kind: Service
+    name: mongodb
+    namespace: "{{ namespace_5g }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+    patch:
+      - op: replace
+        path: /spec/ports
+        value: "{{ (lookup('template', playbook_dir ~ '/templates/mongodb-service.yaml.j2') | from_yaml).spec.ports }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
@@ -239,10 +222,9 @@
   run_once: true
 
 # ── Netshoot debug pod ────────────────────────────────────────────────────────
-# Persistent pod with n3/n6 Multus interfaces and full networking tools
-# (ping, ss, tcpdump, etc.). Used by the dashboard network health checks since
-# NF images are minimal and do not include diagnostic utilities.
-# N4 check uses the SMF /pdu-info API instead (n4 IP pool is exhausted by NF pods).
+# Persistent probe pod on every plane (pool addresses) with full networking tools
+# (ping, nmap, tcpdump, etc.). Used by the dashboard network health checks and the
+# test suites, since NF images are minimal and do not include diagnostic utilities.
 
 - name: Deploy netshoot debug pod
   kubernetes.core.k8s:

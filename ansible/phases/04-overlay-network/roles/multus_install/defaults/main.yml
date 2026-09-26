@@ -1,5 +1,3 @@
-multus_version: "4.1.0"
-alpine_image: "alpine:3.20"
 
 # CNI paths - worker (k3s) vs edge (standard containerd)
 cni_bin_dir_worker: "/var/lib/rancher/k3s/data/cni/bin" # k3s CNI binary path
@@ -17,93 +15,23 @@ whereabouts_kubeconfig_relpath: "whereabouts.d/whereabouts.kubeconfig"
 # OVS usage (keep true for your current design)
 use_ovs_cni: true
 
-# Overlay networks (N1/N2/N3/N4/N6e/N6c)
-overlay_mtu: 1450
-n6_data_mtu: 1400
-# Per-interface overlay NADs (subnet, bridge, VXLAN VNI, IPAM range/gateway). The
-# interface matrix (subnets, static IPs, VNIs) and the static-IP-via-Whereabouts
-# convention are owned by docs/architecture/5g-interfaces.md — read it before
-# changing values here.
+# Per-interface overlay NADs. Every address comes from the 5G network plan in
+# group_vars/all.yml; the matrix is explained in docs/architecture/5g-interfaces.md.
+# Each entry yields two NADs on the same bridge: `<plane>-net`, a Whereabouts pool
+# for attachments that need no fixed address, and `<plane>-static`, static IPAM
+# for the fixed endpoints (one address per interface, the one requested in `ips`).
+# `exclude` keeps the fixed endpoints out of the pool.
 overlay_networks:
-  - {
-      name: "n1-net",
-      ns: "5g",
-      bridge: "br-n1",
-      cidr: "10.201.0.0/24",
-      start: "10.201.0.100",
-      end: "10.201.0.250",
-      gw: "10.201.0.1",
-      exclude: ["{{ amf_n1_ip }}/32"],
-    }
-  - {
-      name: "n2-net",
-      ns: "5g",
-      bridge: "br-n2",
-      cidr: "10.202.0.0/24",
-      start: "10.202.0.100",
-      end: "10.202.0.250",
-      gw: "10.202.0.1",
-      exclude: ["{{ amf_n2_ip }}/32"],
-    }
-  - {
-      name: "n3-net",
-      ns: "5g",
-      bridge: "br-n3",
-      cidr: "10.203.0.0/24",
-      start: "10.203.0.100",
-      end: "10.203.0.250",
-      gw: "10.203.0.1",
-      exclude: ["{{ upf_cloud_n3_ip }}/32", "{{ upf_edge_n3_ip }}/32"],
-    }
-  - {
-      name: "n4-net",
-      ns: "5g",
-      bridge: "br-n4",
-      cidr: "10.204.0.0/24",
-      start: "10.204.0.100",
-      end: "10.204.0.250",
-      gw: "10.204.0.1",
-      ipam: "static",
-    }
-  - {
-      name: "n6e-net",
-      ns: "mec",
-      bridge: "br-n6e",
-      cidr: "10.206.0.0/24",
-      start: "10.206.0.100",
-      end: "10.206.0.250",
-      gw: "10.206.0.1",
-    }
-  - {
-      name: "n6c-net",
-      ns: "5g",
-      bridge: "br-n6c",
-      cidr: "10.207.0.0/24",
-      start: "10.207.0.100",
-      end: "10.207.0.250",
-      gw: "10.207.0.1",
-    }
-  # N6 MEC data network (UPF-Cloud → MEC services). MEC pods on this DN are reached
-  # by UEs via UPF-Cloud (connected route). A MEC app that needs a fixed IP requests
-  # it the same way the NFs do: `ips` in the Multus annotation (whereabouts honors it
-  # directly; see amf/smf/upf in 05-5g-core nf_deployments).
-  # NO per-NAD `routes` here: the UPF-Cloud also attaches this NAD and OWNS the UE
-  # pools (10.45/10.46) on ogstun, so a UE-pool route via n6m hijacks UE downlink and
-  # breaks internet. Two-way app return-routing is a per-app concern, not this shared
-  # NAD. See docs/architecture/edge-apps.md.
-  - {
-      name: "n6m-net",
-      ns: "mec",
-      bridge: "br-n6m",
-      cidr: "10.208.0.0/24",
-      start: "10.208.0.100",
-      end: "10.208.0.250",
-      gw: "10.208.0.1",
-      # Reserve 10.208.0.200-.207 for MEC apps that need a fixed IP (UEs target a
-      # stable address). Excluded from dynamic allocation; an app claims one via the
-      # `ips` annotation, same pattern as the UPF static IPs on n3-net.
-      exclude: ["10.208.0.200/29"],
-    }
+  - { name: "n1-net", ns: "{{ namespace_5g }}", bridge: "br-n1", cidr: "{{ n1_subnet }}", start: "{{ n1_pool_start }}", end: "{{ n1_pool_end }}", gw: "{{ n1_gateway }}", exclude: ["{{ amf_n1_ip }}/32"] }
+  - { name: "n2-net", ns: "{{ namespace_5g }}", bridge: "br-n2", cidr: "{{ n2_subnet }}", start: "{{ n2_pool_start }}", end: "{{ n2_pool_end }}", gw: "{{ n2_gateway }}", exclude: ["{{ amf_n2_ip }}/32"] }
+  - { name: "n3-net", ns: "{{ namespace_5g }}", bridge: "br-n3", cidr: "{{ n3_subnet }}", start: "{{ n3_pool_start }}", end: "{{ n3_pool_end }}", gw: "{{ n3_gateway }}", exclude: ["{{ upf_cloud_n3_ip }}/32", "{{ upf_edge_n3_ip }}/32"] }
+  - { name: "n4-net", ns: "{{ namespace_5g }}", bridge: "br-n4", cidr: "{{ n4_subnet }}", start: "{{ n4_pool_start }}", end: "{{ n4_pool_end }}", gw: "{{ n4_gateway }}", exclude: ["{{ smf_n4_ip }}/32", "{{ upf_cloud_n4_ip }}/32", "{{ upf_edge_n4_ip }}/32"] }
+  - { name: "n6e-net", ns: "{{ apps_namespace }}", bridge: "br-n6e", cidr: "{{ n6e_subnet }}", start: "{{ n6e_pool_start }}", end: "{{ n6e_pool_end }}", gw: "{{ n6e_gateway }}" }
+  - { name: "n6c-net", ns: "{{ namespace_5g }}", bridge: "br-n6c", cidr: "{{ n6c_subnet }}", start: "{{ n6c_pool_start }}", end: "{{ n6c_pool_end }}", gw: "{{ n6c_gateway }}" }
+  # N6m, the MEC data network. Apps answer the UE pools through the UPF (`routes`),
+  # never through eth0. The UPF itself attaches the route-less 5g/n6m-static NAD
+  # (it owns the UE pools). See docs/architecture/5g-interfaces.md#data-networks.
+  - { name: "n6m-net", ns: "{{ apps_namespace }}", bridge: "br-n6m", cidr: "{{ n6m_subnet }}", start: "{{ n6m_pool_start }}", end: "{{ n6m_pool_end }}", gw: "{{ n6m_gateway }}", exclude: ["{{ n6m_static_band }}", "{{ upf_cloud_n6m_ip }}/32"], routes: [{ dst: "{{ ue_internet_subnet }}", gw: "{{ upf_cloud_n6m_ip }}" }, { dst: "{{ ue_mec_subnet }}", gw: "{{ upf_cloud_n6m_ip }}" }] }
 
 # Expected Multus DS readiness (workers + edge if enabled)
 expected_multus_ready: 2

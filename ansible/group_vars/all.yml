@@ -1,10 +1,6 @@
 ansible_user: vagrant
 ansible_ssh_common_args: "-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no"
 
-# variabili "rete condivisa" tra Kubernetes e pod MEC (Multus)
-mn_bridge: mn-br0
-mn_subnet: 10.200.0.0/24
-mn_gw: 10.200.0.1
 # versioni / canali
 k3s_channel: stable
 k3s_version: v1.30.6+k3s1
@@ -14,31 +10,198 @@ k3s_containerd_sock: unix:///run/k3s/containerd/containerd.sock
 
 kubeconfig_path: /home/vagrant/kubeconfig
 
-# Shared namespace for IAM stack (phase 08 Keycloak + PostgreSQL).
-iam_namespace: iam
+# ── Namespaces ──────────────────────────────────────────────────────────────
+# One namespace per role, never per location: where a pod runs is set by its node
+# placement. Literal values: the dashboard backend reads this file as plain YAML.
+# See docs/architecture/namespaces.md.
+namespace_5g: "5g"              # 5G core NFs, subscriber DB, the netshoot probe
+apps_namespace: "mec"           # every deployed application (dashboard Apps, demo apps), any site
+registry_namespace: "registry"  # local image registry for the apps (phase 12)
+positioning_namespace: "positioning"  # positioning engine, adapters, placement editor
+camara_namespace: "camara"      # CAMARA gateway (northbound API exposure)
+iam_namespace: "iam"            # Keycloak + PostgreSQL (phase 08)
+monitoring_namespace: "monitoring"  # Prometheus, Grafana, Loki, exporters (phase 07)
+dashboard_namespace: "dashboard"    # dashboard frontend and docs (the backend runs on the ansible VM)
+frontdoor_namespace: "frontdoor"    # front-door reverse proxy (phase 11)
+kubeedge_namespace: "kubeedge"  # CloudCore; the name is fixed by keadm
+# What each namespace holds, one line, keyed by the variable above. The dashboard
+# Isolation page shows it next to each namespace's policies.
+namespace_roles:
+  namespace_5g: "5G core NFs, subscriber database, the netshoot probe"
+  apps_namespace: "Deployed applications, on any site"
+  registry_namespace: "Local image registry for the apps"
+  positioning_namespace: "Positioning engine, adapters, placement editor"
+  camara_namespace: "CAMARA gateway, the northbound API"
+  iam_namespace: "Keycloak and its database"
+  monitoring_namespace: "Prometheus, Grafana, Loki, exporters"
+  dashboard_namespace: "Dashboard frontend and docs"
+  frontdoor_namespace: "Front-door reverse proxy"
+  kubeedge_namespace: "CloudCore"
+# NetworkPolicies on the pod network (phase 13); false removes every policy the
+# phase manages. The flows are declared in that phase's role defaults.
+network_policies_enabled: true
 
-# IPs Nx centralizzati (statici)
-# N1 AMF static IP (must be within n1-net NAD range)
+# Subscribers (SIM IMSI + K/OPc) the 5G core is seeded with. The file is local
+# and gitignored: `testbed` generates it from the repo template
+# (roles/subscriber_import/subscribers/subscribers.example.json) with random keys;
+# real SIM keys are set there or from the dashboard. Path as seen by the ansible VM.
+subscribers_file: /vagrant/.testbed.subscribers.json
+# In-cluster copy of the subscriber list (a Secret in the core namespace, it holds
+# SIM keys): the dashboard keeps it in sync, MongoDB reconciles from it on start.
+subscriber_snapshot_secret: subscribers-snapshot
+
+# ── Ports ───────────────────────────────────────────────────────────────────
+# Every port that more than one component has to agree on: the NodePorts clients
+# outside the cluster use, and the Service ports other workloads call. A port used
+# only inside the role that owns it stays in that role. Literal values: the
+# dashboard backend, the tests, the experiments and the CLI read this file as
+# plain YAML. The 3GPP interface ports (NGAP, GTP-U, PFCP, SBI) are protocol
+# constants and are not listed.
+#
+# NodePorts, on every node (the LAN URLs use the worker address).
+frontdoor_nodeport: 31500           # front door; the wildcard tunnel points *.<base> here
+apps_registry_nodeport: 31501       # local image registry (containerd pulls, pushes)
+dashboard_cluster_nodeport: 31573   # dashboard frontend, cluster build
+keycloak_nodeport: 31910
+camara_gateway_nodeport: 31920
+positioning_engine_nodeport: 31930
+positioning_demo_nodeport: 31940    # location-app demo
+placement_gate_nodeport: 31950      # Keycloak gate in front of the placement editor
+grafana_nodeport: 30300
+prometheus_nodeport: 30090
+mongodb_nodeport: 30017             # subscriber database, for the dashboard backend
+# Ports on the ansible VM, where the dashboard backend and the opt-in Vite dev
+# frontend run as systemd services.
+dashboard_backend_port: 31880
+dashboard_watchdog_port: 31881      # restarts the backend from the UI
+dashboard_frontend_port: 31573      # Vite dev frontend
+# In-cluster Service ports that other workloads call (<service>.<namespace>.svc).
+keycloak_service_port: 8080
+camara_gateway_service_port: 8080
+positioning_engine_service_port: 8080
+dashboard_frontend_service_port: 80
+positioning_demo_service_port: 80
+oauth2_proxy_port: 4180             # every Keycloak gate (oauth2-proxy-<name>)
+prometheus_service_port: 9090
+loki_service_port: 3100
+kube_state_metrics_port: 8080
+
+# ── Management network ──────────────────────────────────────────────────────
+# Host-only network the VMs live on. The Vagrantfile reads these to create the
+# VMs and generate the Ansible inventory, so roles take node addresses from
+# hostvars; the dashboard backend reads them from this file.
+mgmt_subnet: "192.168.56.0/24"
+node_ips:
+  master: "192.168.56.10"
+  worker: "192.168.56.11"
+  edge: "192.168.56.12"
+  ansible: "192.168.56.13"
+
+# ── 5G network plan ─────────────────────────────────────────────────────────
+# Single source for every address of the 5G overlays. The interface matrix in
+# docs/architecture/5g-interfaces.md explains each plane and links here.
+#
+# Plane: subnet, gateway (owned by the worker bridge, except N6e on the edge
+# bridge), dynamic pool for attachments that need no fixed address, VXLAN VNI.
+n1_subnet: "10.201.0.0/24"
+n1_gateway: "10.201.0.1"
+n1_pool_start: "10.201.0.100"
+n1_pool_end: "10.201.0.250"
+n1_vni: 101
+
+n2_subnet: "10.202.0.0/24"
+n2_gateway: "10.202.0.1"
+n2_pool_start: "10.202.0.100"
+n2_pool_end: "10.202.0.250"
+n2_vni: 102
+
+n3_subnet: "10.203.0.0/24"
+n3_gateway: "10.203.0.1"
+n3_pool_start: "10.203.0.100"
+n3_pool_end: "10.203.0.250"
+n3_vni: 103
+
+n4_subnet: "10.204.0.0/24"
+n4_gateway: "10.204.0.1"
+n4_pool_start: "10.204.0.100"
+n4_pool_end: "10.204.0.250"
+n4_vni: 104
+
+n6e_subnet: "10.206.0.0/24"
+n6e_gateway: "10.206.0.1"
+n6e_pool_start: "10.206.0.100"
+n6e_pool_end: "10.206.0.250"
+n6e_vni: 106
+
+n6c_subnet: "10.207.0.0/24"
+n6c_gateway: "10.207.0.1"
+n6c_pool_start: "10.207.0.100"
+n6c_pool_end: "10.207.0.250"
+n6c_vni: 107
+
+n6m_subnet: "10.208.0.0/24"
+n6m_gateway: "10.208.0.1"
+n6m_pool_start: "10.208.0.100"
+n6m_pool_end: "10.208.0.250"
+n6m_vni: 108
+# Band for MEC apps that need a fixed address (UEs target a stable IP).
+n6m_static_band: "10.208.0.200/29"
+
+# Fixed endpoints: only where a peer must know the address before the NF
+# exists. Everything else takes one address from its plane's pool.
+# gNB is configured with the AMF address (N1 rides the same NGAP association).
 amf_n1_ip: 10.201.0.100
-# N2 AMF static IP (must be within n2-net NAD range)
 amf_n2_ip: 10.202.0.100
-# Per-cell N2/N3 IP components (AMF and gNB connect via per-cell overlay)
-# N2: AMF={cell_n2_subnet_prefix}.{cell_id}.{amf_cell_n2_ip_suffix}
-#     gNB={cell_n2_subnet_prefix}.{cell_id}.{gnb_cell_n2_ip_suffix}
-# N3: gNB={cell_n3_subnet_prefix}.{cell_id}.{gnb_cell_n3_ip_suffix}
+# The SMF advertises the UPF N3 address to the gNB; Open5GS needs it in upf.yaml.
+upf_cloud_n3_ip: 10.203.0.101
+upf_edge_n3_ip: 10.203.0.102
+# Open5GS lists PFCP peers by address in smf.yaml (no NRF discovery for UPFs).
+smf_n4_ip: 10.204.0.100
+upf_cloud_n4_ip: 10.204.0.101
+upf_edge_n4_ip: 10.204.0.102
+# MEC apps route the UE pools through the UPF on N6m, so the UPF is their next hop.
+upf_cloud_n6m_ip: 10.208.0.101
+
+# Per-cell N2/N3 overlays (UERANSIM): {prefix}.{cell_id}.{suffix}
 # Example cell 1: AMF N2=10.202.1.10, gNB N2=10.202.1.11, gNB N3=10.203.1.11
 cell_n2_subnet_prefix: "10.202"
 cell_n3_subnet_prefix: "10.203"
 amf_cell_n2_ip_suffix: 10
 gnb_cell_n2_ip_suffix: 11
 gnb_cell_n3_ip_suffix: 11
-# N3 UPF static IPs (must be within n3-net NAD range)
-upf_cloud_n3_ip: 10.203.0.101
-upf_edge_n3_ip: 10.203.0.102
-# N4 SMF/UPF static IPs (must be within n4-net NAD range)
-smf_n4_ip: 10.204.0.100
-upf_cloud_n4_ip: 10.204.0.101
-upf_edge_n4_ip: 10.204.0.102
+# Per-cell pool (AMF and UERANSIM attach dynamically; the gNB discovers the AMF
+# per-cell address at runtime). .10-.19 stay out of the pool for the suffixes above.
+cell_pool_start_suffix: 20
+cell_pool_end_suffix: 250
+
+# UE address pools per DNN, owned by the UPF (ogstun devices). The gateway is
+# the UPF-side address of the pool.
+ue_internet_subnet: "10.45.0.0/16"
+ue_internet_gateway: "10.45.0.1"
+ue_mec_subnet: "10.46.0.0/16"
+ue_mec_gateway: "10.46.0.1"
+# Resolvers handed to UEs by the SMF.
+ue_dns_servers: ["8.8.8.8", "8.8.4.4", "2001:4860:4860::8888", "2001:4860:4860::8844"]
+# UE-side MTU (ogstun). GTP-U over the 1450 overlay leaves 1410; 1400 keeps a
+# margin. See docs/architecture/network-topology.md (MTU sizing).
+ue_mtu: 1400
+
+# Worker filter on traffic crossing between planes: `observe` counts crossings
+# without changing them, `enforce` drops every crossing the architecture does
+# not have. See docs/architecture/plane-isolation.md
+plane_filter_mode: enforce
+# The worker exports the filter counters through the node-exporter textfile
+# collector (phase 07 reads this host directory).
+plane_metrics_interval: 15
+node_exporter_textfile_dir: /var/lib/node_exporter/textfile
+
+# Kubernetes (K3s) address ranges. cluster_dns_ip is kube-dns inside service_cidr.
+cluster_cidr: "10.42.0.0/16"
+service_cidr: "10.43.0.0/16"
+cluster_dns_ip: "10.43.0.10"
+# API server as seen from pods that need it outside the cluster DNS (UERANSIM
+# edge discovery).
+k8s_api_server: "{{ hostvars[groups['masters'][0]]['ansible_host'] }}:6443"
 
 # Component versions/images (centralized)
 multus_version: 4.1.0
@@ -47,65 +210,24 @@ whereabouts_version: 0.7.0
 cni_plugins_version: 1.5.1
 alpine_image: alpine:3.20
 overlay_mtu: 1450
-# N6 cloud (br-n6c): decapsulated data plane; align with ogstun (1400) so TCP MSS matches GTP-U path.
-# See docs/architecture/network-topology.md (MTU sizing and GTP-U encapsulation)
-n6_data_mtu: 1400
+# N6 cloud (br-n6c): decapsulated data plane, same MTU as the UE side (ogstun)
+# so TCP MSS matches the GTP-U path. See docs/architecture/network-topology.md
+n6_data_mtu: "{{ ue_mtu }}"
 
-# Interfacce e NAD (parametrizzabili)
-# N1
-nad_n1_namespace: 5g
-nad_n1_name: n1-net
-n1_interface_expected: n1
-n1_interface_regex: ^(n1|net[0-9]+)$
-
-# N2
-nad_n2_namespace: 5g
-nad_n2_name: n2-net
-n2_interface_expected: n2
-n2_interface_regex: ^(n2|net[0-9]+)$
-
-# N3
-nad_n3_namespace: 5g
+# NAD references used outside the overlay role (netshoot debug pod, dashboard).
 nad_n3_name: n3-net
-n3_interface_expected: n3
-n3_interface_regex: ^(n3|net[0-9]+)$
-
-# N4
-nad_n4_namespace: 5g
-nad_n4_name: n4-net
-n4_interface_expected: n4
-n4_interface_regex: ^(n4|net[0-9]+)$
-
-# N6 Edge (MEC)
-nad_n6e_namespace: mec
-nad_n6e_name: n6-mec-net
-n6e_interface_expected: n6
-n6e_interface_regex: ^(n6|net[0-9]+)$
-
-# N6 Cloud
-nad_n6c_namespace: 5g
+nad_n3_namespace: "{{ namespace_5g }}"
 nad_n6c_name: n6c-net
-n6c_interface_expected: n6
-n6c_interface_regex: ^(n6|net[0-9]+)$
-
-# Abilita test overlay (pod netshoot)
-test_n1_enabled: false
-test_n2_enabled: false
-test_n3_enabled: false
-test_n4_enabled: false
-test_n6e_enabled: false
-test_n6c_enabled: false
+nad_n6c_namespace: "{{ namespace_5g }}"
 
 # Edge node toggle (set to true to deploy KubeEdge EdgeCore, edge OVS, edge Multus)
 # Passed from Vagrantfile via -e edge_enabled=true/false
 edge_enabled: false
 
 # N6 MEC data network (for MEC services reachable by UEs via UPF)
-n6m_subnet: "10.208.0.0/24"
-n6m_gateway: "10.208.0.1"
-n6m_vni: 108
-nad_n6m_namespace: mec
+nad_n6m_namespace: "{{ apps_namespace }}"
 nad_n6m_name: n6m-net
+nad_n6m_static_name: n6m-static
 n6m_interface_expected: n6m
 n6m_interface_regex: "^(n6m|net[0-9]+)$"
 
@@ -115,21 +237,18 @@ n6m_interface_regex: "^(n6m|net[0-9]+)$"
 # adapter to n6m at its reserved static IP when deployed, and surfaces the ingest
 # address in the UI. Pull adapters (vendor-API / simulated, e.g. wittra, synthetic)
 # are NOT listed: they source data themselves and need no n6m path.
-# IPs come from the n6m reserved band: the NAD excludes 10.208.0.200/29 from the
-# whereabouts dynamic pool for exactly these static assignments. 10.208.0.200 is
-# taken by the face-recognition edge app. Map is adapter deploy-name -> CIDR.
+# IPs come from n6m_static_band. 10.208.0.200 is taken by the face-recognition
+# edge app. Map is adapter deploy-name -> CIDR.
 # See docs/architecture/positioning-adapters.md.
 n6m_push_adapters:
   wifi-adapter: "10.208.0.201/24"
 
-# VXLAN VNIs per 5G interface (overlay keys). Consumed by ovs-setup.sh via the
-# OVS DaemonSet env. n6m_vni is defined in the N6 MEC block above.
-n1_vni: 101
-n2_vni: 102
-n3_vni: 103
-n4_vni: 104
-n6e_vni: 106
-n6c_vni: 107
+# Measurement server for the thesis experiments: iperf3 + ICMP on n6m, reached by
+# a UE on DNN mec through the UPF, the path the edge application uses. IP from
+# n6m_static_band.
+apps_measurement_server_enabled: true
+apps_measurement_server_n6m_ip: "10.208.0.202/24"
+
 
 # Optional addon toggles (off by default; opt-in). See docs/status.md for maturity.
 # UERANSIM (simulated RAN, phase 6): set true to deploy gNB/UE. DEPLOY_MODE=full
@@ -153,18 +272,14 @@ placement_editor_enabled: "{{ (lookup('ansible.builtin.env', 'PLACEMENT_EDITOR_E
 # local registry (insecure HTTP + basic-auth, NodePort only, never tunneled). See
 # docs/architecture/edge-apps.md.
 apps_enabled: "{{ lookup('ansible.builtin.env', 'APPS_ENABLED') | default('false', true) | bool }}"
-# Edge apps are MEC apps: they deploy into the `mec` namespace and (optionally)
-# attach to the MEC data network n6m so UEs reach them via the UPF. Convention:
-# they run on the worker now and can move to the edge node later. The local
-# registry is platform infrastructure, not a MEC app, so it lives in its own
-# namespace. See docs/architecture/edge-apps.md and 5g-interfaces.md.
-apps_namespace: mec
-apps_registry_namespace: apps
-# Local image registry (registry:2) for build-outside-push-here-deploy. Exposed on
-# this NodePort on the worker only; k3s containerd pulls from it via
+# Edge apps deploy into `apps_namespace` and (optionally) attach to the MEC data
+# network n6m so UEs reach them via the UPF. They run on the worker now and can
+# move to the edge node later. The local registry is platform infrastructure, not
+# an app, so it lives in `registry_namespace`. See docs/architecture/edge-apps.md.
+# Local image registry (registry:2) for build-outside-push-here-deploy, exposed on
+# apps_registry_nodeport (Ports block); k3s containerd pulls from it via
 # /etc/rancher/k3s/registries.yaml (insecure mirror). Credentials live in
 # .testbed.secrets (APPS_REGISTRY_USERNAME / APPS_REGISTRY_PASSWORD).
-apps_registry_nodeport: 31501
 # Registry host as it appears in image tags (<host>/<name>:<tag>). Must match the
 # mirror key in /etc/rancher/k3s/registries.yaml on the worker, which maps it to the
 # real http endpoint. Defaults to the worker LAN address:port; override with
@@ -203,27 +318,43 @@ dashboard_dev_subdomain: "{{ lookup('ansible.builtin.env', 'DASHBOARD_DEV_SUBDOM
 camara_subdomain: "{{ lookup('ansible.builtin.env', 'CAMARA_SUBDOMAIN') | default(kelt_prefix ~ '-camara', true) }}"
 positioning_demo_subdomain: "{{ lookup('ansible.builtin.env', 'POSITIONING_DEMO_SUBDOMAIN') | default(kelt_prefix ~ '-demo', true) }}"
 placement_editor_subdomain: "{{ lookup('ansible.builtin.env', 'PLACEMENT_EDITOR_SUBDOMAIN') | default(kelt_prefix ~ '-placement', true) }}"
-# NodePort the in-cluster front-door (phase 09) listens on; the Cloudflare wildcard
-# tunnel points *.<base> here. Front-door routes by Host to each service.
-frontdoor_nodeport: 31500
+# Browser-facing origin of each surface: <scheme>://<subdomain>.<base> when
+# external_base_domain is set, else the LAN NodePort on the worker; the env
+# override wins. Keycloak's redirect URIs and web origins (phase 08) and each
+# service's own settings (phases 09-11) read the same values.
+dashboard_external_origin: "{{ lookup('ansible.builtin.env', 'DASHBOARD_EXTERNAL_ORIGIN') | default( ((external_scheme ~ '://' ~ dashboard_subdomain ~ '.' ~ external_base_domain) if external_base_domain else ('http://' ~ hostvars[groups['workers'][0]]['ansible_host'] ~ ':' ~ dashboard_cluster_nodeport)), true) }}"
+# Public origin of the Vite dev frontend; empty in LAN mode (no base domain).
+dashboard_dev_external_url: "{{ lookup('ansible.builtin.env', 'DASHBOARD_DEV_EXTERNAL_URL') | default( ((external_scheme ~ '://' ~ dashboard_dev_subdomain ~ '.' ~ external_base_domain) if external_base_domain else ''), true) }}"
+camara_gateway_external_origin: "{{ lookup('ansible.builtin.env', 'CAMARA_GATEWAY_EXTERNAL_ORIGIN') | default( ((external_scheme ~ '://' ~ camara_subdomain ~ '.' ~ external_base_domain) if external_base_domain else ('http://' ~ hostvars[groups['workers'][0]]['ansible_host'] ~ ':' ~ camara_gateway_nodeport)), true) }}"
+positioning_demo_external_origin: "{{ lookup('ansible.builtin.env', 'POSITIONING_DEMO_EXTERNAL_ORIGIN') | default( ((external_scheme ~ '://' ~ positioning_demo_subdomain ~ '.' ~ external_base_domain) if external_base_domain else ('http://' ~ hostvars[groups['workers'][0]]['ansible_host'] ~ ':' ~ positioning_demo_nodeport)), true) }}"
+placement_editor_external_origin: "{{ lookup('ansible.builtin.env', 'PLACEMENT_EDITOR_EXTERNAL_ORIGIN') | default( ((external_scheme ~ '://' ~ placement_editor_subdomain ~ '.' ~ external_base_domain) if external_base_domain else ('http://' ~ hostvars[groups['workers'][0]]['ansible_host'] ~ ':' ~ placement_gate_nodeport)), true) }}"
+# Keycloak realm, and the path Keycloak is served under (KC_HTTP_RELATIVE_PATH):
+# /auth under the single-origin model (base set), where the dashboard origin
+# proxies /auth/*; the root in LAN mode, where Keycloak has its own NodePort.
+# Every client builds its issuer URL from these, so they are declared once.
+keycloak_realm: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_REALM') | default('5g-testbed', true) }}"
+keycloak_path_prefix: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_PATH_PREFIX') | default(('/auth' if external_base_domain else ''), true) }}"
 
 # Physical RAN Integration (for femtocell/small cell connectivity)
 # See docs/deployment/physical-ran.md for details
 #
-# physical_ran_enabled:  toggled at runtime via env var or extra-vars
+# physical_ran_enabled:  PHYSICAL_RAN_ENABLED in .testbed.env (`kelt ran <nic>`,
+#   the dashboard RAN toggle), which run-phase and provision export.
 # physical_ran_interface: worker VM NIC connected to the RAN network.
 #   Leave empty for auto-detection: the OVS setup script finds the
 #   interface whose IP falls within physical_ran_subnet.
 # physical_ran_subnet: subnet of the physical RAN network
 # amf_physical_ran_ip: IP for AMF on the RAN network (gNB connects here)
 #
-physical_ran_enabled: false
+physical_ran_enabled: "{{ (lookup('ansible.builtin.env', 'PHYSICAL_RAN_ENABLED') or 'false') | bool }}"
 # Skip worker br-ran check before creating n2-physical / patching AMF (not recommended).
 physical_ran_skip_bridge_check: false
 physical_ran_interface: ""
 physical_ran_subnet: "192.168.6.0/24"
 # AMF's IP on the physical RAN network (gNB connects here)
 amf_physical_ran_ip: "192.168.6.150"
+# Worker address on the RAN network: the gNB's default gateway toward N3.
+physical_ran_gateway: "192.168.6.1"
 
 # Bridge physical RAN to both N2 and N3 when using real gNB/UE.
 # This enables NGAP (control plane) and GTP-U (user plane) end-to-end.
@@ -287,7 +418,7 @@ northbound_image_names:
   location_app:       location-app
 northbound_image_tags:
   positioning_engine: "0.17.0"
-  camara_gateway:     "0.17.0"
+  camara_gateway:     "0.18.0"
   placement_editor:   "0.17.3"
   synthetic_adapter:  "0.17.1"
   wifi_adapter:       "0.17.4"

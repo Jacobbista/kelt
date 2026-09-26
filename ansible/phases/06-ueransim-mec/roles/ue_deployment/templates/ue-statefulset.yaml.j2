@@ -9,7 +9,7 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: ue-cell-{{ cell.id }}
-  namespace: {{ namespace }}
+  namespace: {{ namespace_5g }}
   labels:
     app: ue
     component: ue
@@ -54,7 +54,7 @@ spec:
             - name: K8S_API
               value: "https://{{ k8s_api_server }}"
             - name: NAMESPACE
-              value: "{{ namespace }}"
+              value: "{{ namespace_5g }}"
             - name: GNB_NAME
               value: "{{ cell.gnb.name }}"
             - name: DISCOVERY_TOKEN
@@ -129,6 +129,17 @@ spec:
               APNS=({% for ue in cell.ues %} "{{ ue.apn }}"{% if not loop.last %} {% endif %}{% endfor %})
               SST=({% for ue in cell.ues %} "{{ ue.slice.sst }}"{% if not loop.last %} {% endif %}{% endfor %})
               SD=({% for ue in cell.ues %} "{{ ue.slice.sd }}"{% if not loop.last %} {% endif %}{% endfor %})
+{% set subs = (lookup('file', subscribers_file) | from_json).subscribers %}
+{% set keys = [] %}
+{% for ue in cell.ues %}
+{% set imsi = ueransim_topology.defaults.mcc ~ ueransim_topology.defaults.mnc ~ ueransim_topology.defaults.imsi_msin_base ~ ue.supi_suffix %}
+{% set match = subs | selectattr('imsi', 'equalto', imsi) | list %}
+{% if not match %}{{ ("UE imsi-" ~ imsi ~ " has no subscriber in " ~ subscribers_file) | mandatory }}{% endif %}
+{% set _ = keys.append(match[0].security) %}
+{% endfor %}
+              KEYS=({% for k in keys %} "{{ k.k }}"{% if not loop.last %} {% endif %}{% endfor %})
+              OPS=({% for k in keys %} "{{ k.opc or k.op }}"{% if not loop.last %} {% endif %}{% endfor %})
+              OPTYPES=({% for k in keys %} "{{ 'OPC' if k.opc else 'OP' }}"{% if not loop.last %} {% endif %}{% endfor %})
               SUPI=${SUPIS[$ORD]}
               APN=${APNS[$ORD]}
               UE_CFG=/UERANSIM/config/ue-${ORD}.yaml
@@ -140,9 +151,9 @@ spec:
               homeNetworkPublicKey: "5a8d38864820197c3394b92613b20b91633cbd897119273bf8e4a6f4eec0a650"
               homeNetworkPublicKeyId: 1
               routingIndicator: "0000"
-              key: "{{ ueransim_topology.defaults.key_template }}"
-              op: "{{ ueransim_topology.defaults.op }}"
-              opType: "OP"
+              key: "${KEYS[$ORD]}"
+              op: "${OPS[$ORD]}"
+              opType: "${OPTYPES[$ORD]}"
               amf: "8000"
               imei: "356938035643803"
               imeiSv: "4370816125816151"

@@ -19,6 +19,7 @@ Thumbs.db
 .physical_ran_bridge_applied
 .testbed.env
 .testbed.secrets
+.testbed.subscribers.json
 *.vmdk
 *.vdi
 *.vbox
@@ -69,3 +70,7 @@ kelt-todo.md
 
 # Agent skills installed locally (reference material, not app code)
 .claude/skills/
+
+# Local working notes (design specs, plans): never committed, never published
+.local/
+.superpowers/

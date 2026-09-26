@@ -1,9 +1,8 @@
 ---
 # APPS PLATFORM
-# Namespaces the edge apps platform uses: `apps_namespace` (mec) is where MEC apps
-# deploy via the dashboard Apps page; `apps_registry_namespace` (apps) holds the
-# local registry. Both ensured idempotently (mec usually already exists from the
-# overlay/MEC phases). See docs/architecture/edge-apps.md.
+# Namespaces the edge apps platform uses: `apps_namespace` is where apps deploy
+# via the dashboard Apps page; `registry_namespace` holds the local registry.
+# Both ensured idempotently. See docs/architecture/namespaces.md.
 
 - name: Ensure edge-apps namespaces exist
   kubernetes.core.k8s:
@@ -19,6 +18,16 @@
     kubeconfig: "{{ kubeconfig_path }}"
   loop:
     - "{{ apps_namespace }}"
-    - "{{ apps_registry_namespace }}"
+    - "{{ registry_namespace }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+# Thesis measurement server on n6m (docs/architecture/edge-apps.md). Removed
+# when the flag is off, so turning it off leaves nothing behind.
+- name: Measurement server on n6m
+  kubernetes.core.k8s:
+    state: "{{ apps_measurement_server_enabled | bool | ternary('present', 'absent') }}"
+    definition: "{{ lookup('template', 'measurement-server.yaml.j2') | from_yaml }}"
+    kubeconfig: "{{ kubeconfig_path }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true

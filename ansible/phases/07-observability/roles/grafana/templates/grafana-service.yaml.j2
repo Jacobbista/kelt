@@ -10,6 +10,6 @@ spec:
   selector:
     app: grafana
   ports:
-    - port: 3000
-      targetPort: 3000
+    - port: {{ grafana.port }}
+      targetPort: {{ grafana.port }}
       nodePort: {{ grafana.nodeport }}

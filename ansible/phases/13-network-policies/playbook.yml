@@ -1,0 +1,20 @@
+---
+# PHASE 13: Network policies
+#
+# Kubernetes NetworkPolicies on the pod network (eth0): each listed namespace
+# accepts only the flows declared in roles/network_policies/defaults/main.yml,
+# and the apps namespace (third-party code) is also limited on the way out.
+# Runs last because it needs the namespaces to exist; a namespace that does not
+# exist yet is skipped and picked up on the next run. The overlay planes are not
+# covered here: the worker plane filter owns them (phase 04).
+# `network_policies_enabled: false` in all.yml removes every policy it manages.
+# See docs/architecture/namespaces.md.
+
+- name: "PHASE 13 | Network policies"
+  hosts: masters
+  become: false
+  tags:
+    - phase13
+    - network-policies
+  roles:
+    - roles/network_policies

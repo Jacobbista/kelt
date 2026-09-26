@@ -13,7 +13,7 @@ data:
       filename: /tmp/positions.yaml
 
     clients:
-      - url: http://loki.{{ monitoring_namespace }}.svc:3100/loki/api/v1/push
+      - url: http://loki.{{ monitoring_namespace }}.svc:{{ loki_service_port }}/loki/api/v1/push
 
     scrape_configs:
       # Pod logs

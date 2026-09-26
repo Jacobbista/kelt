@@ -2,6 +2,8 @@ bind-address: "{{ k3s_bind_address }}"
 advertise-address: "{{ k3s_advertise_address }}"
 node-ip: "{{ k3s_node_ip }}"
 cluster-cidr: "{{ cluster_cidr }}"
+service-cidr: "{{ service_cidr }}"
+cluster-dns: "{{ cluster_dns_ip }}"
 flannel-backend: "{{ flannel_backend }}"
 flannel-iface: "{{ k3s_flannel_iface }}"
 disable:

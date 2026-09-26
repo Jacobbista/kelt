@@ -21,7 +21,7 @@
       kind: NetworkAttachmentDefinition
       metadata:
         name: "n2-cell-{{ item }}"
-        namespace: "{{ namespace }}"
+        namespace: "{{ namespace_5g }}"
       spec:
         config: >-
           {{
@@ -29,12 +29,12 @@
               "cniVersion": "0.3.1",
               "type": "ovs",
               "bridge": ovs_bridge_prefix_n2 ~ item|string,
-              "mtu": cell_mtu,
+              "mtu": cell_mtu | int,
               "ipam": {
                 "type": "whereabouts",
                 "range": cell_n2_subnet_prefix ~ "." ~ item|string ~ ".0/" ~ subnet_mask,
-                "range_start": cell_n2_subnet_prefix ~ "." ~ item|string ~ "." ~ ip_range_start,
-                "range_end": cell_n2_subnet_prefix ~ "." ~ item|string ~ "." ~ ip_range_end
+                "range_start": cell_n2_subnet_prefix ~ "." ~ item|string ~ "." ~ cell_pool_start_suffix|string,
+                "range_end": cell_n2_subnet_prefix ~ "." ~ item|string ~ "." ~ cell_pool_end_suffix|string
               }
             }
             | to_json
@@ -52,7 +52,7 @@
       kind: NetworkAttachmentDefinition
       metadata:
         name: "n3-cell-{{ item }}"
-        namespace: "{{ namespace }}"
+        namespace: "{{ namespace_5g }}"
       spec:
         config: >-
           {{
@@ -60,12 +60,12 @@
               "cniVersion": "0.3.1",
               "type": "ovs",
               "bridge": ovs_bridge_prefix_n3 ~ item|string,
-              "mtu": cell_mtu,
+              "mtu": cell_mtu | int,
               "ipam": {
                 "type": "whereabouts",
                 "range": cell_n3_subnet_prefix ~ "." ~ item|string ~ ".0/" ~ subnet_mask,
-                "range_start": cell_n3_subnet_prefix ~ "." ~ item|string ~ "." ~ ip_range_start,
-                "range_end": cell_n3_subnet_prefix ~ "." ~ item|string ~ "." ~ ip_range_end
+                "range_start": cell_n3_subnet_prefix ~ "." ~ item|string ~ "." ~ cell_pool_start_suffix|string,
+                "range_end": cell_n3_subnet_prefix ~ "." ~ item|string ~ "." ~ cell_pool_end_suffix|string
               }
             }
             | to_json
@@ -78,7 +78,7 @@
   kubernetes.core.k8s_info:
     api_version: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
-    namespace: "{{ namespace }}"
+    namespace: "{{ namespace_5g }}"
     kubeconfig: "{{ kubeconfig_path }}"
   register: nads
   retries: 10

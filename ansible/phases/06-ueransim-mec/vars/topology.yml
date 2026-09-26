@@ -34,8 +34,8 @@ ueransim_topology:
     mcc: "001" # Mobile Country Code
     mnc: "01" # Mobile Network Code
     imsi_msin_base: "1234567" # MSIN base (IMSI = MCC + MNC + MSIN_base + suffix, total 15 digits)
-    key_template: "8baf473f2f8fd09487cccbd7097c6862" # Base authentication key (K)
-    op: "11111111111111111111111111111111" # Operator key (OP/OPC)
+    # K and OP/OPc of each UE come from its subscriber in the local subscribers_file
+    # (all.yml), matched by IMSI: SIM keys never live in the repo.
     amf_n2_ip: "{{ amf_n2_ip }}" # AMF in datacenter (worker)
     image: "jacobbista/comnetsemu-ueransim:latest" # UERANSIM container image
     node_defaults:

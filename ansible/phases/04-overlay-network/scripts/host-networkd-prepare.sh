@@ -1,19 +1,22 @@
 #!/usr/bin/env sh
 set -e
 
-echo "🔧 Preparing host systemd-networkd to ignore OVS (.link on host)..."
+echo "🔧 Preparing host systemd-networkd to ignore OVS interfaces..."
 
 HOST_NETWORK_DIR="/host/etc/systemd/network"
 mkdir -p "$HOST_NETWORK_DIR"
 
-cat > "$HOST_NETWORK_DIR/99-ovs-unmanaged.link" << 'EOF'
+# `Unmanaged=` is a .network option; a .link file cannot carry it. The name sorts
+# before the netplan-generated files so it wins the match.
+cat > "$HOST_NETWORK_DIR/05-kelt-ovs-unmanaged.network" << 'EOF'
 [Match]
 Name=br-* vxlan-* ovs-system
 
 [Link]
 Unmanaged=yes
 EOF
-echo "  ✅ Written /etc/systemd/network/99-ovs-unmanaged.link on host"
+rm -f "$HOST_NETWORK_DIR/99-ovs-unmanaged.link"
+echo "  ✅ Written /etc/systemd/network/05-kelt-ovs-unmanaged.network on host"
 
 # (Optional) manage only physical NICs; avoid patterns that match br-*/vxlan-*
 # cat > "$HOST_NETWORK_DIR/10-phys.network" << 'EOF'

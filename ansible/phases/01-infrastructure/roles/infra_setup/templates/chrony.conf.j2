@@ -7,7 +7,7 @@
 {% if inventory_hostname in groups['masters'] %}
 pool {{ ntp_pool | default('pool.ntp.org') }} iburst maxsources 4
 # Serve time to cluster nodes on private network
-allow 192.168.56.0/24
+allow {{ mgmt_subnet }}
 {% else %}
 server {{ cluster_ntp_server }} iburst prefer
 pool {{ ntp_pool | default('pool.ntp.org') }} iburst maxsources 2

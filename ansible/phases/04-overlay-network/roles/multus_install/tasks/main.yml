@@ -12,7 +12,7 @@
       kind: Namespace
       metadata: { name: "{{ item }}" }
     kubeconfig: "/home/vagrant/kubeconfig"
-  loop: ["5g", "mec"]
+  loop: ["{{ namespace_5g }}", "{{ apps_namespace }}"]
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
@@ -683,7 +683,7 @@
   kubernetes.core.k8s_info:
     api_version: v1
     kind: Pod
-    namespace: 5g
+    namespace: "{{ namespace_5g }}"
     kubeconfig: "/home/vagrant/kubeconfig"
   register: multus_list_check
   failed_when: multus_list_check.failed | default(false)
@@ -692,46 +692,262 @@
 
 # ==============================================================
 # CREATE NETWORK ATTACHMENT DEFINITIONS (NADs)
-# These are used by pods with k8s.v1.cni.cncf.io/networks annotations
+# These are used by pods with k8s.v1.cni.cncf.io/networks annotations.
 #
-# Static IPs are requested the repo's proven way: `ips` in the Multus annotation
-# (like amf/smf/upf), with the target excluded from the whereabouts range. No
-# per-NAD `routes` are injected here: a UE-pool route on a NAD the UPF also attaches
-# (n6m) hijacks UE downlink. See docs/architecture/edge-apps.md.
+# Two NADs per plane, same bridge (see overlay_networks in defaults):
+#   <plane>-net     Whereabouts pool, for attachments that need no fixed address
+#   <plane>-static  static IPAM, for fixed endpoints: the pod gets exactly the
+#                   address in its `ips` annotation and nothing else
+# A fixed endpoint on the pool NAD would get a pool address as well (Whereabouts
+# allocates, Multus adds `ips` on top), so fixed endpoints use -static only.
+# No `routes` on these NADs: a UE-pool route on a NAD the UPF also attaches (n6m)
+# hijacks UE downlink. See docs/architecture/edge-apps.md. The one NAD with a
+# route is the UPF's own n3-upf-static (the physical RAN return route, below).
 # ==============================================================
 
-- name: Create NADs
+# A NAD is cluster-wide, so its Whereabouts kubeconfig path must exist on every
+# node: /etc/cni/net.d is the edge's CNI dir and a symlink on the worker (above).
+- name: Create pool NADs (Whereabouts)
   kubernetes.core.k8s:
     state: present
-    definition: >-
-      {{
-        {
-          "apiVersion": "k8s.cni.cncf.io/v1",
-          "kind": "NetworkAttachmentDefinition",
-          "metadata": {"name": item.name, "namespace": item.ns},
-          "spec": {
-            "config": (
-              ({
-                "cniVersion": "0.3.1",
-                "type": (use_ovs_cni | ternary("ovs","bridge")),
-                (use_ovs_cni | ternary("bridge","bridge")): item.bridge,
-                "mtu": (n6_data_mtu if item.name == "n6c-net" else overlay_mtu)
-              } | combine(
-                ({"ipam": {"type": "whereabouts","range": item.cidr,"range_start": item.start,"range_end": item.end,"gateway": item.gw,"exclude": (item.exclude | default([])),"kubernetes": {"kubeconfig": cni_conf_dir_worker + "/" + whereabouts_kubeconfig_relpath}}}
-                 if item.ns == "5g"
-                 else {"ipam": {"type": "whereabouts","range": item.cidr,"range_start": item.start,"range_end": item.end,"gateway": item.gw,"exclude": (item.exclude | default([])),"kubernetes": {"kubeconfig": cni_conf_dir_edge + "/" + whereabouts_kubeconfig_relpath}}})
-                if (item.ipam | default("whereabouts")) == "whereabouts"
-                else ({"ipam": {"type": "static"}}
-                      if (item.ipam | default("")) == "static"
-                      else {})
-              ))
-              | to_json
-            )
-          }
-        }
-      }}
-    kubeconfig: "/home/vagrant/kubeconfig"
+    definition:
+      apiVersion: k8s.cni.cncf.io/v1
+      kind: NetworkAttachmentDefinition
+      metadata:
+        name: "{{ item.name }}"
+        namespace: "{{ item.ns }}"
+      spec:
+        config: >-
+          {{ {
+               "cniVersion": "0.3.1",
+               "type": (use_ovs_cni | ternary("ovs", "bridge")),
+               "bridge": item.bridge,
+               "mtu": (n6_data_mtu | int if item.name == "n6c-net" else overlay_mtu | int),
+               "ipam": {
+                 "type": "whereabouts",
+                 "range": item.cidr,
+                 "range_start": item.start,
+                 "range_end": item.end,
+                 "gateway": item.gw,
+                 "exclude": (item.exclude | default([])),
+                 "routes": (item.routes | default([])),
+                 "kubernetes": {"kubeconfig": cni_conf_dir_edge ~ "/" ~ whereabouts_kubeconfig_relpath}
+               }
+             } | to_json }}
+    kubeconfig: "{{ kubeconfig_path }}"
   loop: "{{ overlay_networks }}"
+  loop_control:
+    label: "{{ item.ns }}/{{ item.name }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  register: pool_nad_results
+  run_once: true
+
+- name: Create static NADs (fixed endpoints)
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: k8s.cni.cncf.io/v1
+      kind: NetworkAttachmentDefinition
+      metadata:
+        name: "{{ item.name | regex_replace('-net$', '-static') }}"
+        namespace: "{{ item.ns }}"
+      spec:
+        config: >-
+          {{ {
+               "cniVersion": "0.3.1",
+               "type": (use_ovs_cni | ternary("ovs", "bridge")),
+               "bridge": item.bridge,
+               "mtu": (n6_data_mtu | int if item.name == "n6c-net" else overlay_mtu | int),
+               "ipam": {"type": "static", "routes": (item.routes | default([]))}
+             } | to_json }}
+    kubeconfig: "{{ kubeconfig_path }}"
+  loop: "{{ overlay_networks }}"
+  loop_control:
+    label: "{{ item.ns }}/{{ item.name | regex_replace('-net$', '-static') }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  register: static_nad_results
+  run_once: true
+
+# Runs before the UPF N3 NAD (its RAN route) and the n2-physical NAD below;
+# the OVS role earlier in this phase has already created br-ran when enabled.
+- name: Physical RAN preflight — detect br-ran on worker
+  ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/physical_ran_br_preflight.yml"
+  when:
+    - physical_ran_enabled | default(false) | bool
+    - not (physical_ran_skip_bridge_check | default(false) | bool)
+
+# The UPF's own N3 attachment. With the physical RAN on, the route back to the
+# gNB subnet belongs to the interface, so it exists from the moment the pod is
+# attached. Added later by an init script, it left a window of a few seconds in
+# which the UPF answered the gNB through eth0 (dropped by the plane filter).
+# The netshoot probe keeps the route-less n3-static.
+- name: Create the UPF N3 static NAD
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: k8s.cni.cncf.io/v1
+      kind: NetworkAttachmentDefinition
+      metadata:
+        name: n3-upf-static
+        namespace: "{{ namespace_5g }}"
+      spec:
+        config: >-
+          {{ {
+               "cniVersion": "0.3.1",
+               "type": (use_ovs_cni | ternary("ovs", "bridge")),
+               "bridge": "br-n3",
+               "mtu": overlay_mtu | int,
+               "ipam": {"type": "static", "routes":
+                 ([{"dst": physical_ran_subnet, "gw": n3_gateway}]
+                  if ((physical_ran_enabled | default(false) | bool)
+                      and ((physical_ran_skip_bridge_check | default(false) | bool)
+                           or (physical_ran_bridge_available | default(false) | bool)))
+                  else [])}
+             } | to_json }}
+    kubeconfig: "{{ kubeconfig_path }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  register: upf_n3_nad_result
+  run_once: true
+
+# The UPF's own N6m attachment. It carries no routes: the UPF owns the UE pools
+# (ogstun), and the mec NADs route them through the UPF, i.e. through itself.
+- name: Create the UPF N6m static NAD
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: k8s.cni.cncf.io/v1
+      kind: NetworkAttachmentDefinition
+      metadata:
+        name: n6m-static
+        namespace: "{{ namespace_5g }}"
+      spec:
+        config: >-
+          {{ {
+               "cniVersion": "0.3.1",
+               "type": (use_ovs_cni | ternary("ovs", "bridge")),
+               "bridge": "br-n6m",
+               "mtu": overlay_mtu | int,
+               "ipam": {"type": "static"}
+             } | to_json }}
+    kubeconfig: "{{ kubeconfig_path }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  register: upf_n6m_nad_result
+  run_once: true
+
+# A NAD is read when a pod is created, so a changed NAD (address range, routes)
+# reaches running workloads only when they are recreated. Each Deployment on an
+# overlay NAD carries a hash of the configs of the NADs it uses; when that hash
+# changes the patch rolls the Deployment, otherwise it is a no-op.
+- name: Read Deployments attached to overlay NADs
+  kubernetes.core.k8s_info:
+    kind: Deployment
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: nad_attached_deployments
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Hash the overlay NAD configs each Deployment uses
+  set_fact:
+    nad_config_hashes: >-
+      {%- set configs = {} -%}
+      {%- for r in pool_nad_results.results + static_nad_results.results + [upf_n3_nad_result, upf_n6m_nad_result] -%}
+        {%- set _ = configs.update({r.result.metadata.namespace ~ '/' ~ r.result.metadata.name: r.result.spec.config}) -%}
+      {%- endfor -%}
+      {%- set out = [] -%}
+      {%- for dep in nad_attached_deployments.resources -%}
+        {%- set raw = (dep.spec.template.metadata.annotations | default({})).get('k8s.v1.cni.cncf.io/networks', '') -%}
+        {%- if raw.startswith('[') -%}
+          {%- set used = [] -%}
+          {%- for n in raw | from_json -%}
+            {%- set key = (n.namespace | default(dep.metadata.namespace)) ~ '/' ~ n.name -%}
+            {%- if key in configs -%}
+              {%- set _ = used.append(key ~ '=' ~ configs[key]) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {%- if used -%}
+            {%- set _ = out.append({'name': dep.metadata.name, 'namespace': dep.metadata.namespace, 'hash': (used | sort | join('\n')) | hash('sha256') | truncate(16, true, '')}) -%}
+          {%- endif -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+  run_once: true
+
+- name: Roll Deployments whose overlay NADs changed
+  kubernetes.core.k8s:
+    state: patched
+    kind: Deployment
+    name: "{{ item.name }}"
+    namespace: "{{ item.namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition:
+      spec:
+        template:
+          metadata:
+            annotations:
+              kelt.io/nad-config: "{{ item.hash }}"
+  loop: "{{ nad_config_hashes }}"
+  loop_control:
+    label: "{{ item.namespace }}/{{ item.name }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+# Workloads deployed before the static NADs existed request their fixed address
+# (`ips`) on the pool NAD and so carry two addresses. Move each such attachment to
+# the plane's static NAD. Covers the dashboard-managed namespaces (edge apps, push
+# adapters); the 5G core NFs are re-rendered by phase 05 with -static directly.
+- name: Read Deployments that may carry fixed overlay addresses
+  kubernetes.core.k8s_info:
+    kind: Deployment
+    namespace: "{{ item }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: fixed_ip_candidates
+  loop: "{{ overlay_networks | map(attribute='ns') | unique | list + ['positioning'] }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Find attachments that request a fixed address on a pool NAD
+  set_fact:
+    fixed_ip_moves: >-
+      {%- set pool_nads = overlay_networks | map(attribute='name') | list -%}
+      {%- set out = [] -%}
+      {%- for res in fixed_ip_candidates.results -%}
+        {%- for dep in res.resources | default([]) -%}
+          {%- set raw = (dep.spec.template.metadata.annotations | default({})).get('k8s.v1.cni.cncf.io/networks', '') -%}
+          {%- if raw.startswith('[') -%}
+            {%- set nets = raw | from_json -%}
+            {%- set moved = [] -%}
+            {%- for n in nets -%}
+              {%- if 'ips' in n and n.name in pool_nads -%}
+                {%- set _ = moved.append(n | combine({'name': n.name | regex_replace('-net$', '-static')})) -%}
+              {%- else -%}
+                {%- set _ = moved.append(n) -%}
+              {%- endif -%}
+            {%- endfor -%}
+            {%- if moved != nets -%}
+              {%- set _ = out.append({'name': dep.metadata.name, 'namespace': dep.metadata.namespace, 'networks': moved}) -%}
+            {%- endif -%}
+          {%- endif -%}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ out }}
+  run_once: true
+
+- name: Move fixed overlay addresses to the static NADs
+  kubernetes.core.k8s:
+    state: patched
+    kind: Deployment
+    name: "{{ item.name }}"
+    namespace: "{{ item.namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition:
+      spec:
+        template:
+          metadata:
+            annotations:
+              k8s.v1.cni.cncf.io/networks: "{{ item.networks | to_json }}"
+  loop: "{{ fixed_ip_moves }}"
+  loop_control:
+    label: "{{ item.namespace }}/{{ item.name }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
@@ -743,12 +959,6 @@
 # Preflight matches dashboard RanService.enable(): require br-ran before NAD creation.
 # ==============================================================
 
-- name: Physical RAN preflight — detect br-ran on worker
-  ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/physical_ran_br_preflight.yml"
-  when:
-    - physical_ran_enabled | default(false) | bool
-    - not (physical_ran_skip_bridge_check | default(false) | bool)
-
 - name: Create Physical RAN NAD (n2-physical)
   kubernetes.core.k8s:
     state: present
@@ -758,7 +968,7 @@
       kind: NetworkAttachmentDefinition
       metadata:
         name: n2-physical
-        namespace: 5g
+        namespace: "{{ namespace_5g }}"
       spec:
         config: "{{ {'cniVersion': '0.3.1', 'type': (use_ovs_cni | ternary('ovs','bridge')), 'bridge': 'br-ran', 'ipam': {'type': 'static'}} | to_json }}"
   delegate_to: "{{ groups['masters'][0] }}"
@@ -785,7 +995,7 @@
     api_version: apps/v1
     kind: Deployment
     name: amf
-    namespace: 5g
+    namespace: "{{ namespace_5g }}"
     kubeconfig: "/home/vagrant/kubeconfig"
   register: amf_dep_state
   delegate_to: "{{ groups['masters'][0] }}"
@@ -817,7 +1027,7 @@
   kubernetes.core.k8s:
     state: absent
     name: n2-physical
-    namespace: 5g
+    namespace: "{{ namespace_5g }}"
     api_version: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     kubeconfig: "/home/vagrant/kubeconfig"

@@ -15,20 +15,16 @@ echo "  CELL_COUNT=${CELL_COUNT:-0}"
 echo "  RAN_INTERFACE=${RAN_INTERFACE:-}"
 echo "  RAN_BRIDGE_MODE=${RAN_BRIDGE_MODE:-disabled}"
 echo "  RAN_SUBNET=${RAN_SUBNET:-}"
-# Set by ds-net-setup DaemonSet from Ansible (group_vars); defaults match overlay / ogstun sizing.
-OVERLAY_MTU="${OVERLAY_MTU:-1450}"
-N6_DATA_MTU="${N6_DATA_MTU:-1400}"
-echo "  OVERLAY_MTU=${OVERLAY_MTU}"
-echo "  N6_DATA_MTU=${N6_DATA_MTU}"
 
-# VXLAN VNIs per interface (set by the OVS DaemonSet from all.yml; defaults match docs).
-N1_VNI="${N1_VNI:-101}"
-N2_VNI="${N2_VNI:-102}"
-N3_VNI="${N3_VNI:-103}"
-N4_VNI="${N4_VNI:-104}"
-N6E_VNI="${N6E_VNI:-106}"
-N6C_VNI="${N6C_VNI:-107}"
-N6M_VNI="${N6M_VNI:-108}"
+# MTUs, VNIs and bridge gateways come from the 5G network plan in all.yml via the
+# ds-net-setup DaemonSet env. No fallbacks: a missing value is a deploy bug.
+for v in OVERLAY_MTU N6_DATA_MTU \
+         N1_VNI N2_VNI N3_VNI N4_VNI N6E_VNI N6C_VNI N6M_VNI \
+         N1_GATEWAY_CIDR N2_GATEWAY_CIDR N3_GATEWAY_CIDR N4_GATEWAY_CIDR \
+         N6E_GATEWAY_CIDR N6C_GATEWAY_CIDR N6M_GATEWAY_CIDR; do
+  : "${!v:?$v must be set by the ds-net-setup DaemonSet}"
+  echo "  $v=${!v}"
+done
 
 BRIDGES=(br-n1 br-n2 br-n3 br-n4 br-n6e br-n6c br-n6m)
 
@@ -137,15 +133,20 @@ fi
 # Assign gateway IPs expected by Whereabouts/IPAM.
 # Use worker as gateway owner for shared N1/N2/N3/N4 domains.
 if [[ "$NODE_NAME" == "worker" ]]; then
-  ensure_bridge_ip br-n1 10.201.0.1/24
-  ensure_bridge_ip br-n2 10.202.0.1/24
-  ensure_bridge_ip br-n3 10.203.0.1/24
-  ensure_bridge_ip br-n4 10.204.0.1/24
-  ensure_bridge_ip br-n6c 10.207.0.1/24
-  ensure_bridge_ip br-n6m 10.208.0.1/24
+  ensure_bridge_ip br-n1 "$N1_GATEWAY_CIDR"
+  ensure_bridge_ip br-n2 "$N2_GATEWAY_CIDR"
+  ensure_bridge_ip br-n3 "$N3_GATEWAY_CIDR"
+  ensure_bridge_ip br-n4 "$N4_GATEWAY_CIDR"
+  ensure_bridge_ip br-n6c "$N6C_GATEWAY_CIDR"
+  ensure_bridge_ip br-n6m "$N6M_GATEWAY_CIDR"
+  # A worker bridge carries only its plane gateway. Older deploys added a
+  # secondary N3 address for the UPF return route, which now goes via the gateway.
+  for stale in $(ip -o -4 addr show dev br-n3 | awk '{print $4}'); do
+    [[ "$stale" == "$N3_GATEWAY_CIDR" ]] || ip addr del "$stale" dev br-n3
+  done
 elif [[ "$NODE_NAME" == "edge" ]]; then
   # N6e local gateway on edge (MEC side)
-  ensure_bridge_ip br-n6e 10.206.0.1/24
+  ensure_bridge_ip br-n6e "$N6E_GATEWAY_CIDR"
 fi
 
 # Create per-cell bridges (for N2 and N3 per cell)
@@ -187,33 +188,55 @@ bridge_ran_interface() {
   local iface="$1" bridge="$2" tag="${3:-}"
   if ovs-vsctl list-ports "$bridge" | grep -q "^${iface}$"; then
     echo "  -> $iface already on $bridge"
-    return 0
-  fi
-  echo "  -> add-port $bridge $iface (physical RAN)"
-  if [[ -n "$tag" ]]; then
-    ovs-vsctl --may-exist add-port "$bridge" "$iface" tag="$tag"
   else
-    ovs-vsctl --may-exist add-port "$bridge" "$iface"
+    echo "  -> add-port $bridge $iface (physical RAN)"
+    if [[ -n "$tag" ]]; then
+      ovs-vsctl --may-exist add-port "$bridge" "$iface" tag="$tag"
+    else
+      ovs-vsctl --may-exist add-port "$bridge" "$iface"
+    fi
   fi
+  # networkd does not manage the NIC (see below), so after a reboot nothing
+  # else brings it up while OVS still lists it as a port.
   ip link set "$iface" up || true
 }
 
 if [[ "${RAN_BRIDGE_MODE:-disabled}" != "disabled" ]] && [[ "$NODE_NAME" == "worker" ]]; then
   RAN_IF="${RAN_INTERFACE:-}"
 
-  # Auto-detect RAN interface from RAN_SUBNET when not explicitly set.
-  # Vagrant assigns the worker an IP inside physical_ran_subnet, so we
-  # look for the NIC carrying an address in that range.
+  # Auto-detect the RAN NIC when not explicitly set. Once bridged it is the
+  # physical port of br-ran (kept in the OVS database across reboots; a physical
+  # NIC has a sysfs device link, ovs-cni veths do not). On the first setup it is
+  # the physical NIC carrying the address Vagrant gave it in physical_ran_subnet.
+  if [[ -z "$RAN_IF" ]] && ovs-vsctl br-exists br-ran 2>/dev/null; then
+    for p in $(ovs-vsctl list-ports br-ran); do
+      [[ -e "/sys/class/net/$p/device" ]] && { RAN_IF="$p"; break; }
+    done
+  fi
   if [[ -z "$RAN_IF" ]] && [[ -n "${RAN_SUBNET:-}" ]]; then
     RAN_PREFIX=$(echo "$RAN_SUBNET" | cut -d'/' -f1 | sed 's/\.[0-9]*$//')
     RAN_PREFIX_RE=$(echo "$RAN_PREFIX" | sed 's/\./\\./g')
-    RAN_IF=$(ip -o addr show | grep "${RAN_PREFIX_RE}\." | awk '{print $2}' | head -1)
+    for p in $(ip -o addr show | grep "${RAN_PREFIX_RE}\." | awk '{print $2}'); do
+      [[ -e "/sys/class/net/$p/device" ]] && { RAN_IF="$p"; break; }
+    done
   fi
-  
+
   if [[ -n "$RAN_IF" ]] && ip link show "$RAN_IF" &>/dev/null; then
     echo "🔌 Bridging physical RAN interface: $RAN_IF (mode: ${RAN_BRIDGE_MODE})"
-    
-    # Remove IP from RAN interface (it will be part of OVS bridge)
+
+    # The NIC is an OVS port: its address belongs on br-ran. The Vagrant netplan
+    # configures it with that address, and systemd-networkd re-applies it whenever
+    # it restarts, which sends traffic out of the NIC and around the bridge. Take
+    # the NIC out of networkd's hands first, then remove the address.
+    # See docs/deployment/physical-ran.md (Who Owns the RAN Address)
+    printf '[Match]\nName=%s\n\n[Link]\nUnmanaged=yes\n' "$RAN_IF" \
+      > /host/etc/systemd/network/05-kelt-ran-unmanaged.network
+    nsenter -t 1 -m -u -i -n -p -- networkctl reload || true
+    # The reload is asynchronous: flush only once networkd has let go of the NIC.
+    for _ in $(seq 1 20); do
+      nsenter -t 1 -m -u -i -n -p -- networkctl list "$RAN_IF" 2>/dev/null | grep -q unmanaged && break
+      sleep 0.5
+    done
     ip addr flush dev "$RAN_IF" 2>/dev/null || true
     
     case "${RAN_BRIDGE_MODE}" in
@@ -240,15 +263,10 @@ if [[ "${RAN_BRIDGE_MODE:-disabled}" != "disabled" ]] && [[ "$NODE_NAME" == "wor
         ovs-vsctl --may-exist add-port br-n3 patch-n3-ran -- \
           set interface patch-n3-ran type=patch options:peer=patch-ran-n3
         echo "  Created br-ran with patches to br-n2 and br-n3"
-        # Assign gateway IP to br-ran so the worker can route between
-        # the physical RAN subnet and the overlay N2/N3 networks.
-        # The gNB uses this as its default gateway.
-        if [[ -n "${RAN_SUBNET:-}" ]]; then
-          RAN_GW_IP=$(echo "$RAN_SUBNET" | sed 's|\.[0-9]*/|.1/|')
-          ensure_bridge_ip br-ran "$RAN_GW_IP"
-          # Secondary router IP on br-n3 for UPF return traffic.
-          ensure_bridge_ip br-n3 10.203.0.254/24
-        fi
+        # Gateway IP on br-ran so the worker can route between the physical
+        # RAN subnet and the overlay N2/N3 networks; the gNB uses it as its
+        # default gateway. The UPF reaches the RAN back through the N3 gateway.
+        ensure_bridge_ip br-ran "$RAN_GATEWAY_CIDR"
         ;;
       *)
         echo "⚠️  Unknown RAN_BRIDGE_MODE: ${RAN_BRIDGE_MODE}, skipping"
@@ -273,6 +291,104 @@ else
     ovs-vsctl --if-exists del-br br-ran
     echo "  -> br-ran removed"
   fi
+  # Hand the RAN NIC back to networkd (the Vagrant netplan restores its address).
+  if [[ "$NODE_NAME" == "worker" ]] && [[ -f /host/etc/systemd/network/05-kelt-ran-unmanaged.network ]]; then
+    rm -f /host/etc/systemd/network/05-kelt-ran-unmanaged.network
+    nsenter -t 1 -m -u -i -n -p -- networkctl reload || true
+    echo "  -> RAN NIC returned to systemd-networkd"
+  fi
+fi
+
+# ============================================================
+# Plane isolation filter (worker only)
+# ============================================================
+# The worker owns the gateway of every overlay bridge, so it can route between
+# any two planes. The filter sees only traffic entering or leaving a plane
+# bridge (br-*); everything else goes on to the Kubernetes rules untouched.
+# Allowed crossings are the transports the architecture has; any other crossing
+# is counted per pair of planes (or plane and non-plane interface) and, in
+# enforce mode, dropped.
+# It lives in its own nftables table, hooked before iptables: the iptables
+# filter table is rewritten periodically by the k3s network components, which
+# resets counters and could reorder rules.
+# See docs/architecture/plane-isolation.md
+apply_plane_filter() {
+  local mode="$1" verdict egress br ruleset=/tmp/kelt-planes.nft
+  case "$mode" in
+    observe) verdict="accept" ;;
+    enforce) verdict="drop" ;;
+    *) echo "❌ PLANE_FILTER_MODE must be observe or enforce, got '$mode'"; exit 1 ;;
+  esac
+  egress="$(ip route show default 2>/dev/null | awk '/default/ {print $5; exit}')"
+
+  local bridges a b
+  bridges="$(ls /sys/class/net | grep '^br-')"
+
+  # A not-allowed match is two rules: a sampling rule with its own rate limit
+  # (one rule's burst never hides another's samples in the kernel log), then the
+  # counting rule. The log prefix carries the rule, spaces as underscores.
+  deny() {  # $1 = nft match, $2 = rule text after "not allowed: "
+    echo "    $1 limit rate 6/minute log prefix \"KELT-PLANES $mode ${2// /_}: \""
+    echo "    $1 counter jump not_allowed comment \"not allowed: $2\""
+  }
+
+  {
+    # Declare then delete so the replace below is atomic and idempotent.
+    echo "table inet kelt_planes"
+    echo "delete table inet kelt_planes"
+    echo "table inet kelt_planes {"
+    echo "  chain not_allowed {"
+    echo "    $verdict"
+    echo "  }"
+    echo "  chain forward {"
+    echo "    type filter hook forward priority filter - 10; policy accept;"
+    # UE addresses live behind the UPF: seeing them outside the plane bridges
+    # (for example an app answering a UE through its pod network) is a leak.
+    deny "ip daddr { $PLANE_UE_POOLS } oifname != \"br-*\"" "to UE pools outside the planes"
+    deny "ip saddr { $PLANE_UE_POOLS } iifname != \"br-*\"" "from UE pools outside the planes"
+    echo "    iifname != \"br-*\" oifname != \"br-*\" accept"
+    # Physical RAN transport toward the AMF (N2) and the UPF (N3), when the RAN
+    # bridge exists (physical RAN on).
+    if [[ " $(echo $bridges) " == *" br-ran "* ]]; then
+      for br in br-n2 br-n3; do
+        echo "    iifname \"br-ran\" oifname \"$br\" counter accept comment \"allowed: br-ran -> $br\""
+        echo "    iifname \"$br\" oifname \"br-ran\" counter accept comment \"allowed: $br -> br-ran\""
+      done
+    fi
+    # N6c internet breakout (NAT on the egress interface).
+    if [[ -n "$egress" ]]; then
+      echo "    iifname \"br-n6c\" oifname \"$egress\" counter accept comment \"allowed: br-n6c -> $egress\""
+      echo "    iifname \"$egress\" oifname \"br-n6c\" ct state established,related counter accept comment \"allowed: $egress -> br-n6c replies\""
+    fi
+    # Everything else is not allowed, counted where it was headed: one rule per
+    # ordered pair of planes, then plane -> anything else (host, pod network),
+    # then anything else -> a plane.
+    for a in $bridges; do
+      for b in $bridges; do
+        [[ "$a" == "$b" ]] || deny "iifname \"$a\" oifname \"$b\"" "$a -> $b"
+      done
+    done
+    for a in $bridges; do
+      deny "iifname \"$a\"" "from $a"
+    done
+    deny "oifname \"br-*\"" "into a plane"
+    echo "  }"
+    echo "}"
+  } > "$ruleset"
+  nft -f "$ruleset"
+
+  # Earlier deploys kept the filter as an iptables chain; remove it.
+  iptables -D FORWARD -j KELT-PLANES 2>/dev/null || true
+  iptables -F KELT-PLANES 2>/dev/null || true
+  iptables -X KELT-PLANES 2>/dev/null || true
+
+  echo "🧱 Plane filter applied (mode: $mode, egress: ${egress:-none})"
+}
+
+if [[ "$NODE_NAME" == "worker" ]]; then
+  : "${PLANE_FILTER_MODE:?PLANE_FILTER_MODE must be set by the ds-net-setup DaemonSet}"
+  : "${PLANE_UE_POOLS:?PLANE_UE_POOLS must be set by the ds-net-setup DaemonSet}"
+  apply_plane_filter "$PLANE_FILTER_MODE"
 fi
 
 echo "🔎 OVS interfaces (name/type/ofport):"

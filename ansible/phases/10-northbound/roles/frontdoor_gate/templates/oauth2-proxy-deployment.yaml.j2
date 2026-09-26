@@ -54,7 +54,7 @@ spec:
             - --code-challenge-method=S256
             - --redirect-url={{ gate_external_origin }}/oauth2/callback
             - --upstream={{ gate_upstream }}
-            - --http-address=0.0.0.0:4180
+            - --http-address=0.0.0.0:{{ oauth2_proxy_port }}
             - --email-domain=*
             # Realm users are username-based with placeholder emails (e.g.
             # admin@local) and email_verified=false, so don't reject on the
@@ -97,13 +97,13 @@ spec:
                   name: oauth2-proxy-{{ gate_name }}
                   key: cookie-secret
           ports:
-            - containerPort: 4180
+            - containerPort: {{ oauth2_proxy_port }}
               name: http
               protocol: TCP
           readinessProbe:
             httpGet:
               path: /ping
-              port: 4180
+              port: {{ oauth2_proxy_port }}
             initialDelaySeconds: 5
             periodSeconds: 10
             failureThreshold: 6

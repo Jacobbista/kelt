@@ -72,6 +72,11 @@ CoreDNS provides internal DNS resolution for Services and Pods. It's deployed as
 
 All operations use idempotent API-based modules (`kubernetes.core.k8s` and `kubernetes.core.k8s_info`) instead of shell commands.
 
+Re-running the phase restarts k3s on a node only when something it reads at start
+changed: the binary (`k3s_version`), the master's `config.yaml`, the systemd unit or
+its environment file. The units use `KillMode=process`, so a restart leaves the
+running pods in place.
+
 ### Architecture Decision: Why No k3s-agent on Edge?
 
 The edge node runs **KubeEdge EdgeCore only** (Phase 3), not k3s-agent. This is the recommended KubeEdge architecture to avoid:

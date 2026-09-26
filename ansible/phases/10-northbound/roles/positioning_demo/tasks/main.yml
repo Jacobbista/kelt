@@ -29,7 +29,7 @@
     api_version: v1
     kind: ConfigMap
     name: location-app-config
-    namespace: "{{ demo_namespace }}"
+    namespace: "{{ apps_namespace }}"
     kubeconfig: "{{ kubeconfig_path }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
@@ -49,7 +49,7 @@
       kind: ConfigMap
       metadata:
         name: location-app-config
-        namespace: "{{ demo_namespace }}"
+        namespace: "{{ apps_namespace }}"
       data:
         VITE_CAMARA_API_BASE: null
         VITE_KEYCLOAK_URL: null
@@ -105,7 +105,7 @@
     api_version: apps/v1
     kind: Deployment
     name: location-app
-    namespace: "{{ demo_namespace }}"
+    namespace: "{{ apps_namespace }}"
     kubeconfig: "{{ kubeconfig_path }}"
   register: demo_deploy
   retries: "{{ demo_ready_retries }}"

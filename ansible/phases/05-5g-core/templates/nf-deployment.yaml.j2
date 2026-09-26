@@ -69,6 +69,13 @@ spec:
         command: ["/bin/sh", "/scripts/{{ nf.setup_script }}"]
         securityContext:
           privileged: true
+{% if nf.extra_env is defined %}
+        env:
+{% for env in nf.extra_env %}
+        - name: {{ env.name }}
+          value: "{{ env.value }}"
+{% endfor %}
+{% endif %}
         volumeMounts:
         - name: nf-scripts
           mountPath: /scripts

@@ -20,7 +20,11 @@ def main():
     client = MongoClient(mongo_uri)
     col = client["open5gs"]["subscribers"]
 
-    upserts = 0
+    # Insert only the subscribers MongoDB does not have. An existing subscriber is
+    # never overwritten: MongoDB (and the dashboard, which edits it) is
+    # authoritative once a subscriber exists, so a playbook re-run cannot revert a
+    # SIM's keys. See docs/architecture/subscriber-persistence.md.
+    inserted = present = 0
     for s in subs:
         imsi = str(s.get("imsi") or "")
         if not imsi:
@@ -28,10 +32,13 @@ def main():
             continue
         s = dict(s)
         s["imsi"] = imsi  # ensure string key
-        col.update_one({"imsi": imsi}, {"$set": s}, upsert=True)
-        upserts += 1
+        res = col.update_one({"imsi": imsi}, {"$setOnInsert": s}, upsert=True)
+        if res.upserted_id is not None:
+            inserted += 1
+        else:
+            present += 1
 
-    print(f"Imported/Upserted subscribers: {upserts}")
+    print(f"Subscribers inserted: {inserted}, already present (left unchanged): {present}")
 
 if __name__ == "__main__":
     try:

@@ -212,7 +212,7 @@
       kubernetes.core.k8s_info:
         api_version: v1
         kind: Pod
-        namespace: kubeedge
+        namespace: "{{ kubeedge_namespace }}"
         kubeconfig: "/home/vagrant/kubeconfig"
       register: kubeedge_pods_info
 
@@ -360,7 +360,7 @@
       kubernetes.core.k8s_info:
         api_version: v1
         kind: Pod
-        namespace: 5g
+        namespace: "{{ namespace_5g }}"
         kubeconfig: "/home/vagrant/kubeconfig"
       register: core_pods_info
 
@@ -427,7 +427,7 @@
       kubernetes.core.k8s_info:
         api_version: v1
         kind: Pod
-        namespace: 5g
+        namespace: "{{ namespace_5g }}"
         kubeconfig: "/home/vagrant/kubeconfig"
       register: ueransim_pods_info
 
@@ -542,6 +542,15 @@
   tags:
     - phase12
     - apps
+
+- name: "PHASE 13: Network policies"
+  import_playbook: 13-network-policies/playbook.yml
+  vars:
+    phase_name: "Network policies"
+    phase_number: 13
+  tags:
+    - phase13
+    - network-policies
 
 - name: "🎉 DEPLOYMENT COMPLETED SUCCESSFULLY"
   hosts: localhost

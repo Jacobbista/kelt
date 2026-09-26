@@ -10,7 +10,7 @@ spec:
     app: camara-gateway
   ports:
     - protocol: TCP
-      port: 8080
+      port: {{ camara_gateway_service_port }}
       targetPort: 8080
       nodePort: {{ camara_gateway_nodeport }}
       name: http

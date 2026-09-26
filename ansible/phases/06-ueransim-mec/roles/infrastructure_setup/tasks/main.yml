@@ -24,7 +24,7 @@
       kind: ServiceAccount
       metadata:
         name: edge-discovery
-        namespace: "{{ namespace }}"
+        namespace: "{{ namespace_5g }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
@@ -37,7 +37,7 @@
       kind: Role
       metadata:
         name: edge-discovery
-        namespace: "{{ namespace }}"
+        namespace: "{{ namespace_5g }}"
       rules:
         - apiGroups: [""]
           resources: ["pods", "endpoints"]
@@ -54,11 +54,11 @@
       kind: RoleBinding
       metadata:
         name: edge-discovery
-        namespace: "{{ namespace }}"
+        namespace: "{{ namespace_5g }}"
       subjects:
         - kind: ServiceAccount
           name: edge-discovery
-          namespace: "{{ namespace }}"
+          namespace: "{{ namespace_5g }}"
       roleRef:
         kind: Role
         name: edge-discovery
@@ -68,7 +68,7 @@
 
 - name: Generate long-lived discovery token (1 year)
   shell: |
-    sudo k3s kubectl create token edge-discovery -n {{ namespace }} --duration=8760h
+    sudo k3s kubectl create token edge-discovery -n {{ namespace_5g }} --duration=8760h
   register: discovery_token_result
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
@@ -83,7 +83,7 @@
       kind: ConfigMap
       metadata:
         name: discovery-token
-        namespace: "{{ namespace }}"
+        namespace: "{{ namespace_5g }}"
       data:
         token: "{{ discovery_token_result.stdout }}"
   delegate_to: "{{ groups['masters'][0] }}"
@@ -123,9 +123,3 @@
   changed_when: false
   when: edge_enabled | default(false) | bool
 
-- name: Pre-pull MEC image on edge
-  shell: crictl pull {{ mec_image }} || true
-  delegate_to: "{{ groups['edges'][0] }}"
-  run_once: true
-  changed_when: false
-  when: edge_enabled | default(false) | bool

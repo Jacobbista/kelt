@@ -17,6 +17,7 @@ spec:
           {{ (
                lookup('file', playbook_dir + '/scripts/ovs-setup.sh') +
                lookup('file', playbook_dir + '/scripts/ovs-gc.sh') +
+               lookup('file', playbook_dir + '/scripts/plane-metrics.sh') +
                lookup('file', playbook_dir + '/scripts/host-networkd-prepare.sh')
              ) | hash('sha256') }}
     spec:
@@ -36,6 +37,8 @@ spec:
       - name: ovs-scripts
         configMap:
           name: ovs-scripts
+      - name: node-metrics             # node-exporter textfile collector dir
+        hostPath: { path: "{{ node_exporter_textfile_dir }}", type: DirectoryOrCreate }
       containers:
       - name: setup
         image: {{ alpine_image }}
@@ -59,30 +62,33 @@ spec:
           value: "{{ ran_bridge_mode | default('disabled') }}"
         - name: RAN_SUBNET
           value: "{{ physical_ran_subnet | default('') }}"
+        - name: RAN_GATEWAY_CIDR
+          value: "{{ physical_ran_gateway }}/{{ physical_ran_subnet.split('/')[1] }}"
+        # Plane isolation filter on the worker, see docs/architecture/plane-isolation.md
+        - name: PLANE_FILTER_MODE
+          value: "{{ plane_filter_mode }}"
+        - name: PLANE_UE_POOLS
+          value: "{{ ue_internet_subnet }}, {{ ue_mec_subnet }}"
+        - name: PLANE_METRICS_DIR
+          value: /node-metrics
+        - name: PLANE_METRICS_INTERVAL
+          value: "{{ plane_metrics_interval }}"
         - name: OVERLAY_MTU
           value: "{{ overlay_mtu }}"
         - name: N6_DATA_MTU
           value: "{{ n6_data_mtu }}"
-        # VXLAN VNIs per interface (from all.yml)
-        - name: N1_VNI
-          value: "{{ n1_vni }}"
-        - name: N2_VNI
-          value: "{{ n2_vni }}"
-        - name: N3_VNI
-          value: "{{ n3_vni }}"
-        - name: N4_VNI
-          value: "{{ n4_vni }}"
-        - name: N6E_VNI
-          value: "{{ n6e_vni }}"
-        - name: N6C_VNI
-          value: "{{ n6c_vni }}"
-        - name: N6M_VNI
-          value: "{{ n6m_vni }}"
+        # Per-plane VXLAN VNI and bridge gateway, from the 5G network plan in all.yml
+{% for plane in ['n1', 'n2', 'n3', 'n4', 'n6e', 'n6c', 'n6m'] %}
+        - name: {{ plane | upper }}_VNI
+          value: "{{ lookup('vars', plane ~ '_vni') }}"
+        - name: {{ plane | upper }}_GATEWAY_CIDR
+          value: "{{ lookup('vars', plane ~ '_gateway') }}/{{ lookup('vars', plane ~ '_subnet').split('/')[1] }}"
+{% endfor %}
         command: ["sh","-c"]
         args:
           - |
             set -e
-            apk add --no-cache bash iproute2 openvswitch iptables util-linux coreutils
+            apk add --no-cache bash iproute2 openvswitch iptables nftables util-linux coreutils
 
             # 1) Prepara host systemd-networkd (ignorare OVS)
             cp /scripts/host-networkd-prepare.sh /usr/local/bin/host-networkd-prepare.sh
@@ -94,7 +100,14 @@ spec:
             chmod +x /usr/local/bin/ovs-setup.sh
             /usr/local/bin/ovs-setup.sh
 
-            # 3) (optional) GC and sleep
+            # 3) Plane filter counters for Prometheus (worker owns the filter)
+            if [ "$NODE_NAME" = "worker" ]; then
+              cp /scripts/plane-metrics.sh /usr/local/bin/plane-metrics.sh
+              chmod +x /usr/local/bin/plane-metrics.sh
+              /usr/local/bin/plane-metrics.sh &
+            fi
+
+            # 4) (optional) GC and sleep
             if [ -f /scripts/ovs-gc.sh ]; then
               cp /scripts/ovs-gc.sh /usr/local/bin/ovs-gc.sh
               chmod +x /usr/local/bin/ovs-gc.sh
@@ -110,3 +123,5 @@ spec:
           mountPath: /host/etc/systemd/network
         - name: ovs-scripts
           mountPath: /scripts
+        - name: node-metrics
+          mountPath: /node-metrics

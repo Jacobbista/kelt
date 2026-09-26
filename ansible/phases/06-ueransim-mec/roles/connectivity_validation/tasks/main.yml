@@ -6,7 +6,7 @@
   kubernetes.core.k8s_info:
     api_version: v1
     kind: Pod
-    namespace: "{{ namespace }}"
+    namespace: "{{ namespace_5g }}"
     label_selectors:
       - "app=ue"
     kubeconfig: "{{ kubeconfig_path }}"
@@ -22,7 +22,7 @@
 
 - name: Wait for UE registration (check logs for success)
   shell: |
-    kubectl --kubeconfig={{ kubeconfig_path }} logs -n {{ namespace }} {{ ue_pod_name }} --tail=100 | grep -i "registration\|pdu session" || true
+    kubectl --kubeconfig={{ kubeconfig_path }} logs -n {{ namespace_5g }} {{ ue_pod_name }} --tail=100 | grep -i "registration\|pdu session" || true
   register: ue_logs
   retries: 12
   delay: 10
@@ -39,7 +39,7 @@
 
 - name: Check UE TUN interface (uesimtun0)
   shell: |
-    kubectl --kubeconfig={{ kubeconfig_path }} exec -n {{ namespace }} {{ ue_pod_name }} -- ip addr show uesimtun0 || echo "TUN interface not found"
+    kubectl --kubeconfig={{ kubeconfig_path }} exec -n {{ namespace_5g }} {{ ue_pod_name }} -- ip addr show uesimtun0 || echo "TUN interface not found"
   register: tun_interface
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
@@ -53,7 +53,7 @@
 
 - name: Test Internet connectivity from UE
   shell: |
-    kubectl --kubeconfig={{ kubeconfig_path }} exec -n {{ namespace }} {{ ue_pod_name }} -- ping -c 3 -I uesimtun0 8.8.8.8 || echo "Ping failed"
+    kubectl --kubeconfig={{ kubeconfig_path }} exec -n {{ namespace_5g }} {{ ue_pod_name }} -- ping -c 3 -I uesimtun0 8.8.8.8 || echo "Ping failed"
   register: ping_test
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true

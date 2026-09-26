@@ -1,7 +1,6 @@
 ---
 # Endpoints sync defaults
 kubeconfig_path: "/home/vagrant/kubeconfig"
-namespace: "5g"
 sync_schedule: "*/1 * * * *" # every minute
 service_account_name: "endpoints-sync"
 rbac_name: "endpoints-sync"

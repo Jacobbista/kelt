@@ -45,9 +45,15 @@ for (const raw of subs) {
   db.subscribers.updateOne({ imsi: s.imsi }, { $set: s }, { upsert: true });
   upserts += 1;
 }
-const del = db.subscribers.deleteMany({ imsi: { $nin: imsis } });
-print('[MongoDB][init] Snapshot reconcile: upserted=' + upserts +
-      ' deleted=' + (del.deletedCount || 0));
+// An empty snapshot deletes nothing: it would otherwise wipe every subscriber,
+// and an empty list is far more likely a bad write than an intended state.
+if (imsis.length === 0) {
+  print('[MongoDB][init] Snapshot reconcile: snapshot has no subscribers, nothing deleted');
+} else {
+  const del = db.subscribers.deleteMany({ imsi: { $nin: imsis } });
+  print('[MongoDB][init] Snapshot reconcile: upserted=' + upserts +
+        ' deleted=' + (del.deletedCount || 0));
+}
 MONGOSH_EOF
   then
     echo "[MongoDB][init] WARNING: snapshot reconcile failed, continuing startup."

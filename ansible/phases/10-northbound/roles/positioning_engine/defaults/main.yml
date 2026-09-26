@@ -1,6 +1,5 @@
 ---
 positioning_enabled: true
-positioning_namespace: positioning
 
 # Each companion image advances independently (filtered CI), so each reads its OWN
 # release-tag env var, set by the dashboard "Update all" for that run only
@@ -8,7 +7,6 @@ positioning_namespace: positioning
 # (northbound_image_tags), the single source of truth; do not hardcode it here.
 # See dashboard/backend/app/services/northbound_service.py.
 positioning_engine_image: "{{ northbound_image_registry }}/{{ northbound_image_names.positioning_engine }}:{{ lookup('ansible.builtin.env', 'POSITIONING_ENGINE_TAG') | default(northbound_effective_tags['positioning_engine'] | default(northbound_image_tags.positioning_engine, true), true) }}"
-positioning_engine_nodeport: 31930
 
 # Engine-owned blueprint store (v0.5.0 authority model): only the engine mounts
 # this RWO PVC at /app/data and serves GET/PUT /blueprint. No shared PVC.

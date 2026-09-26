@@ -13,25 +13,25 @@
       kubernetes.core.k8s:
         api_version: v1
         kind: Namespace
-        name: 5g
+        name: "{{ namespace_5g }}"
         state: present
         definition:
           metadata:
-            name: 5g
+            name: "{{ namespace_5g }}"
             labels:
               name: 5g-core
         kubeconfig: "/home/vagrant/kubeconfig"
       run_once: true
 
-    - name: Ensure mec namespace exists
+    - name: Ensure the apps namespace exists
       kubernetes.core.k8s:
         api_version: v1
         kind: Namespace
-        name: mec
+        name: "{{ apps_namespace }}"
         state: present
         definition:
           metadata:
-            name: mec
+            name: "{{ apps_namespace }}"
             labels:
               name: mec-applications
         kubeconfig: "/home/vagrant/kubeconfig"
@@ -46,7 +46,6 @@
     - infra
   roles:
     - roles/infrastructure_setup
-    - roles/runtime_watchdog
 
 - name: "PHASE 5 | ConfigMaps Setup"
   hosts: masters

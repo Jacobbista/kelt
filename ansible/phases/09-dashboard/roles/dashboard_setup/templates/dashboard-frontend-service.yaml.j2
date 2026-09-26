@@ -10,7 +10,7 @@ spec:
     app: dashboard-frontend
   ports:
     - protocol: TCP
-      port: 80
+      port: {{ dashboard_frontend_service_port }}
       targetPort: 8080
       nodePort: {{ dashboard_cluster_nodeport }}
       name: http

@@ -2,7 +2,7 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: gnb-endpoints-sync
-  namespace: {{ namespace }}
+  namespace: {{ namespace_5g }}
 spec:
   schedule: "{{ sync_schedule }}"
   concurrencyPolicy: Forbid

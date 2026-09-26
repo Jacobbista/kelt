@@ -16,8 +16,12 @@
 #
 # Manual phase runs from ansible VM:
 #   vagrant ssh ansible
-#   cd ~/ansible-ro && ansible-playbook phases/0X-.../playbook.yml -i inventory.ini
+#   cd ~/ansible-ro && ansible-playbook phases/0X-.../playbook.yml
+#   (ANSIBLE_CONFIG points at ~/ansible-work, whose inventory is generated below)
 #
+require "ipaddr"
+require "yaml"
+
 Vagrant.configure("2") do |config|
   config.ssh.insert_key = true
   config.vm.box_check_update = false
@@ -69,13 +73,9 @@ Vagrant.configure("2") do |config|
   testbed_profile = ENV['TESTBED_PROFILE'] || 'laptop'
   edge_enabled = (ENV['EDGE_ENABLED'] || (testbed_profile == 'laptop' ? 'true' : 'false')).downcase == 'true'
 
-  # Fixed IPs for all nodes (independent of profile)
-  ip_map = {
-    "master"  => "192.168.56.10",
-    "worker"  => "192.168.56.11",
-    "edge"    => "192.168.56.12",
-    "ansible" => "192.168.56.13",
-  }
+  # Node addresses and the 5G network plan are owned by ansible/group_vars/all.yml.
+  plan = YAML.load_file(File.join(File.dirname(__FILE__), "ansible", "group_vars", "all.yml"))
+  ip_map = plan.fetch("node_ips")
 
   # Resource profiles: CPU and memory per VM
   profiles = {
@@ -119,7 +119,7 @@ Vagrant.configure("2") do |config|
 
   # Secondary network for physical RAN connection (worker only)
   # Disabled by default to avoid interactive bridge selection prompts.
-  # NOTE: worker gets .1 (bridge role), AMF pod gets .150 via macvlan NAD.
+  # NOTE: worker gets physical_ran_gateway (bridge role), AMF gets amf_physical_ran_ip.
   ran_network = {}
   if physical_ran_enabled
     if physical_ran_bridge.nil? || physical_ran_bridge.empty?
@@ -127,8 +127,8 @@ Vagrant.configure("2") do |config|
       puts "[WARN] Physical RAN bridge NIC will be skipped to avoid interactive prompts."
     else
       ran_network["worker"] = {
-        ip: "192.168.6.1",
-        netmask: "255.255.255.0",
+        ip: plan.fetch("physical_ran_gateway"),
+        netmask: IPAddr.new("255.255.255.255").mask(plan.fetch("physical_ran_subnet").split("/").last.to_i).to_s,
         bridge: physical_ran_bridge || "enx00e04c6817b7"
       }
     end
@@ -178,7 +178,7 @@ Vagrant.configure("2") do |config|
 
       # Enable promiscuous mode on the RAN NIC so OVS bridging works.
       # Worker interface name (e.g. enp0s9) is auto-detected by IP: Vagrant assigns
-      # 192.168.6.1 to the bridged NIC, so we grep for that. Same logic as OVS setup.
+      # physical_ran_gateway to the bridged NIC, so we grep for that. Same logic as OVS setup.
       if ran_network.key?(name)
         ran_ip = ran_network[name][:ip]
         m.trigger.after [:up, :resume, :reload] do |t|
@@ -215,14 +215,14 @@ Vagrant.configure("2") do |config|
         end
       end
 
-      # Enable outbound Internet access for the N6 Data Network (10.207.0.0/24) via NAT on the worker.
+      # Enable outbound Internet access for the N6 Data Network (n6c_subnet) via NAT on the worker.
       # We apply it on every boot/reload because iptables rules are not persistent by default.
       if name == "worker"
         m.vm.provision "shell", run: "always", privileged: true, inline: <<-SHELL
 
           # Remove AMF static IP from CNI networks to avoid route conflicts.
           # This runs before k3s agent restart to avoid route conflicts.
-          sudo rm -f /var/lib/cni/networks/n1-net/10.201.0.100 /var/lib/cni/networks/n2-net/10.202.0.100
+          sudo rm -f /var/lib/cni/networks/n1-net/#{plan.fetch('amf_n1_ip')} /var/lib/cni/networks/n2-net/#{plan.fetch('amf_n2_ip')}
 
           echo "[N6 Routing] Enabling IP forwarding..."
           sysctl -w net.ipv4.ip_forward=1 >/dev/null
@@ -230,7 +230,7 @@ Vagrant.configure("2") do |config|
           # Make sysctl persistent across Vagrant reboots
           grep -q "^net.ipv4.ip_forward=1$" /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
 
-          echo "[N6 Routing] Configuring outbound NAT policy for 10.207.0.0/24..."
+          echo "[N6 Routing] Configuring outbound NAT policy for #{plan.fetch('n6c_subnet')}..."
           OUT_IF="$(ip route show default 2>/dev/null | awk '/default/ {print $5; exit}')"
           if [ -z "$OUT_IF" ]; then
             echo "[N6 Routing] WARN: default interface not found; skipping NAT"
@@ -243,25 +243,25 @@ Vagrant.configure("2") do |config|
 
           # 1) Cleanup: remove previous N6 rules to avoid duplicates/order drift.
           echo "[N6 Routing] Cleaning old N6 NAT rules..."
-          "$IPT" -t nat -S POSTROUTING | awk 'index($0, "10.207.0.0/24") {sub(/^-A/, "-D"); print}' | while read -r rule; do
+          "$IPT" -t nat -S POSTROUTING | awk 'index($0, "#{plan.fetch('n6c_subnet')}") {sub(/^-A/, "-D"); print}' | while read -r rule; do
             "$IPT" -t nat $rule || true
           done
           # Also clean legacy leftovers so diagnostics stay consistent.
           if [ -x "$IPT_LEGACY" ]; then
-            "$IPT_LEGACY" -t nat -S POSTROUTING 2>/dev/null | awk 'index($0, "10.207.0.0/24") {sub(/^-A/, "-D"); print}' | while read -r rule; do
+            "$IPT_LEGACY" -t nat -S POSTROUTING 2>/dev/null | awk 'index($0, "#{plan.fetch('n6c_subnet')}") {sub(/^-A/, "-D"); print}' | while read -r rule; do
               "$IPT_LEGACY" -t nat $rule || true
             done
           fi
 
           # 2) Private destinations bypass NAT (RETURN from POSTROUTING in NAT table).
           echo "[N6 Routing] Adding private-network bypass rules..."
-          for private_net in 10.0.0.0/8 172.16.0.0/12 192.168.56.0/24 192.168.6.0/24; do
-            "$IPT" -t nat -A POSTROUTING -s 10.207.0.0/24 -d "$private_net" -j RETURN
+          for private_net in 10.0.0.0/8 172.16.0.0/12 #{plan.fetch('mgmt_subnet')} #{plan.fetch('physical_ran_subnet')}; do
+            "$IPT" -t nat -A POSTROUTING -s #{plan.fetch('n6c_subnet')} -d "$private_net" -j RETURN
           done
 
           # 3) Catch-all: public egress from N6 is masqueraded on the default outbound interface.
           echo "[N6 Routing] Enabling outbound MASQUERADE via $OUT_IF..."
-          "$IPT" -t nat -A POSTROUTING -s 10.207.0.0/24 -o "$OUT_IF" -j MASQUERADE
+          "$IPT" -t nat -A POSTROUTING -s #{plan.fetch('n6c_subnet')} -o "$OUT_IF" -j MASQUERADE
         SHELL
       end
 
@@ -287,7 +287,9 @@ Vagrant.configure("2") do |config|
     SHELL
 
     # --- User vagrant block: ansible + collections + ssh setup
-    ansible.vm.provision "shell", privileged: false, inline: <<-'SHELL'
+    ansible.vm.provision "shell", privileged: false,
+      env: ip_map.transform_keys { |node| "NODE_IP_#{node.upcase}" },
+      inline: <<-'SHELL'
       set -euo pipefail
       export PATH="$HOME/.local/bin:$PATH"
 
@@ -327,29 +329,27 @@ Vagrant.configure("2") do |config|
       chmod 644 /home/vagrant/ansible-work/ansible.cfg
 
       # Generate dynamic inventory based on which VMs are provisioned
-      cat > /home/vagrant/ansible-work/inventory.ini << 'INVENTORY'
+      cat > /home/vagrant/ansible-work/inventory.ini << INVENTORY
 [masters]
-master ansible_host=192.168.56.10 ansible_ssh_private_key_file=/home/vagrant/.ssh/master_key
+master ansible_host=${NODE_IP_MASTER} ansible_ssh_private_key_file=/home/vagrant/.ssh/master_key
 
 [workers]
-worker ansible_host=192.168.56.11 ansible_ssh_private_key_file=/home/vagrant/.ssh/worker_key
+worker ansible_host=${NODE_IP_WORKER} ansible_ssh_private_key_file=/home/vagrant/.ssh/worker_key
 
 [edges]
 INVENTORY
 
       # Add edge to inventory only if edge VM exists (key file present)
       if [ -f /home/vagrant/.ssh/edge_key ]; then
-        echo "edge ansible_host=192.168.56.12 ansible_ssh_private_key_file=/home/vagrant/.ssh/edge_key" >> /home/vagrant/ansible-work/inventory.ini
+        echo "edge ansible_host=${NODE_IP_EDGE} ansible_ssh_private_key_file=/home/vagrant/.ssh/edge_key" >> /home/vagrant/ansible-work/inventory.ini
       fi
 
-      cat >> /home/vagrant/ansible-work/inventory.ini << 'INVENTORY'
+      cat >> /home/vagrant/ansible-work/inventory.ini << INVENTORY
 
 [control]
-ansible ansible_host=192.168.56.13 ansible_connection=local
+ansible ansible_host=${NODE_IP_ANSIBLE} ansible_connection=local
 INVENTORY
 
-      # Point ansible.cfg to the generated inventory instead of the static one
-      sed -i 's|inventory = /home/vagrant/ansible-ro/inventory.ini|inventory = /home/vagrant/ansible-work/inventory.ini|' /home/vagrant/ansible-work/ansible.cfg
       # Symlink group_vars so Ansible finds them relative to the dynamic inventory
       ln -sfn /home/vagrant/ansible-ro/group_vars /home/vagrant/ansible-work/group_vars
       echo "[INFO] Generated inventory at /home/vagrant/ansible-work/inventory.ini"
@@ -471,7 +471,7 @@ ENVSH
       else
         echo "Core-only mode (default): deploying phases 1-5 + phase 7 + phases 8-9"
         echo "   To add UERANSIM later, run from ansible VM:"
-        echo "   cd ~/ansible-ro && ansible-playbook phases/06-ueransim-mec/playbook.yml -i inventory.ini"
+        echo "   cd ~/ansible-ro && ansible-playbook phases/06-ueransim-mec/playbook.yml"
         ansible-playbook /home/vagrant/ansible-ro/phases/00-main-playbook.yml ${ran_extra} ${edge_extra} --skip-tags phase6,ueransim,mec
       fi
       pb_t1=$(date +%s)

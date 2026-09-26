@@ -13,35 +13,11 @@ keycloak_db_password: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_DB_PASSWORD') 
 
 # ── Keycloak server ─────────────────────────────────────────────────────────
 keycloak_image: "quay.io/keycloak/keycloak:26.0"
-# Realm name is also consumed by the dashboard backend (phase 09); keep the
-# env override symmetric so a single KEYCLOAK_REALM=foo applies to both phases.
-keycloak_realm: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_REALM') | default('5g-testbed', true) }}"
 keycloak_admin_user: admin
 keycloak_admin_password: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_ADMIN_PASSWORD') | default('changeme-admin', true) }}"
-keycloak_nodeport: 31910
 
-# Relative path prefix when serving Keycloak under a shared origin (for
-# example "/auth" when the dashboard frontend reverse-proxies /auth/* to
-# Keycloak). Under the single-origin model (external_base_domain set) Keycloak
-# is served at <kelt>.<base>/auth, so this defaults to "/auth"; in LAN mode (no
-# base) it stays empty (Keycloak on its own NodePort at root). Env override wins.
-# Used by the deployment template (KC_HTTP_RELATIVE_PATH) and KC_HOSTNAME.
-keycloak_path_prefix: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_PATH_PREFIX') | default(('/auth' if external_base_domain else ''), true) }}"
-
-# External origins used to populate redirect URIs and Web Origins inside the
-# realm. Each resolves in three steps: an explicit per-service env override wins
-# (back-compat / one-off), else it is derived as <scheme>://<subdomain>.<base>
-# when external_base_domain (all.yml) is set, else it falls back to the worker LAN
-# NodePort (no external exposure). The subdomains live in all.yml so the front-door
-# (phase 09), these realm origins, and the dashboard links all agree.
-dashboard_external_origin: "{{ lookup('ansible.builtin.env', 'DASHBOARD_EXTERNAL_ORIGIN') | default( ((external_scheme ~ '://' ~ dashboard_subdomain ~ '.' ~ external_base_domain) if external_base_domain else ('http://' ~ hostvars[groups['workers'][0]]['ansible_host'] ~ ':31573')), true) }}"
-# Optional second origin for the opt-in dev frontend (Vite on ansible VM). When
-# set, added to the dashboard client redirect URIs and Web Origins so OIDC works
-# from both origins. Derived from the dev subdomain when a base domain is set.
-dashboard_dev_external_url: "{{ lookup('ansible.builtin.env', 'DASHBOARD_DEV_EXTERNAL_URL') | default( ((external_scheme ~ '://' ~ dashboard_dev_subdomain ~ '.' ~ external_base_domain) if external_base_domain else ''), true) }}"
-positioning_demo_external_origin: "{{ lookup('ansible.builtin.env', 'POSITIONING_DEMO_EXTERNAL_ORIGIN') | default( ((external_scheme ~ '://' ~ positioning_demo_subdomain ~ '.' ~ external_base_domain) if external_base_domain else ('http://' ~ hostvars[groups['workers'][0]]['ansible_host'] ~ ':31940')), true) }}"
-# External origin oauth2-proxy advertises for the placement-editor login redirect.
-placement_editor_external_origin: "{{ lookup('ansible.builtin.env', 'PLACEMENT_EDITOR_EXTERNAL_ORIGIN') | default( ((external_scheme ~ '://' ~ placement_editor_subdomain ~ '.' ~ external_base_domain) if external_base_domain else ('http://' ~ hostvars[groups['workers'][0]]['ansible_host'] ~ ':31950')), true) }}"
+# The realm, the Keycloak path prefix and the external origins that fill the
+# realm's redirect URIs and web origins come from all.yml.
 
 # ── Northbound realm gating ─────────────────────────────────────────────────
 # The camara/positioning/placement realm objects (camara-location-read role,
@@ -69,8 +45,6 @@ camara_api_demo_secret: "{{ lookup('ansible.builtin.env', 'CAMARA_API_DEMO_SECRE
 # Namespaces of the phase-10 workloads that CONSUME a client secret (gateway pod
 # env, oauth2-proxy Secret). Mirror the phase-10 role defaults; needed here so a
 # secret rotation applied by this phase can converge those consumers too.
-camara_namespace: camara
-positioning_namespace: positioning
 
 # ── Bootstrap end-users for dashboard login (realm 5g-testbed) ──────────────
 # Two seed accounts mirror the two-role model documented in docs/security/iam.md:

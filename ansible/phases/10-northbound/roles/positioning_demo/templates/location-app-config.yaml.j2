@@ -2,7 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: location-app-config
-  namespace: {{ demo_namespace }}
+  namespace: {{ apps_namespace }}
 data:
   # Operator settings, seeded once: after the first run the dashboard Configure
   # form owns this ConfigMap and the role never rewrites it. Listed after the

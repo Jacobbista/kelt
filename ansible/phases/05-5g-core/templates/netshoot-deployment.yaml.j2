@@ -15,15 +15,32 @@ spec:
       labels:
         app: netshoot
       annotations:
+        # A probe sits on every plane it probes, with a pool address, so no check
+        # needs the worker to route between planes (docs/architecture/plane-isolation.md).
         k8s.v1.cni.cncf.io/networks: |
           [
+            {"name": "n1-net", "namespace": "{{ namespace_5g }}", "interface": "n1"},
+            {"name": "n2-net", "namespace": "{{ namespace_5g }}", "interface": "n2"},
             {"name": "{{ nad_n3_name }}", "namespace": "{{ nad_n3_namespace }}", "interface": "n3"},
-            {"name": "{{ nad_n6c_name }}", "namespace": "{{ nad_n6c_namespace }}", "interface": "n6"}
+            {"name": "n4-net", "namespace": "{{ namespace_5g }}", "interface": "n4"},
+            {"name": "{{ nad_n6c_name }}", "namespace": "{{ nad_n6c_namespace }}", "interface": "n6"},
+            {"name": "{{ nad_n6m_name }}", "namespace": "{{ nad_n6m_namespace }}", "interface": "n6m"}
           ]
     spec:
       nodeSelector:
         kubernetes.io/hostname: worker
       terminationGracePeriodSeconds: 5
+      initContainers:
+        # A pod's IPv4 settings start from the host's, and the worker forwards.
+        # A probe on several planes must not route between them. /proc/sys is
+        # read-only in an unprivileged container, hence the privileged init step
+        # (same pattern as the NF sysctl-init).
+        - name: sysctl-init
+          image: {{ network_setup_image }}
+          imagePullPolicy: IfNotPresent
+          command: ["sysctl", "-w", "net.ipv4.ip_forward=0"]
+          securityContext:
+            privileged: true
       containers:
         - name: netshoot
           image: {{ network_setup_image }}

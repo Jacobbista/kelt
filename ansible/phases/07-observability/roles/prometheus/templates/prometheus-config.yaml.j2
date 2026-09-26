@@ -13,7 +13,7 @@ data:
       # Prometheus self-monitoring
       - job_name: 'prometheus'
         static_configs:
-          - targets: ['localhost:9090']
+          - targets: ['localhost:{{ prometheus.port }}']
 
       # Node Exporter
       - job_name: 'node-exporter'
@@ -32,7 +32,7 @@ data:
       # Kube State Metrics
       - job_name: 'kube-state-metrics'
         static_configs:
-          - targets: ['kube-state-metrics.{{ monitoring_namespace }}.svc:8080']
+          - targets: ['kube-state-metrics.{{ monitoring_namespace }}.svc:{{ kube_state_metrics_port }}']
 
       # Kubernetes API
       - job_name: 'kubernetes-apiservers'

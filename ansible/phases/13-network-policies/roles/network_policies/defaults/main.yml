@@ -1,0 +1,45 @@
+---
+# Flows allowed into each namespace on the pod network, besides the ones every
+# listed namespace accepts (same namespace, monitoring scrapes, the nodes and the
+# management network, which carry kubelet probes and NodePort clients).
+# Each `allow` entry opens the pods of one app (`to`, the `app` label; `"*"` for
+# every pod of the namespace) to the listed namespaces. A namespace not listed
+# keeps Kubernetes' default: everything allowed.
+# Measured against live traffic before it was written; see
+# docs/architecture/namespaces.md (Network policies).
+network_policy_ingress:
+  - ns: "{{ apps_namespace }}"
+    allow:
+      - { to: "*", from: ["{{ frontdoor_namespace }}"] }
+  - ns: "{{ registry_namespace }}"
+    allow: []
+  - ns: "{{ dashboard_namespace }}"
+    allow:
+      - { to: "*", from: ["{{ frontdoor_namespace }}"] }
+  - ns: "{{ frontdoor_namespace }}"
+    allow: []
+  - ns: "{{ monitoring_namespace }}"
+    allow: []
+  - ns: "{{ namespace_5g }}"
+    allow: []
+  - ns: "{{ iam_namespace }}"
+    allow:
+      - { to: keycloak, from: ["{{ camara_namespace }}", "{{ positioning_namespace }}", "{{ frontdoor_namespace }}", "{{ apps_namespace }}", "{{ dashboard_namespace }}"] }
+  - ns: "{{ camara_namespace }}"
+    allow:
+      - { to: camara-gateway, from: ["{{ frontdoor_namespace }}", "{{ apps_namespace }}"] }
+  - ns: "{{ positioning_namespace }}"
+    allow:
+      - { to: "*", from: ["{{ camara_namespace }}"] }
+      - { to: oauth2-proxy-placement, from: ["{{ frontdoor_namespace }}"] }
+
+# The apps namespace runs third-party code, so it is also limited outbound: DNS,
+# the CAMARA gateway, Keycloak, and public addresses. Everything private (pod and
+# service networks, overlays, management and RAN networks) stays out of reach.
+network_policy_apps_egress:
+  - { ns: "{{ camara_namespace }}", app: camara-gateway }
+  - { ns: "{{ iam_namespace }}", app: keycloak }
+network_policy_private_ranges: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16"]
+
+# Label on every policy this role manages, so it can remove what is no longer declared.
+network_policy_owner_label: kelt-network-policies

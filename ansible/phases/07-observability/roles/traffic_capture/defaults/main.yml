@@ -1,6 +1,5 @@
 # Traffic Capture defaults
 ---
-monitoring_namespace: monitoring
 
 traffic_capture:
   image: linuxserver/wireshark:latest

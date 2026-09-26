@@ -1,11 +1,7 @@
 ---
 # gNB deployment defaults
 kubeconfig_path: "/home/vagrant/kubeconfig"
-namespace: "5g"
 ueransim_image: "jacobbista/comnetsemu-ueransim:latest"
-
-# K8s API server address (for edge node discovery queries)
-k8s_api_server: "192.168.56.10:6443"
 
 # gNB deployment configuration
 gnb_name: "gnb"
@@ -36,7 +32,7 @@ gnb_config:
   gtpIp: "0.0.0.0"
   gtpPort: 2152
   ngapPort: 38412
-  amf_address: "{{ hostvars[groups['masters'][0]].amf_n2_ip | default('10.202.0.100') }}"
+  amf_address: "{{ amf_n2_ip }}"
   amf_port: 38412
   slices:
     - { sst: 1, sd: 1 }

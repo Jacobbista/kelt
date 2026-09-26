@@ -1,8 +1,6 @@
 ---
 # Validation defaults for 5G Core deployment
 kubeconfig_path: "/home/vagrant/kubeconfig"
-namespace_5g: "5g"
-namespace_mec: "mec"
 
 # Expected minimum number of running pods per component
 # NOTE: upf-edge is disabled (replicas: 0) due to CNI route conflict

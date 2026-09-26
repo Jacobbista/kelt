@@ -8,11 +8,16 @@ operator deploy their own application image as a pod and reach its frontend at
 
 ## Roles
 
-- **`apps_platform`** — creates the `apps_namespace` (default `apps`). The
-  dashboard deploy-from-image console (Apps page) targets this namespace; the
-  backend pins app pods to the worker via `nodeSelector`.
+- **`apps_platform`** — creates `apps_namespace` (`mec`) and `registry_namespace`
+  (`registry`), see docs/architecture/namespaces.md. The dashboard
+  deploy-from-image console (Apps page) targets `apps_namespace`; the backend pins
+  app pods to the worker via `nodeSelector`.
+  With `apps_measurement_server_enabled` it also deploys `measurement-server`
+  (iperf3 + ping on n6m at `apps_measurement_server_n6m_ip`, the edge endpoint
+  of the experiments); with the flag off it removes it.
 
-- **`local_registry`** — an in-cluster `registry:2`:
+- **`local_registry`** — an in-cluster `registry:2` in `registry_namespace`
+  (moved, images included, from the former `apps` namespace when found there):
   - `Deployment` + RWO local-path `PVC` (image blobs) + `NodePort` `Service`
     (`apps_registry_nodeport`, default 31501), pinned to the worker.
   - htpasswd basic-auth `Secret`, generated once (bcrypt via passlib) and only

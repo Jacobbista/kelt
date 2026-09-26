@@ -9,12 +9,12 @@ upf:
     server:
       - address: {{ upf_cloud_n3_ip }}
   session:
-    - subnet: 10.45.0.0/16
-      gateway: 10.45.0.1
+    - subnet: {{ ue_internet_subnet }}
+      gateway: {{ ue_internet_gateway }}
       dnn: internet
       dev: ogstun
-    - subnet: 10.46.0.0/16
-      gateway: 10.46.0.1
+    - subnet: {{ ue_mec_subnet }}
+      gateway: {{ ue_mec_gateway }}
       dnn: mec
       dev: ogstun2
   metrics:

@@ -106,3 +106,29 @@
   when:
     - edge_enabled | default(false) | bool
     - item not in (prepull_present_edge.stdout | default(''))
+
+# Earlier deploys installed a timer that restarted k3s when a test image pull
+# failed. Its probe failed by construction, so it restarted the control plane
+# every few minutes. Remove it from nodes that still carry it.
+- name: Stop and disable the retired k3s pull watchdog
+  systemd:
+    name: k3s-pull-watchdog.timer
+    state: stopped
+    enabled: false
+  failed_when: false
+
+- name: Remove the retired k3s pull watchdog files
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/k3s-pull-watchdog.timer
+    - /etc/systemd/system/k3s-pull-watchdog.service
+    - /usr/local/sbin/k3s-pull-watchdog.sh
+    - /var/lib/k3s-pull-watchdog
+  register: retired_watchdog_files
+
+- name: Reload systemd after removing the watchdog units
+  systemd:
+    daemon_reload: true
+  when: retired_watchdog_files.changed

@@ -10,7 +10,7 @@ spec:
     app: keycloak
   ports:
     - protocol: TCP
-      port: 8080
+      port: {{ keycloak_service_port }}
       targetPort: 8080
       nodePort: {{ keycloak_nodeport }}
       name: http

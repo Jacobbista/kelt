@@ -16,7 +16,7 @@
       kind: ConfigMap
       metadata:
         name: mongodb-config
-        namespace: 5g
+        namespace: "{{ namespace_5g }}"
       data:
         mongodb.conf: "{{ lookup('file', role_path + '/../../configs/mongodb.conf') }}"
   delegate_to: "{{ groups['masters'][0] }}"
@@ -50,7 +50,7 @@
       kind: ConfigMap
       metadata:
         name: nf-scripts
-        namespace: 5g
+        namespace: "{{ namespace_5g }}"
       data: "{{ nf_scripts_data }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
@@ -72,7 +72,7 @@
       kind: ConfigMap
       metadata:
         name: nrf-config
-        namespace: 5g
+        namespace: "{{ namespace_5g }}"
       data:
         nrf.yaml: "{{ lookup('file', role_path + '/../../configs/nrf.yaml') }}"
   delegate_to: "{{ groups['masters'][0] }}"
@@ -102,7 +102,7 @@
       kind: ConfigMap
       metadata:
         name: amf-config
-        namespace: 5g
+        namespace: "{{ namespace_5g }}"
       data:
         amf.yaml: "{{ lookup('file', role_path + '/../../configs/amf.yaml') }}"
   delegate_to: "{{ groups['masters'][0] }}"
@@ -137,7 +137,7 @@
       kind: ConfigMap
       metadata:
         name: smf-config
-        namespace: 5g
+        namespace: "{{ namespace_5g }}"
       data:
         smf.yaml: "{{ lookup('template', role_path + '/../../configs/smf.yaml') }}"
   delegate_to: "{{ groups['masters'][0] }}"
@@ -165,7 +165,7 @@
       kind: ConfigMap
       metadata:
         name: upf-edge-config
-        namespace: 5g
+        namespace: "{{ namespace_5g }}"
       data:
         upf_edge.yaml: "{{ lookup('template', role_path + '/../../configs/upf_edge.yaml') }}"
   delegate_to: "{{ groups['masters'][0] }}"
@@ -188,7 +188,7 @@
       kind: ConfigMap
       metadata:
         name: upf-cloud-config
-        namespace: 5g
+        namespace: "{{ namespace_5g }}"
       data:
         upf_cloud.yaml: "{{ lookup('template', role_path + '/../../configs/upf_cloud.yaml') }}"
   delegate_to: "{{ groups['masters'][0] }}"
@@ -218,7 +218,7 @@
       kind: ConfigMap
       metadata:
         name: udm-config
-        namespace: 5g
+        namespace: "{{ namespace_5g }}"
       data:
         udm.yaml: "{{ lookup('file', role_path + '/../../configs/udm.yaml') }}"
   delegate_to: "{{ groups['masters'][0] }}"
@@ -253,7 +253,7 @@
       kind: ConfigMap
       metadata:
         name: udr-config
-        namespace: 5g
+        namespace: "{{ namespace_5g }}"
       data:
         udr.yaml: "{{ lookup('file', role_path + '/../../configs/udr.yaml') }}"
   delegate_to: "{{ groups['masters'][0] }}"
@@ -288,7 +288,7 @@
       kind: ConfigMap
       metadata:
         name: pcf-config
-        namespace: 5g
+        namespace: "{{ namespace_5g }}"
       data:
         pcf.yaml: "{{ lookup('file', role_path + '/../../configs/pcf.yaml') }}"
   delegate_to: "{{ groups['masters'][0] }}"
@@ -323,7 +323,7 @@
       kind: ConfigMap
       metadata:
         name: bsf-config
-        namespace: 5g
+        namespace: "{{ namespace_5g }}"
       data:
         bsf.yaml: "{{ lookup('file', role_path + '/../../configs/bsf.yaml') }}"
   delegate_to: "{{ groups['masters'][0] }}"
@@ -358,7 +358,7 @@
       kind: ConfigMap
       metadata:
         name: nssf-config
-        namespace: 5g
+        namespace: "{{ namespace_5g }}"
       data:
         nssf.yaml: "{{ lookup('file', role_path + '/../../configs/nssf.yaml') }}"
   delegate_to: "{{ groups['masters'][0] }}"
@@ -393,7 +393,7 @@
       kind: ConfigMap
       metadata:
         name: ausf-config
-        namespace: 5g
+        namespace: "{{ namespace_5g }}"
       data:
         ausf.yaml: "{{ lookup('file', role_path + '/../../configs/ausf.yaml') }}"
   delegate_to: "{{ groups['masters'][0] }}"
@@ -423,7 +423,7 @@
       kind: ConfigMap
       metadata:
         name: mec-config
-        namespace: mec
+        namespace: "{{ apps_namespace }}"
       data:
         mec.conf: "{{ lookup('file', role_path + '/../../configs/mec.conf') }}"
   delegate_to: "{{ groups['masters'][0] }}"
@@ -440,7 +440,7 @@
   kubernetes.core.k8s_info:
     api_version: v1
     kind: ConfigMap
-    namespace: 5g
+    namespace: "{{ namespace_5g }}"
     kubeconfig: "/home/vagrant/kubeconfig"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
@@ -450,7 +450,7 @@
   kubernetes.core.k8s_info:
     api_version: v1
     kind: ConfigMap
-    namespace: mec
+    namespace: "{{ apps_namespace }}"
     kubeconfig: "/home/vagrant/kubeconfig"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true

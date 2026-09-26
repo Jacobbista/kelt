@@ -16,21 +16,7 @@
   kubernetes.core.k8s:
     kubeconfig: "{{ kubeconfig_path }}"
     state: present
-    definition:
-      apiVersion: v1
-      kind: Service
-      metadata:
-        name: loki
-        namespace: "{{ monitoring_namespace }}"
-        labels:
-          app: loki
-      spec:
-        selector:
-          app: loki
-        ports:
-          - port: 3100
-            targetPort: 3100
-            name: http
+    definition: "{{ lookup('template', 'loki-service.yaml.j2') | from_yaml }}"
 
 - name: Wait for Loki to be ready
   kubernetes.core.k8s_info:

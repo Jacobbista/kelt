@@ -7,7 +7,7 @@
 #   - local_registry : an in-cluster registry:2 (insecure HTTP + basic-auth,
 #                       NodePort only) plus the worker's registries.yaml mirror so
 #                       k3s containerd can pull the pushed images.
-#   - apps_platform  : the `apps` namespace the deploy-from-image console targets.
+#   - apps_platform  : the apps and registry namespaces (docs/architecture/namespaces.md).
 #
 # A no-op unless apps_enabled (all.yml / `testbed apps on`). The registry mirror
 # task restarts k3s on the worker ONLY when registries.yaml actually changes.
