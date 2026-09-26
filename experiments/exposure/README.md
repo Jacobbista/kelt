@@ -1,97 +1,57 @@
-# Exposure campaigns (G3 / G5 / G6)
+# Exposure campaigns: verification and response-time
 
-These measure the CAMARA exposure pipeline **against the live cluster
-deployment** (gateway → engine → adapters running as pods, phase 10), on top of
-the real 5G core. The "mock" in G6 is the mock-vendor *condition* - an adapter
-with the external vendor call removed - and it still runs inside the cluster.
+Both run against the live deployment (gateway, engine and adapters as pods,
+phase 10) through the gateway's NodePort, with a token minted for the
+`camara-api-demo` client from `.testbed.secrets` (never written to a run).
 
-The gateway base URL is derived at run time (`gateway_url` in `../lib/common.sh`),
-never hardcoded.
+**Contract authority.** The behaviour the stack must show is the profiled
+contract the gateway serves: `GET /contracts/location-retrieval.profiled.yaml`,
+`location-verification.profiled.yaml`, `accuracy-class-vocabulary.json`
+(generated in 5g-northbound, `spec/private-profile`). The verification campaign
+reads them at run time and keeps a copy in the run; expected codes are the pairs
+the contract declares, not a list kept here.
 
-**Contract authority.** The request/response contract is owned upstream as a
-machine-readable profile in `5g-northbound`
-(`spec/private-profile/`: OpenAPI Overlays over the pinned CAMARA r3.2 base +
-an AsyncAPI 3.0 doc for `/positions/stream`; `make profile-spec` emits the
-profiled spec, CI asserts the overlays apply). KELT tests **verify the live
-deployment against that spec**. Confirm request bodies
-and paths against the deployment's own OpenAPI (`"$(gateway_url)"/docs`), which
-is generated from the same profile. Direction: drive `G3_conformance.sh` from
-the profiled OpenAPI (schema-validate responses) rather than hand-coded codes.
+## verification
 
-Since the profile-conformance push (northbound `4559708`), the old divergences
-are **implemented as conformant**, so G3/G5 shift from *recording mismatches* to
-*verifying conformance* (see the table below). The conformant gateway (v0.9.0) is
-deployed and the live checks pass (e.g. a public identifier returns 422
-`UNSUPPORTED_IDENTIFIER`, and every response carries `x-correlator`).
+`run.sh verification`, driven by `verification.py`, faults in `faults.sh`.
 
-| Campaign | Needs code? | Status here |
-|---|---|---|
-| G3 conformance (`G3_conformance.sh`) | client only | runnable; verifies conformance against the profiled OpenAPI |
-| G5 fidelity | recorded exchanges only | manual/recorded (see below) |
-| G5 source failure (`G5_failure.sh`) | no new instrumentation | runnable; uses `kubectl` to stop a vendor / drop an adapter |
-| G6 latency (`G6_latency.sh`) | driver + **aggregation** ours; per-hop logs theirs | driver records end-to-end + the `x-correlator` join key. northbound's per-hop logs ship in v0.9.0; the stage split is the **aggregation of those logs by `x-correlator`** via `g6_aggregate.py` (role split, below). |
-| C10 streaming (`G6_streaming.sh`) | WS client, ≥10 min | runnable skeleton: `stream_lag.py` measures freshness (fix->client) and update rate; see below |
+| Group | Cases |
+|---|---|
+| Identifiers and authorisation | asset served (200) and `x-correlator` echoed; public identifier → 422 `UNSUPPORTED_IDENTIFIER`; no token and a bad token → 401; malformed request → 400 `INVALID_ARGUMENT`; unknown asset → 404 `IDENTIFIER_NOT_FOUND`; verify inside / outside / partly overlapping the asset's own fix → `TRUE` / `FALSE` / `PARTIAL` with `matchRate` |
+| Data | the answer against the adapter's `/measurement/{id}` for the same fix: coordinates (the Wittra adapter reports WGS84), time of the estimate, source, kind, accuracy (the source's own, else its class's upper bound) and `area.radius` = max(accuracy, 1 m) |
+| Fault | vendor unreachable, three times: a NetworkPolicy lets the vendor adapter reach only private addresses, and the campaign polls `maxAge=0` every 0.5 s until a 422 the contract declares; adapter removed: scaled to 0, polls the gateway's `/adapters` until it is no longer live, while the synthetic asset must stay served |
 
-## G5 fidelity (recorded, not a script)
+Recorded without a verdict, until the new profile proposal is released:
+`altitude` and `maxAge=0`. Not exercised: a token without the
+`camara-location-read` role (no realm client mints one), and the "others still
+served" fault case while the synthetic asset has no position (its device is not
+placed).
 
-Compare the recorded vendor response against the API response for the *same*
-estimate (coordinates after room-local conversion, uncertainty carried not
-floored-away, timestamp = moment of the estimate, source/kind match the
-registry, altitude/vertical accuracy carried when present). This is a
-recorded-exchange comparison, done once by hand. Remaining known loss to record:
-the interface floors radius at 1 m, so a sub-metre source fix is reported at 1 m.
-(`maxAge` is now honoured with a per-asset cache, no longer a divergence; verify
-it holds.)
+Every fault is undone by an `EXIT` trap in `run.sh`, also on failure or Ctrl-C;
+the campaign refuses to start while a leftover exists (a policy labelled
+`app.kubernetes.io/managed-by=kelt-experiments`, or a positioning Deployment at
+0 replicas). Fault timings are given twice: from when the `kubectl` call
+returned and from when it started (the call goes through the master VM and
+takes seconds).
 
-## G6 role split (agreed with northbound)
+## response-time
 
-- **northbound**: per-hop structured logs (each service logs receive/emit ts +
-  the `x-correlator`) and correlator propagation across gateway → engine →
-  adapter, delivered in v0.9.0. The line contract is machine-readable:
-  https://jacobbista.github.io/5g-northbound/schema/hop-log.schema.json
-  (index: https://jacobbista.github.io/5g-northbound/contracts/).
-- **KELT**: the load driver (here) and the **aggregation**. `g6_aggregate.py`
-  joins the per-hop logs by `x-correlator` into a per-stage breakdown. It
-  validates every line against the pinned schema (`hop-log.schema.json`, vendored
-  next to it from Pages) and derives the hierarchy from timestamp containment, so
-  the topology is not hardcoded. The driver captures `x-correlator` per request
-  as the join key and snapshots the pod logs each run; feed those to
-  `g6_aggregate.py <run-dir>`.
+`run.sh response-time`: `response_time_driver.sh` sends the requests paced on a
+schedule (request *i* at t0 + *i*/rate) and keeps the `x-correlator` of each;
+`hop_aggregate.py` joins the hop lines the services log (schema:
+`hop-log.schema.json`, vendored from 5g-northbound) into one trace per request,
+drops the first `KELT_LAT_WARMUP` traces (default 50) as warm-up, and computes
+each service's own time (its span minus the spans it waited on);
+`response_time_summary.py` gives median, p90 and p99 per component.
 
-The first requests pay one-time costs (httpx connection-pool init, first DNS
-resolution, first JWKS fetch) that are not steady-state, so report the **warm**
-path: run the campaign at volume (default 1000 at ~5/s), discard the earliest
-requests with `g6_aggregate.py <run-dir> --warmup N`, and read the median / p90 /
-p99 it prints, never a single early sample.
+| Condition | Request |
+|---|---|
+| `hit` | the Wittra asset, no `maxAge` |
+| `fresh` | the Wittra asset, `maxAge=0` |
+| `local` | the synthetic asset, `maxAge=0`: no external call (needs the demo asset placed) |
 
-No mock-vendor is deployed in the cluster. The **WAN-free number** is the full
-trace **minus the adapter→vendor span** (subtraction, no extra pod); the call to
-the real Wittra cloud is a genuine WAN round-trip, still measured but kept
-separate. A deterministic WAN-free repro lives in the **local `make demo`** only:
-the vendor-adapter repointed at the schema-driven mock-vendor via
-`WITTRA_BASE_URL`. It is not a testbed component.
-
-Cache is `maxAge`-aware: `maxAge=0` bypasses the cache and measures the real
-pipeline (the `fresh` condition); a cache hit is ~0 and reported as a separate
-trivial number. Measure the fresh path for pipeline latency.
-
-## C10 streaming (freshness, not push latency)
-
-`G6_streaming.sh [duration_s]` opens the CAMARA stream
-(`WS /positions/stream?token=<jwt>` on the gateway, over its NodePort) and runs
-`stream_lag.py` to record, per pushed position,
-
-    lag = client-receive-time  -  payload `timestamp`
-
-plus the update rate, over a long run (default 600 s). The `timestamp` is the
-source fix time passed through by the gateway verbatim, so the lag is **freshness
-fix->client** (fix age + fusion + cadence + network), a different measure from the
-retrieve hop-log — hence its own tool, not the aggregator. The flow comes from the
-**synthetic-adapter** walker (`demo-001`); wittra rides the same stream but is not
-the C10 source, so filter by the `source` column the client writes.
-
-Run on the cluster host so the receive clock is close to the fix clock. The
-`timestamp` is stamped inside the adapter's node VM; the VMs discipline that clock
-with chrony (observed RMS offset < 0.1 ms against NTP), so the host<->VM
-contribution to the lag is sub-millisecond. Each run snapshots `chronyc tracking`
-into `clock_sync.txt` as evidence of that bound.
+The vendor share is the adapter's span on the requests that reached the vendor
+(adapter span ≥ 10 ms; from the adapter's cache it is about 0.3 ms). The stack
+share is the request's total minus that span, on the same requests. See
+`../README.md` for what the deployed version does with caching, which decides
+how many requests reach the vendor.

@@ -17,15 +17,24 @@ EXP_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "$EXP_ROOT/.." && pwd)"
 RUNS_DIR="${KELT_EXP_RUNS_DIR:-$EXP_ROOT/runs}"
 
-# ── Owner-declared names (override via env; owners noted inline) ───────────────
-CORE_NS="${KELT_CORE_NS:-5g}"                       # all.yml: namespace_5g
-EXPOSURE_NS_RE="${KELT_EXPOSURE_NS_RE:-positioning|camara|mec}"  # phase 10 + demo (mec)
-CAMARA_NS="${KELT_CAMARA_NS:-camara}"               # all.yml: camara_namespace
-MONITORING_NS="${KELT_MONITORING_NS:-monitoring}"  # phase 07: monitoring_namespace
+# ── Names and addresses from ansible/group_vars/all.yml (override via env) ─────
+plan_value() {
+  python3 -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))[sys.argv[2]])' \
+    "$REPO_ROOT/ansible/group_vars/all.yml" "$1"
+}
+CORE_NS="${KELT_CORE_NS:-$(plan_value namespace_5g)}"
+# Exposure stack for the resource-use campaign: northbound (phase 10) only. The
+# apps namespace holds the mec measurement server and user apps; identity is
+# reported apart.
+EXPOSURE_NS_RE="${KELT_EXPOSURE_NS_RE:-$(plan_value positioning_namespace)|$(plan_value camara_namespace)}"
+APPS_NS="${KELT_APPS_NS:-$(plan_value apps_namespace)}"
+CAMARA_NS="${KELT_CAMARA_NS:-$(plan_value camara_namespace)}"
+MONITORING_NS="${KELT_MONITORING_NS:-$(plan_value monitoring_namespace)}"
+IAM_NS="${KELT_IAM_NS:-$(plan_value iam_namespace)}"
 
-# UPF PDU anchor for the probe. Owner: 5g-probe/probe/config.py
-# (FIVEG_PROBE_UPF_TARGET) and all.yml UPF ogstun gateway.
-UPF_TARGET="${FIVEG_PROBE_UPF_TARGET:-10.45.0.1}"
+# UPF PDU anchor for the probe: the internet DNN gateway on the UPF (ogstun).
+# The probe's own default lives in 5g-probe/probe/config.py (FIVEG_PROBE_UPF_TARGET).
+UPF_TARGET="${FIVEG_PROBE_UPF_TARGET:-$(plan_value ue_internet_gateway)}"
 
 # kubectl access. Inside a VM Kubernetes is K3s (AGENTS.md): use `sudo k3s
 # kubectl`. From the host we reach it through the master VM. Override KELT_KUBECTL
@@ -75,5 +84,37 @@ new_run_dir() {
   echo "$d"
 }
 
+# A CAMARA access token for the demo consumer (client_credentials on the
+# `camara-api-demo` client, org-scoped). The secret comes from .testbed.secrets
+# and never lands in a run directory or a log line. Override KELT_CAMARA_TOKEN
+# to bring your own. Owner of the client: docs/security/iam.md.
+camara_token() {
+  if [ -n "${KELT_CAMARA_TOKEN:-}" ]; then echo "$KELT_CAMARA_TOKEN"; return; fi
+  local secret kc realm
+  secret="$(grep '^CAMARA_API_DEMO_SECRET' "$REPO_ROOT/.testbed.secrets" 2>/dev/null | cut -d= -f2- | tr -d '"'"'"' ')"
+  [ -n "$secret" ] || die "CAMARA_API_DEMO_SECRET not in .testbed.secrets"
+  kc="${KELT_KC_URL:-http://$(node_ip):$(plan_value keycloak_nodeport)/auth}"
+  realm="${KELT_KC_REALM:-5g-testbed}"
+  curl -s --max-time 15 \
+    -d grant_type=client_credentials -d client_id=camara-api-demo \
+    --data-urlencode "client_secret=$secret" \
+    "$kc/realms/$realm/protocol/openid-connect/token" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin).get("access_token",""))' 2>/dev/null \
+    | grep . || die "token mint failed (check KELT_KC_URL=$kc / realm $realm)"
+}
+
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%SZ)" "$*" >&2; }
 die() { log "ERROR: $*"; exit 1; }
+
+# A new run of <slug>: writes provenance (KELT_PILOT=1 marks a trial run, never
+# reported), echoes the run dir.
+begin_run() {
+  local slug="$1" condition="${2:-}" d
+  d="$(new_run_dir "$slug")"
+  mkdir -p "$d/raw"
+  KELT_PILOT="${KELT_PILOT:-0}" "$EXP_ROOT/provenance.sh" "$d" "$condition" >/dev/null
+  echo "$d"
+}
+
+# window open|close <run_dir> <label>: the measured part of a run, read by resource-use.
+window() { (cd "$EXP_ROOT" && python3 -m lib.runmeta "$1" "$2" "$3"); }

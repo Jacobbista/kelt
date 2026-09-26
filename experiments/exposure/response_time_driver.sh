@@ -7,7 +7,7 @@
 # G6). Until that instrumentation ships, this records end-to-end + the correlator
 # join key and snapshots the pod logs for later aggregation.
 #
-#   G6_latency.sh <fresh|hit|local> [count] [rate_per_s]
+#   response_time_driver.sh <fresh|hit|local> [count] [rate_per_s]
 #
 # Conditions (agreed with northbound):
 #   fresh   maxAge=0 in the body → bypass cache → measures the real pipeline
@@ -25,11 +25,11 @@
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib/common.sh"
 
-COND="${1:?usage: G6_latency.sh <fresh|hit|local> [count] [rate]}"
+COND="${1:?usage: response_time_driver.sh <fresh|hit|local> [count] [rate]}"
 COUNT="${2:-1000}"
 RATE="${3:-5}"
 GW="$(gateway_url)"
-TOKEN="${KELT_CAMARA_TOKEN:?set KELT_CAMARA_TOKEN to a valid CAMARA access token (do not commit it)}"
+TOKEN="$(camara_token)"   # KELT_CAMARA_TOKEN if set, else minted from .testbed.secrets
 RETRIEVE_PATH="${KELT_RETRIEVE_PATH:-/location-retrieval/v0.5/retrieve}"  # gateway serves v0.5; confirm via /docs
 BODY_FILE="${KELT_RETRIEVE_BODY:?set KELT_RETRIEVE_BODY to a JSON body (asset + maxAge for this condition)}"
 
@@ -37,14 +37,20 @@ BODY_FILE="${KELT_RETRIEVE_BODY:?set KELT_RETRIEVE_BODY to a JSON body (asset + 
 command -v curl >/dev/null || die "curl required"
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-RUN_DIR="$(new_run_dir "G6_latency" "$STAMP")"
-"$EXP_ROOT/provenance.sh" "$RUN_DIR" "G6/$COND" >/dev/null
+RUN_DIR="${KELT_RUN_DIR:-$(new_run_dir "response-time" "$STAMP")}"   # run.sh passes its own
+mkdir -p "$RUN_DIR"
+# The campaign (run.sh response-time) writes provenance once for all conditions.
+[ -n "${KELT_RUN_DIR:-}" ] || "$EXP_ROOT/provenance.sh" "$RUN_DIR" "response-time/$COND" >/dev/null
 CSV="$RUN_DIR/requests_${COND}.csv"
 echo "i,http_status,x_correlator,time_total_s,time_starttransfer_s" >"$CSV"
 HDR="$(mktemp)"; trap 'rm -f "$HDR"' EXIT
 
 log "G6 $COND: $COUNT requests at ${RATE}/s → $GW$RETRIEVE_PATH"
-SLEEP="$(python3 -c "print(1.0/float($RATE))")"
+# Paced on a schedule (request i starts at t0 + i/RATE), not "sleep after each
+# request", which would add the request time to every interval.
+PERIOD_NS="$(python3 -c "print(int(1e9/float($RATE)))")"
+T0_NS="$(date +%s%N)"
+window open "$RUN_DIR" "$COND"
 for i in $(seq 1 "$COUNT"); do
   read -r status ttot tstart < <(curl -s -o /dev/null -D "$HDR" \
       -w '%{http_code} %{time_total} %{time_starttransfer}\n' \
@@ -53,12 +59,14 @@ for i in $(seq 1 "$COUNT"); do
       --data-binary "@$BODY_FILE")
   xcorr="$(grep -i '^x-correlator:' "$HDR" | tail -1 | tr -d '\r' | awk '{print $2}')"
   echo "$i,$status,${xcorr:-},$ttot,$tstart" >>"$CSV"
-  sleep "$SLEEP"
+  wait_ns=$(( T0_NS + i * PERIOD_NS - $(date +%s%N) ))
+  [ "$wait_ns" -le 0 ] || sleep "$(printf '%d.%09d' $((wait_ns / 1000000000)) $((wait_ns % 1000000000)))"
 done
+window close "$RUN_DIR" "$COND"
 
 # Per-hop aggregation is KELT's job, keyed by x-correlator. northbound emits the
 # per-hop "hop" log line from v0.9.0 (gateway, engine, and every adapter). Snapshot
-# the pod logs for the run window so g6_aggregate.py can join them later; the
+# the pod logs for the run window so hop_aggregate.py can join them later; the
 # x-correlator column above is the join key. Capture the gateway AND every
 # deployment in the positioning namespace (engine + all adapters), so the
 # adapter->vendor (WAN) span is present and WAN-free can be subtracted.
@@ -69,4 +77,4 @@ for dep in $(kubectl get deploy -n "$POS_NS" -o name 2>/dev/null); do
   name="${dep##*/}"
   kubectl logs -n "$POS_NS" "$dep" --since=1h >"$RUN_DIR/hoplog_${name}_${COND}.txt" 2>/dev/null || true
 done
-log "done → $RUN_DIR (end-to-end + x-correlator in $CSV; per-hop logs snapshotted — aggregate with g6_aggregate.py)"
+log "done → $RUN_DIR (end-to-end + x-correlator in $CSV; per-hop logs snapshotted — aggregate with hop_aggregate.py)"

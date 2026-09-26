@@ -1,69 +1,84 @@
-# experiments/ - reproducible measurement campaigns
+# experiments/
 
-The thesis measurements as declarative, re-runnable sequences on top of the
-platform's own tools: the 5G probe, Prometheus, and the deployed CAMARA gateway.
-Each campaign orders those tools, runs the repetitions, and captures provenance;
-the raw samples land under `runs/`.
+Measurements against the live testbed: the real 5G core, the deployed
+northbound stack (phase 10), the real vendor cloud. Nothing here uses a mock;
+the numbers describe the deployment as it runs. The campaigns are named after
+the sections of the thesis that report them.
 
-Everything runs against the **live cluster** on the real 5G core - no compose, no
-mock repo. The northbound stack is a provisioning phase here (phase 10); the only
-"mock" is the G6 mock-vendor *condition*, still in-cluster.
+## Run
 
-**Scope: fidelity, not accuracy.** The question is whether a source value
-survives the pipeline, never how good the positioning technology is. No
-UWB-vs-WiFi, no ground truth, no NEF/LMF.
+```bash
+experiments/run.sh resource-use idle                  # 5 min at rest
+experiments/run.sh resource-use from <run-dir>...     # the windows other runs recorded
+experiments/run.sh verification                        # one exchange per profile behaviour
+experiments/run.sh response-time                       # where a location request's time goes
+experiments/run.sh report                              # every run, one line each
+python3 experiments/tables.py <campaign>               # the thesis table of a campaign
+```
+
+`throughput` and `rtt` (the network campaigns) are not here yet: they run on
+the Raspberry Pi UE and wait for how its traffic is isolated to be settled.
+The old probe plans for them are in `network/`.
+
+`KELT_PILOT=1` marks a trial run: it is recorded like any other and never
+reaches the tables. Other knobs are environment variables listed at the top of
+each campaign function in `run.sh`.
+
+## What each one measures
+
+| Campaign | Thesis | Question | How |
+|---|---|---|---|
+| `resource-use` | 4.10.2, 5.11.3 | CPU and memory the core and the exposure stack take | Prometheus (cAdvisor) per pod over 5 min windows: at rest, and over the windows the other campaigns recorded, so the load is the one their tables report. Groups: core (`5g`), exposure (`positioning`, `camara`), identity (`iam`), the mec measurement server, diagnostic probes (`netshoot`, wherever it lives); anything else is listed as other |
+| `verification` | 5.11.1 | Does the running stack behave as the private-asset profile specifies | One recorded exchange per case, compared with the contract the gateway itself serves (`GET /contracts/<name>`): identifiers and authorisation, data carried from the adapter, faults (vendor unreachable, adapter removed) |
+| `response-time` | 5.11.2 | How long a location request takes and how it divides between components and the vendor | 1000 requests per condition at 5/s; every service logs one hop line per request, joined by `x-correlator` |
+
+## A run directory
+
+`runs/<campaign>/<utc>/` (not committed):
+
+- `provenance.json`: date, KELT commit and whether the tree had changes, the
+  5g-northbound revision, the two deployment flags read from the cluster, the
+  image of every deployment, `pilot`;
+- `window.json`: the measured windows (UTC and local) and any discarded runs;
+- `raw/`: tool output as produced (Prometheus answers, exchanges, contracts,
+  pod logs);
+- `summary.json`, `summary.md`: the numbers of the run.
+
+`runs/_tables/` holds what `tables.py` builds: every non-pilot run of a
+campaign, or only the runs listed in `thesis-runs.txt` when that file exists.
+
+## Things to know when reading the numbers
+
+- The adapter keeps the vendor's answer for `cacheTtl` seconds (default 5), and
+  `maxAge=0` does not bypass that cache on the deployed version. At 5
+  requests/s about one request in 25 reaches the vendor cloud; the
+  response-time summary counts them and computes the stack share on those only.
+- There is no hop line for the adapter's own call to the vendor: the vendor
+  share is the adapter's span, which includes the adapter's own processing
+  (about 0.3 ms).
+- The gateway has no cache of its own on the deployed version: a request
+  without `maxAge` crosses the engine and the adapter like one with
+  `maxAge=0`.
+- Latency seen from the testbed host carries a VirtualBox artefact on
+  requests larger than one segment
+  ([known issue](../docs/known-issues/virtualbox-hostonly-tso.md)); the
+  per-component numbers come from the services' own logs and are not affected.
 
 ## Layout
 
 ```
-provenance.sh          date, commit, image versions, flags from the live deployment
-lib/common.sh          shared plumbing; addresses/ports/versions derived, not hardcoded
-network/               G2 throughput + latency, on the UE host through the modem
-  plans/*.json         campaigns in the probe's native plan format
-  run-campaign.sh      install plan -> provenance -> reps -> collect raw bundles
-  lib/start_plan.py    Socket.IO glue to run one plan headlessly
-footprint/             C8 resource footprint, Prometheus queries against the cluster
-exposure/              G3/G5/G6, HTTP against the deployed gateway (see its README)
-runs/<campaign>/<utc>/ plan.json + provenance.json + raw bundles, one dir per run
+run.sh                 entry point: checks, campaign, summary
+report.sh              one line per recorded run
+tables.py              thesis tables from the chosen runs
+provenance.sh          what was measured, read from the live deployment
+lib/common.sh          cluster access; addresses and names read from all.yml or the cluster
+lib/stats.py           the one percentile method every table uses
+lib/runmeta.py         measured windows and discarded runs (window.json)
+resource-use/          Prometheus queries and grouping
+exposure/              verification cases, fault injections, response-time driver and aggregation
+network/               probe plans for throughput and rtt (part B)
+tests/                 unit tests: python3 -m unittest discover -s experiments/tests -t experiments
+runs/                  one directory per run, never overwritten, not committed
 ```
 
-## Two hosts
-
-- **UE / probe host** owns the modem netns and runs `network/`. Needs the probe
-  server up (`../5g-probe/run-probe.sh`) and `KELT_UE_NS` set.
-- **Cluster reach** (kubectl + Prometheus + gateway) runs `footprint/` and
-  `exposure/`. From the host these go through the master VM (`sudo k3s kubectl`);
-  set `KELT_KUBECTL` to run on-node.
-
-## Order
-
-1. `footprint/C8_footprint.sh idle` and G5 source failure - cheap, need nothing new.
-2. G3 conformance and G5 fidelity - recorded exchanges only.
-3. `network/run-campaign.sh` for C1 throughput, then C2 / C3 latency.
-4. G6 - the per-hop log line and correlator propagation ship in northbound
-   v0.9.0; drive the load and aggregate with `exposure/g6_aggregate.py`.
-5. G5 attach-a-source (needs a second source), G1 rebuild (when the machine is free).
-
-Under time pressure, cut the second throughput endpoint and the bidirectional
-latency case; keep G5 fidelity and the G6 mock condition.
-
-## Running a campaign
-
-```bash
-# network (UE host, probe server running)
-KELT_UE_NS=ue1 experiments/network/run-campaign.sh C1_throughput       # reps=5
-KELT_UE_NS=ue1 experiments/network/run-campaign.sh C2_latency_idle     # reps=3
-KELT_UE_NS=ue1 KELT_C3_LOAD=both experiments/network/run-campaign.sh C3_latency_load
-
-# footprint (per condition, after it has been active >= 5 min)
-experiments/footprint/C8_footprint.sh idle
-
-# exposure (see experiments/exposure/README.md)
-```
-
-Each run writes a self-contained directory under `runs/`: the plan, the raw
-samples, `provenance.json` (date, commit, image versions, deployment flags), and
-the condition. A fresh timestamped directory every time, so a re-run never
-overwrites. Sample sizes, durations, and offered rates live in the `plans/*.json`
-(`_note` and the per-experiment fields). Secrets pass by environment and stay out
-of `runs/`.
+`exposure/README.md` has the details of the two exposure campaigns.

@@ -18,7 +18,9 @@ OUT="$RUN_DIR/provenance.json"
 log "capturing provenance → $OUT"
 
 KELT_COMMIT="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-KELT_DIRTY="$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null | head -c1 | grep -q . && echo true || echo false)"
+# Not a `| head` pipeline: under pipefail the SIGPIPE it sends to git fails the
+# pipeline and the flag always read false.
+KELT_DIRTY="$([ -n "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)" ] && echo true || echo false)"
 DATE_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 # Image tags of the deployment under measurement, read from the running pods
@@ -28,7 +30,7 @@ images_json() {
   # iam carries Keycloak, whose version the thesis method records alongside the
   # gateway/engine/adapter images; it is not in EXPOSURE_NS_RE (that one separates
   # core from exposure for the footprint campaign).
-  for ns in "$CORE_NS" $(echo "$EXPOSURE_NS_RE" | tr '|' ' ') "${KELT_IAM_NS:-iam}"; do
+  for ns in "$CORE_NS" $(echo "$EXPOSURE_NS_RE" | tr '|' ' ') "$IAM_NS"; do
     while read -r name img; do
       [ -n "$name" ] || continue
       pairs="$pairs{\"ns\":\"$ns\",\"deploy\":\"$name\",\"image\":\"$img\"},"
@@ -39,11 +41,23 @@ images_json() {
 }
 
 # The two deployment flags that define the measured deployment. Values come from
-# the rendered cluster, not from all.yml defaults: physical RAN is "on" if the
-# AMF carries its N2 physical-RAN address; northbound is "on" if the gateway is
-# deployed. (Owner: all.yml physical_ran_enabled / *_enabled derived from
-# NORTHBOUND_ENABLED.)
-PHYS_RAN="$(kubectl get svc -n "$CORE_NS" -o name 2>/dev/null | grep -qi 'amf' && echo present || echo absent)"
+# the rendered cluster, not from all.yml defaults: physical RAN is "enabled" if the
+# AMF is attached to a NAD on the physical RAN bridge (br-ran, phase 04);
+# northbound is "enabled" if the gateway is deployed. (Owner: all.yml
+# physical_ran_enabled / *_enabled derived from NORTHBOUND_ENABLED.)
+physical_ran_flag() {
+  local nads amf_nets
+  nads="$(kubectl get net-attach-def -n "$CORE_NS" \
+      -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.config}{"\n"}{end}' 2>/dev/null \
+    | awk '/"bridge": *"br-ran"/ {print $1}')"
+  amf_nets="$(kubectl get deploy -n "$CORE_NS" amf \
+      -o jsonpath='{.spec.template.metadata.annotations.k8s\.v1\.cni\.cncf\.io/networks}' 2>/dev/null)"
+  for n in $nads; do
+    printf '%s' "$amf_nets" | grep -q "\"name\": *\"$n\"" && { echo enabled; return; }
+  done
+  echo disabled
+}
+PHYS_RAN="$(physical_ran_flag)"
 NORTHBOUND="$(kubectl get deploy -n "$CAMARA_NS" -o name 2>/dev/null | grep -qi gateway && echo enabled || echo disabled)"
 
 # The 5g-northbound git commit behind the deployed images. The image tag (in
@@ -74,12 +88,18 @@ except Exception:
 }
 NB_REV="$(northbound_revision)"
 
+PILOT="$([ "${KELT_PILOT:-0}" = 1 ] && echo true || echo false)"
+HOST_TZ="$(date +%z)"
+
 cat > "$OUT" <<JSON
 {
   "date_utc": "$DATE_UTC",
   "condition": "$CONDITION",
   "kelt_commit": "$KELT_COMMIT",
   "kelt_worktree_dirty": $KELT_DIRTY,
+  "pilot": $PILOT,
+  "host_tz": "$HOST_TZ",
+  "exposure_namespaces": "$EXPOSURE_NS_RE",
   "northbound_revision": "$NB_REV",
   "deployment_flags": {
     "physical_ran": "$PHYS_RAN",
