@@ -13,7 +13,7 @@ const SECTIONS = [
   { key: "other", title: "Other" },
 ];
 
-export default function CorePage({ onOpenLogs, onOpenTerminal, onOpenIperf3Logs, expandNfType }) {
+export default function CorePage({ onOpenLogs, onOpenTerminal, onOpenIperf3Logs }) {
   const auth = useAuth();
   const toast = useToast();
   // Restart, exec and image rollout all sit behind admin-only routers.
@@ -111,22 +111,9 @@ export default function CorePage({ onOpenLogs, onOpenTerminal, onOpenIperf3Logs,
     nfVersions.map((v) => [v.nf, v])
   );
 
-  useEffect(() => {
-    if (expandNfType && nfStatus) {
-      const all = [
-        ...nfStatus.control_plane,
-        ...nfStatus.user_plane,
-        ...nfStatus.data,
-        ...nfStatus.other,
-      ];
-      const match = all.find((nf) => nf.nf_type === expandNfType);
-      if (match) setExpandedPod(match.name);
-    }
-  }, [expandNfType, nfStatus]);
-
   async function handleScaleController(controller, replicas) {
     try {
-      await scaleAmfController(controller.kind, controller.name, replicas, "5g");
+      await scaleAmfController(controller.kind, controller.name, replicas);
       setTimeout(refresh, 1000);
       setTimeout(refreshAmfAlert, 1200);
     } catch (err) {
@@ -138,7 +125,7 @@ export default function CorePage({ onOpenLogs, onOpenTerminal, onOpenIperf3Logs,
     if (!nf.deployment) return;
     try {
       setRestartingDeps((prev) => new Set(prev).add(nf.deployment));
-      await restartDeployment("5g", nf.deployment);
+      await restartDeployment(nf.namespace, nf.deployment);
       setTimeout(refresh, 1500);
     } catch (err) {
       setRestartingDeps((prev) => {
@@ -208,7 +195,6 @@ export default function CorePage({ onOpenLogs, onOpenTerminal, onOpenIperf3Logs,
     <div className="svc-fade">
       <div className="mb-4 flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-lg font-semibold text-slate-100">5G Core Network Functions</h2>
           <p className="text-xs text-slate-500">{runningCount}/{allNfs.length} running · Open5GS service-based architecture</p>
         </div>
         <button

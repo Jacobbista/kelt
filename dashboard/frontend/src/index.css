@@ -142,7 +142,10 @@ body {
   from { opacity: 0; }
   to   { opacity: 1; }
 }
-.svc-fade { animation: svc-fade 0.25s ease-out both; }
+/* `backwards`, not `both`: the end state equals the defaults, and a fill that
+   outlives the animation keeps a stacking context on the page root, which traps
+   the page's fixed overlays (log viewer, modals) under the sticky header. */
+.svc-fade { animation: svc-fade 0.25s ease-out backwards; }
 
 /* Tab-pane switch: a short fade + slight rise so changing section (and layout)
    does not snap. Used on a container keyed by the active tab so it re-animates. */
@@ -150,9 +153,108 @@ body {
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: none; }
 }
-.tab-pane { animation: tab-pane 0.2s ease-out both; }
+.tab-pane { animation: tab-pane 0.2s ease-out backwards; }  /* backwards: see .svc-fade */
+
+/* Accordion expand/collapse (NF card detail drawer): height animates via
+   grid-template-rows 0fr <-> 1fr, so it needs no JS height measurement and
+   works for a drawer whose content varies (Describe output, update log).
+   Padding lives on -inner only: a 0fr track with padding on itself never
+   fully closes. The chevron flips scaleY(-1) rather than morphing its `d:`
+   path, since path morphing is Chromium-only. */
+:root {
+  --acc-expand: 220ms;
+  --acc-collapse: 220ms;
+  --acc-chevron: 220ms;
+  --acc-ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+.t-acc-panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--acc-collapse) var(--acc-ease);
+}
+.t-acc[data-open="true"] .t-acc-panel {
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--acc-expand) var(--acc-ease);
+}
+.t-acc-panel-inner {
+  overflow: hidden;
+  opacity: 0;
+  filter: blur(2px);
+  transition:
+    opacity var(--acc-collapse) var(--acc-ease),
+    filter var(--acc-collapse) var(--acc-ease);
+}
+.t-acc[data-open="true"] .t-acc-panel-inner {
+  opacity: 1;
+  filter: blur(0);
+  transition:
+    opacity var(--acc-expand) var(--acc-ease),
+    filter var(--acc-expand) var(--acc-ease);
+}
+.t-acc-chevron {
+  display: inline-flex;
+  transform: scaleY(1);
+  transform-origin: center;
+  transition: transform var(--acc-chevron) var(--acc-ease);
+}
+.t-acc-chevron path { vector-effect: non-scaling-stroke; }
+.t-acc[data-open="true"] .t-acc-chevron {
+  transform: scaleY(-1);
+}
+
+/* Card resize: tween a container's height when its content changes shape
+   (e.g. a card that grows once per-node data arrives), instead of the new
+   block popping in under a fixed layout. */
+:root {
+  --resize-dur: 280ms;
+  --resize-ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+.t-resize {
+  transition: height var(--resize-dur) var(--resize-ease);
+  will-change: height;
+}
+
+/* Skeleton -> content reveal, for a tile whose data arrives later than the
+   rest of the page (Prometheus-backed stats, the Exposure/Edge Apps rollups).
+   Both layers occupy the same box (each carries its own card chrome) and
+   cross-fade with a matching blur instead of a flat pop-in. The skeleton
+   pulses on its own opacity keyframe so it stays visible for however long
+   the fetch actually takes, independent of the reveal transition. */
+:root {
+  --skel-pulse-dur: 1100ms;
+  --skel-reveal-dur: 350ms;
+  --skel-reveal-blur: 2px;
+  --skel-reveal-ease: ease-in-out;
+}
+.t-skel { position: relative; }
+.t-skel-skeleton,
+.t-skel-content {
+  position: absolute;
+  inset: 0;
+  transition:
+    opacity var(--skel-reveal-dur) var(--skel-reveal-ease),
+    filter var(--skel-reveal-dur) var(--skel-reveal-ease);
+}
+.t-skel-skeleton { z-index: 1; opacity: 1; filter: blur(0); }
+.t-skel-content { z-index: 2; opacity: 0; filter: blur(var(--skel-reveal-blur)); }
+.t-skel.is-revealed .t-skel-skeleton { opacity: 0; filter: blur(var(--skel-reveal-blur)); }
+.t-skel.is-revealed .t-skel-content { opacity: 1; filter: blur(0); }
+.t-skel-skeleton.is-pulsing > * {
+  animation: t-skel-pulse var(--skel-pulse-dur) ease-in-out infinite;
+}
+@keyframes t-skel-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .svc-fade,
   .tab-pane { animation: none; }
+  .t-skel-skeleton,
+  .t-skel-content { transition: none; }
+  .t-skel-skeleton.is-pulsing > * { animation: none; }
+  .t-resize { transition: none; }
+  .t-acc-panel,
+  .t-acc-panel-inner,
+  .t-acc-chevron { transition: none; }
 }

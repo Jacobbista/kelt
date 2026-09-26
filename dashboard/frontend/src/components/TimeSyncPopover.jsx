@@ -1,5 +1,6 @@
-import React, { useEffect, useLayoutEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { createPortal } from "react-dom";
+import usePopover from "../hooks/usePopover";
 import { getTimeSync, forceTimeSync } from "../api";
 
 const VM_ORDER = ["ansible", "master", "worker", "edge"];
@@ -44,6 +45,8 @@ function SkeletonRow() {
   );
 }
 
+const POPOVER_WIDTH = 288; // w-72
+
 export default function TimeSyncPopover({ onClose, anchorRef }) {
   const [data, setData] = useState(cachedData);
   const [fetchedAt, setFetchedAt] = useState(cachedAt || Date.now());
@@ -51,19 +54,11 @@ export default function TimeSyncPopover({ onClose, anchorRef }) {
   const [syncing, setSyncing] = useState(false);
   const [now, setNow] = useState(Date.now());
   const autoSyncedRef = useRef(false);
-  const ref = useRef(null);
-  const [pos, setPos] = useState(null);
-
-  // The sidebar's page-fade animation on every route gives its content its
-  // own stacking context (fill-mode: both never lets go), which then beats
-  // the sidebar's plain `position: fixed` on DOM order alone — same root
-  // cause as the Modal in ui.jsx, same fix: portal past it and position from
-  // the trigger's own on-screen rect instead of an ancestor-relative offset.
-  useLayoutEffect(() => {
-    if (!anchorRef?.current) return;
-    const r = anchorRef.current.getBoundingClientRect();
-    setPos({ left: r.left, bottom: window.innerHeight - r.top + 4 });
-  }, [anchorRef]);
+  // Portaled and placed by usePopover. A trigger in the top half (the header
+  // clock) opens it below, kept inside the window; one lower down, above.
+  const { ref, style } = usePopover(anchorRef, onClose, (r) => (r.top < window.innerHeight / 2
+    ? { left: Math.max(8, Math.min(r.left, window.innerWidth - POPOVER_WIDTH - 8)), top: r.bottom + 4 }
+    : { left: r.left, bottom: window.innerHeight - r.top + 4 }));
 
   // Tick every second so displayed times advance live
   useEffect(() => {
@@ -118,25 +113,14 @@ export default function TimeSyncPopover({ onClose, anchorRef }) {
     return () => clearInterval(id);
   }, []);
 
-  useEffect(() => {
-    function handleClick(e) {
-      if (ref.current?.contains(e.target)) return;
-      // The trigger button's own onClick already toggles open/closed; closing
-      // here too on the same mousedown just reopens it on the click that follows.
-      if (anchorRef?.current?.contains(e.target)) return;
-      onClose();
-    }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [onClose, anchorRef]);
 
   const busy = loading || syncing;
-  if (!pos) return null; // first-frame guard until the anchor rect is measured
+  if (!style) return null; // first frame, before the anchor rect is measured
 
   return createPortal(
     <div
       ref={ref}
-      style={{ left: pos.left, bottom: pos.bottom }}
+      style={style}
       className="fixed z-50 w-72 rounded-lg border border-slate-700 bg-slate-900 shadow-xl p-3"
     >
       <div className="flex items-center justify-between mb-2">

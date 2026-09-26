@@ -73,7 +73,7 @@ export default function DevModeIndicator() {
   const url = resolveDevUrl(status?.url);
 
   return (
-    <div className="mt-2 flex flex-col gap-1 border-t border-slate-800 pt-2">
+    <div className="flex flex-col gap-1">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <span className={`inline-block h-2 w-2 rounded-full ${dotClass}`} />

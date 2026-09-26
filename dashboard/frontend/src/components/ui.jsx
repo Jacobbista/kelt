@@ -50,7 +50,7 @@ export function Toggle({ checked, onChange, label, hint, disabled = false }) {
 
 // Segmented control: a bordered container with the active section as a filled pill.
 // Reads clearly as navigation (the underline variant was too faint). House idiom,
-// matches the Diagnostics / Kubernetes tab bars.
+// matches the Topology / Kubernetes tab bars.
 export function Tabs({ tabs, active, onChange }) {
   return (
     <div className="inline-flex flex-wrap gap-0.5 rounded-lg border border-slate-700 bg-slate-900 p-0.5">

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   activateUeransimGnb,
+  bringRanLinkUp,
   activateUeransimUe,
   createUeransimGnbForm,
   createUeransimUeForm,
@@ -246,14 +247,12 @@ function GnbConsoleCard() {
 // subnet + AMF IP the dashboard already shows), so there is nothing to guess and no
 // need to open all.yml. The RAN transport is L2 bridge + worker L3 routing (no NAT),
 // so the gNB points NGAP straight at the AMF's real address.
-function GnbSideConfigCard({ subnet, amfIp }) {
-  const sn = subnet || "192.168.6.0/24";
-  const gw = sn.replace(/\.\d+(\/\d+)?$/, ".1");
+function GnbSideConfigCard({ subnet, gateway, amfIp, n3Subnet }) {
   const rows = [
-    ["RAN interface IP", `a free static address in ${sn}`],
-    ["Default gateway", gw],
-    ["AMF / NGAP (SCTP)", `${amfIp || "192.168.6.150"} : 38412`],
-    ["User-plane route", `10.203.0.0/24 via ${gw}`],
+    ["RAN interface IP", `a free static address in ${subnet}`],
+    ["Default gateway", gateway],
+    ["AMF / NGAP (SCTP)", `${amfIp} : 38412`],
+    ["User-plane route", `${n3Subnet} via ${gateway}`],
   ];
   return (
     <div className="rounded-xl border border-slate-700 bg-slate-900/60 p-4">
@@ -391,6 +390,9 @@ export default function RanConfig({ activeTab = "physical" }) {
   const phys = modes?.physical || {};
   const sim = modes?.ueransim || {};
   const cfg = phys?.config || {};
+  // missing | down (link not brought up) | no_carrier (nothing on the wire) | up
+  const nicState = phys?.nic_state || (phys?.bridge_detected ? "up" : "missing");
+  const nicName = phys?.ran_interface_detected || cfg.physical_ran_interface;
   const warnings = modes?.warnings || [];
   const gnbList = defaults?.gnbs || sim?.gnbs || [];
   const ueList = defaults?.ues || sim?.ues || [];
@@ -403,7 +405,7 @@ export default function RanConfig({ activeTab = "physical" }) {
           <Badge ok={phys?.enabled}>{phys?.enabled ? "ACTIVE" : "INACTIVE"}</Badge>
         </div>
         <div className="grid grid-cols-2 gap-3 mb-4">
-          <Badge ok={phys?.bridge_detected}>Worker VM NIC: {phys?.ran_interface_detected || cfg.physical_ran_interface || "not found"}</Badge>
+          <Badge ok={nicState === "up"}>Worker VM NIC: {nicName || "not found"}{nicState === "down" ? " (link down)" : nicState === "no_carrier" ? " (no carrier)" : ""}</Badge>
           <Badge ok={phys?.bridge_exists}>OVS br-ran</Badge>
           <Badge ok={phys?.nad_exists}>NAD n2-physical</Badge>
           <Badge ok={phys?.amf_has_physical_ran}>AMF annotation</Badge>
@@ -485,8 +487,44 @@ export default function RanConfig({ activeTab = "physical" }) {
           )}
         </div>
 
+        {/* === NIC present but not passing traffic === */}
+        {(nicState === "down" || nicState === "no_carrier") && (
+          <div className="rounded border border-rose-700/50 bg-rose-950/30 p-4 mb-4 space-y-3">
+            <div className="flex items-start gap-2">
+              <span className="text-rose-400 text-sm mt-0.5">!</span>
+              <div>
+                <h4 className="text-sm font-medium text-rose-200">
+                  {nicState === "down" ? "RAN link is down on the worker" : "No carrier on the RAN link"}
+                </h4>
+                <p className="text-xs text-slate-400 mt-1 leading-relaxed">
+                  {nicState === "down" ? (
+                    <>The worker has its RAN NIC (<span className="font-mono text-slate-300">{nicName}</span>) but the link was not brought up, so the gNB cannot reach the core. </>
+                  ) : (
+                    <>The worker&apos;s RAN NIC (<span className="font-mono text-slate-300">{nicName}</span>) is up but sees nothing on the wire. Check the cable and the switch between the host NIC{phys?.host_nic_applied ? <> (<span className="font-mono text-slate-300">{phys.host_nic_applied}</span>)</> : null} and the gNB.</>
+                  )}
+                </p>
+              </div>
+            </div>
+            {nicState === "down" && (
+              <div className="flex items-center gap-3">
+                <Btn
+                  variant="primary"
+                  disabled={busy || ops.busy}
+                  onClick={() => action(async () => {
+                    const r = await bringRanLinkUp();
+                    if (!r?.ok) throw new Error(`The link is still ${r?.nic_state === "no_carrier" ? "without carrier" : (r?.nic_state || "down")} after re-running the network setup.`);
+                  })}
+                >
+                  {busy ? "Bringing the link up…" : "Bring the link up"}
+                </Btn>
+                <span className="text-[11px] text-slate-500">Re-runs the worker&apos;s network setup (the OVS script that owns this NIC), about 30 s.</span>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* === STALE CONFIG: NIC missing but K8s config remains === */}
-        {!phys?.bridge_detected && (phys?.bridge_exists || phys?.nad_exists || phys?.amf_has_physical_ran) && (
+        {nicState === "missing" && (phys?.bridge_exists || phys?.nad_exists || phys?.amf_has_physical_ran) && (
           <div className="rounded border border-rose-700/50 bg-rose-950/30 p-4 mb-4 space-y-3">
             <div className="flex items-start gap-2">
               <span className="text-rose-400 text-sm mt-0.5">!</span>
@@ -527,7 +565,7 @@ export default function RanConfig({ activeTab = "physical" }) {
         )}
 
         {/* === SETUP: no NIC detected === */}
-        {!phys?.bridge_detected && !phys?.bridge_exists && !phys?.nad_exists && !phys?.amf_has_physical_ran && (
+        {nicState === "missing" && !phys?.bridge_exists && !phys?.nad_exists && !phys?.amf_has_physical_ran && (
           <div className="rounded border border-amber-700/50 bg-amber-950/30 p-4 mb-4 space-y-3">
             <div className="flex items-start gap-2">
               <span className="text-amber-400 text-sm mt-0.5">⚠</span>
@@ -547,7 +585,7 @@ export default function RanConfig({ activeTab = "physical" }) {
               <div className="ml-[6.5rem] text-slate-600 text-[10px]">↓ VirtualBox bridges it into the VM ↓</div>
               <div className="flex items-center gap-3">
                 <span className="w-24 text-right font-medium text-slate-400 shrink-0">Worker VM NIC</span>
-                <span className="text-slate-500">e.g. <span className="font-mono text-slate-300">enp0s9</span> — auto-detected by OVS via subnet <span className="font-mono text-slate-300">{cfg.physical_ran_subnet || "192.168.6.0/24"}</span></span>
+                <span className="text-slate-500">e.g. <span className="font-mono text-slate-300">enp0s9</span> — auto-detected by OVS via subnet <span className="font-mono text-slate-300">{cfg.physical_ran_subnet}</span></span>
               </div>
             </div>
             <div className="space-y-2">
@@ -582,7 +620,7 @@ export default function RanConfig({ activeTab = "physical" }) {
         )}
 
         {/* === TEARDOWN HINT: NIC present but disabled === */}
-        {phys?.bridge_detected && !phys?.enabled && !phys?.bridge_exists && !phys?.nad_exists && !phys?.amf_has_physical_ran && (
+        {nicState !== "missing" && !phys?.enabled && !phys?.bridge_exists && !phys?.nad_exists && !phys?.amf_has_physical_ran && (
           <div className="rounded border border-slate-600/50 bg-slate-900/50 p-3 mb-4 text-xs text-slate-500 space-y-2">
             <p>
               <strong className="text-slate-400">Physical RAN is disabled</strong> but the worker VM still has the RAN NIC (<span className="font-mono text-slate-300">{phys.ran_interface_detected}</span>).
@@ -616,8 +654,8 @@ export default function RanConfig({ activeTab = "physical" }) {
                 refresh();
               });
             }}
-            disabled={ops.busy || busy || !phys?.bridge_detected}
-            title={!phys?.bridge_detected ? "Worker VM NIC not detected — re-add with vagrant reload" : undefined}
+            disabled={ops.busy || busy || nicState === "missing"}
+            title={nicState === "missing" ? "Worker VM NIC not found — re-add it with vagrant reload" : undefined}
           >
             {phys?.enabled ? "Reconfigure" : "Enable Physical"}
           </Btn>
@@ -681,7 +719,7 @@ export default function RanConfig({ activeTab = "physical" }) {
         )}
       </div>
       <div className="grid gap-5 lg:grid-cols-2">
-        <GnbSideConfigCard subnet={cfg.physical_ran_subnet} amfIp={cfg.amf_physical_ran_ip} />
+        <GnbSideConfigCard subnet={cfg.physical_ran_subnet} gateway={cfg.physical_ran_gateway} amfIp={cfg.amf_physical_ran_ip} n3Subnet={cfg.n3_subnet} />
         <GnbConsoleCard />
       </div>
     </div>

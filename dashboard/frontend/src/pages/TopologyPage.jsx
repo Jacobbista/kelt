@@ -56,9 +56,8 @@ export default function TopologyPage() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-3rem)] flex-col">
+    <div className="flex h-[calc(100vh-6rem)] flex-col">
       <div className="mb-4 flex items-center gap-4 flex-shrink-0">
-        <h2 className="text-lg font-semibold">Network Topology</h2>
         {error && (
           <div className="rounded border border-rose-700 bg-rose-950/50 px-3 py-1.5 text-sm text-rose-300">{error}</div>
         )}

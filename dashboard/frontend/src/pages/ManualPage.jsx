@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { Panel, btn } from "../components/ui";
@@ -29,12 +30,11 @@ const DOC_LINKS = [
 
 // "How to move around" quick map of the dashboard sections (operational).
 const NAV_HELP = [
-  ["Overview / Kubernetes", "Cluster-wide status, nodes, namespaces, events."],
-  ["5G Core", "The Open5GS network functions: status, logs, restart, scale, image rollout."],
-  ["Topology / RAN / UE Monitor", "Network map, RAN mode, and live UE sessions."],
-  ["Subscribers", "Manage 5G subscribers (IMSI, keys, slices); admin only."],
-  ["Services", "Northbound positioning/CAMARA and custom workloads (this area)."],
-  ["Metrics / Diagnostics", "Prometheus dashboards and connectivity checks."],
+  ["Overview", "Cluster-wide status, what needs attention, the systems at a glance."],
+  ["5G Network", "Core network functions, RAN mode, subscribers (admin), live UE sessions."],
+  ["Network", "Topology, isolation (what may talk to what, what was stopped), plane health, packet capture (admin)."],
+  ["Platform", "Kubernetes objects, the services hub (positioning, CAMARA, edge apps), Prometheus metrics."],
+  ["Settings", "Identity, branding and storage; admin only."],
 ];
 
 // Short, plain, honest explanations + a link into the docs for depth.
@@ -103,6 +103,12 @@ export default function ManualPage() {
     refreshUpdates();
   };
   useEffect(() => { load(); }, [isAdmin]);
+  // The header's update chip links here (/manual#updates): scroll on every
+  // arrival with that hash, including a click while already on the page.
+  const location = useLocation();
+  useEffect(() => {
+    if (location.hash === "#updates") document.getElementById("updates")?.scrollIntoView();
+  }, [location.key, location.hash]);
 
   const doUpdate = async (name) => {
     // The frontend replaces the very pod serving this page, so it cannot be
@@ -144,11 +150,11 @@ export default function ManualPage() {
   return (
     <div className="svc-fade flex flex-col gap-5 pb-8">
       <header>
-        <h2 className="text-lg font-semibold text-slate-100">Manual</h2>
         <p className="text-xs text-slate-500">Find your way around the dashboard and cluster, and learn how the testbed works.</p>
       </header>
 
       {isAdmin && (
+      <div id="updates" className="scroll-mt-16">
       <Panel
         title="Updates"
         hint="Dashboard components vs the latest published image. Updating re-pulls only that component (no full redeploy)."
@@ -196,6 +202,7 @@ export default function ManualPage() {
           </div>
         )}
       </Panel>
+      </div>
       )}
 
       <Panel title="Documentation" hint="The full docs site (always in sync with the repo).">

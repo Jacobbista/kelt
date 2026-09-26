@@ -1,9 +1,8 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// Reverse-proxy targets. Both default to localhost since Vite runs on the
-// same node as the backend + watchdog. Overridden via .env templated by
-// ansible phase 08.
+// Reverse-proxy targets. Vite runs on the same VM as the backend and the
+// watchdog; phase 09 sets both targets from the all.yml Ports block.
 const backendTarget  = process.env.VITE_BACKEND_TARGET  || "http://127.0.0.1:8080";
 const watchdogTarget = process.env.VITE_WATCHDOG_TARGET || "http://127.0.0.1:31881";
 const keycloakTarget = process.env.VITE_KEYCLOAK_PROXY_TARGET || "";

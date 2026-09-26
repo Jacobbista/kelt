@@ -6,14 +6,20 @@ import { OperationsProvider } from "./context/OperationsContext";
 import { ToastProvider } from "./context/ToastContext";
 import { ConfirmProvider } from "./context/ConfirmContext";
 import { UpdateProvider } from "./context/UpdateContext";
+import { IsolationSummaryProvider } from "./context/IsolationSummaryContext";
+import { StatusSummaryProvider } from "./context/StatusSummaryContext";
 import { useBackendHealth } from "./hooks/useBackendHealth";
 import ErrorBoundary from "./components/ErrorBoundary";
 import Layout from "./Layout";
+import { ROUTES } from "./navigation";
+import { env } from "./runtime-env";
 import LogViewer from "./components/LogViewer";
 import PodTerminal from "./components/PodTerminal";
 import CallbackPage from "./pages/CallbackPage";
 import CorePage from "./pages/CorePage";
-import DiagnosticsPage from "./pages/DiagnosticsPage";
+import HealthPage from "./pages/HealthPage";
+import CapturePage from "./pages/CapturePage";
+import IsolationPage from "./pages/IsolationPage";
 import SettingsPage from "./pages/SettingsPage";
 import IamPage from "./pages/IamPage";
 import BrandingPage from "./pages/BrandingPage";
@@ -33,20 +39,6 @@ import SubscribersPage from "./pages/SubscribersPage";
 import TopologyPage from "./pages/TopologyPage";
 import UEMonitoringPage from "./pages/UEMonitoringPage";
 
-const ROUTES = {
-  overview:       "/",
-  kubernetes:     "/kubernetes",
-  core:           "/core",
-  topology:       "/topology",
-  ran:            "/ran",
-  subscribers:    "/subscribers",
-  "ue-monitoring": "/ue-monitor",
-  diagnostics:    "/diagnostics",
-  metrics:        "/metrics",
-  services:       "/services",
-  settings:       "/settings",
-  manual:         "/manual",
-};
 
 export default function App() {
   return (
@@ -74,13 +66,37 @@ function AdminOnly({ children }) {
   );
 }
 
+// Sign-in cannot start on a plain-HTTP origin (see AuthContext). Say so and
+// point at the HTTPS address of this same frontend, keeping the path.
+function InsecureOrigin() {
+  const secure = env("VITE_SECURE_URL");
+  const here = window.location.pathname + window.location.search;
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-slate-950 p-6 text-slate-300">
+      <div className="max-w-md rounded-lg border border-slate-700 bg-slate-900 p-6">
+        <h2 className="mb-2 text-lg font-semibold text-slate-100">Sign-in needs HTTPS</h2>
+        <p className="text-sm leading-relaxed text-slate-400">
+          This address ({window.location.origin}) is plain HTTP, and the browser does not allow the
+          login there.
+        </p>
+        {secure ? (
+          <a href={`${secure.replace(/\/+$/, "")}${here}`} className="mt-4 inline-block rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500">
+            Open {secure.replace(/^https:\/\//, "").replace(/\/+$/, "")}
+          </a>
+        ) : (
+          <p className="mt-3 text-sm text-slate-400">Open the dashboard through its HTTPS address, or on localhost.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function AppInner() {
   const navigate = useNavigate();
   const auth = useAuth();
   const [runtime, setRuntime] = useState({ mode: "unknown", runtime_source: "unknown" });
   const [logTarget, setLogTarget] = useState(null);
   const [termTarget, setTermTarget] = useState(null);
-  const [expandNfType, setExpandNfType] = useState(null);
   const { unreachable: backendUnreachable, sessionExpired, serverTime } = useBackendHealth();
 
   useEffect(() => {
@@ -116,17 +132,12 @@ function AppInner() {
       .catch(() => {});
   }, [auth.enabled, auth.loading, auth.user]);
 
-  function handleNavigateToNf(nfType) {
-    setExpandNfType(nfType);
-    navigate("/core");
-  }
-
   function handleOpenLogs(nf) {
-    setLogTarget({ name: nf.name, containers: nf.containers, namespace: "5g", deployment: nf.deployment });
+    setLogTarget({ name: nf.name, containers: nf.containers, namespace: nf.namespace, deployment: nf.deployment });
   }
 
   function handleOpenTerminal(nf) {
-    setTermTarget({ name: nf.name, containers: nf.containers, nfType: nf.nf_type, namespace: "5g" });
+    setTermTarget({ name: nf.name, containers: nf.containers, nfType: nf.nf_type, namespace: nf.namespace });
   }
 
   function handleOpenIperf3Logs(nf) {
@@ -134,14 +145,13 @@ function AppInner() {
       name: nf.name,
       containers: nf.containers,
       nfType: nf.nf_type,
-      namespace: "5g",
+      namespace: nf.namespace,
       command: "tail -F /var/log/iperf3-server.log",
       title: "iperf3 Server Logs",
     });
   }
 
   function onNavigate(id) {
-    setExpandNfType(null);
     navigate(ROUTES[id] ?? "/");
   }
 
@@ -151,6 +161,7 @@ function AppInner() {
   // banner before the redirect lands. The callback and logged-out routes must
   // still render to drive their own flow, so they are exempt.
   const authPath = window.location.pathname;
+  if (auth.insecureOrigin) return <InsecureOrigin />;
   if (
     auth.enabled
     && authPath !== "/auth/callback"
@@ -170,6 +181,8 @@ function AppInner() {
     <ConfirmProvider>
     <UpdateProvider>
     <OperationsProvider>
+    <IsolationSummaryProvider>
+    <StatusSummaryProvider>
     <Layout
       onNavigate={onNavigate}
       runtime={runtime}
@@ -180,16 +193,20 @@ function AppInner() {
       <Routes>
         <Route path="/auth/callback" element={<CallbackPage />} />
         <Route path="/logged-out" element={<LoggedOutPage />} />
-        <Route path="/" element={<OverviewPage onNavigateToNf={handleNavigateToNf} />} />
+        <Route path="/" element={<OverviewPage />} />
         <Route path="/kubernetes" element={<KubernetesPage />} />
         <Route path="/core" element={
-          <CorePage onOpenLogs={handleOpenLogs} onOpenTerminal={handleOpenTerminal} onOpenIperf3Logs={handleOpenIperf3Logs} expandNfType={expandNfType} />
+          <CorePage onOpenLogs={handleOpenLogs} onOpenTerminal={handleOpenTerminal} onOpenIperf3Logs={handleOpenIperf3Logs} />
         } />
-        <Route path="/topology" element={<TopologyPage />} />
+        <Route path="/network/topology" element={<TopologyPage />} />
+        <Route path="/network/isolation" element={<IsolationPage />} />
+        <Route path="/network/health" element={<HealthPage />} />
+        <Route path="/network/capture" element={<AdminOnly><CapturePage /></AdminOnly>} />
+        <Route path="/topology" element={<Navigate to="/network/topology" replace />} />
+        <Route path="/diagnostics" element={<Navigate to="/network/health" replace />} />
         <Route path="/ran" element={<AdminOnly><RanPage /></AdminOnly>} />
         <Route path="/subscribers" element={<AdminOnly><SubscribersPage /></AdminOnly>} />
         <Route path="/ue-monitor" element={<UEMonitoringPage />} />
-        <Route path="/diagnostics" element={<DiagnosticsPage />} />
         <Route path="/metrics" element={<MetricsPage />} />
         <Route path="/services" element={<ServicesPage />} />
         <Route path="/services/northbound" element={<NorthboundPage />} />
@@ -231,6 +248,8 @@ function AppInner() {
         />
       )}
     </Layout>
+    </StatusSummaryProvider>
+    </IsolationSummaryProvider>
     </OperationsProvider>
     </UpdateProvider>
     </ConfirmProvider>

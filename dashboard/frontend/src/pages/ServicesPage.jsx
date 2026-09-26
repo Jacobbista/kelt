@@ -33,7 +33,6 @@ export default function ServicesPage() {
     return (
       <div className="svc-fade flex flex-col gap-6 pb-8">
         <header>
-          <h2 className="text-lg font-semibold text-slate-100">Services</h2>
           <p className="text-xs text-slate-500">Scheduled workloads across the cluster. Northbound exposure and edge services.</p>
         </header>
         <div className="py-16"><Loader size="sm" label="Loading services…" /></div>
@@ -44,7 +43,6 @@ export default function ServicesPage() {
   return (
     <div className="svc-fade flex flex-col gap-6 pb-8">
       <header>
-        <h2 className="text-lg font-semibold text-slate-100">Services</h2>
         <p className="text-xs text-slate-500">Scheduled workloads across the cluster. Northbound exposure and edge services.</p>
       </header>
 

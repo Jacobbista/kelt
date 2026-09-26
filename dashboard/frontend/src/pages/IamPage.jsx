@@ -2,9 +2,7 @@ import { useMemo, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { env } from "../runtime-env";
 import { KEYCLOAK_AUTHORITY } from "../auth/oidc";
-import { Link } from "react-router-dom";
 import { Collapsible } from "../components/ui";
-import { IconArrowLeft } from "../components/icons";
 import { getClientSecret, rotateClientSecret, getMasterAdminPassword } from "../api";
 import { useToast } from "../context/ToastContext";
 import { useConfirm } from "../context/ConfirmContext";
@@ -346,12 +344,8 @@ export default function IamPage() {
 
   return (
     <div className="svc-fade flex flex-col gap-6 pb-8">
-        <Link to="/settings" className="inline-flex w-fit items-center gap-1 text-xs text-slate-400 hover:text-slate-200">
-          <IconArrowLeft size={14} /> Settings
-        </Link>
       <header className="flex items-center justify-between gap-4">
         <div>
-          <h2 className="text-lg font-semibold">Identity &amp; Access</h2>
           <p className="text-xs text-slate-400">
             The Keycloak realm provisioned by phase 08. Users are managed in the Keycloak console;
             M2M client credentials are managed here.

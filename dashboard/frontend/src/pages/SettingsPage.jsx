@@ -38,7 +38,6 @@ export default function SettingsPage() {
   return (
     <div className="svc-fade flex flex-col gap-6 pb-8">
       <header>
-        <h2 className="text-lg font-semibold text-slate-100">Settings</h2>
         <p className="text-xs text-slate-500">
           Deployment configuration: who can get in, how the front door looks, and what the nodes are storing.
         </p>

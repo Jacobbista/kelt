@@ -139,7 +139,7 @@ function N6NatPolicyCard({ data }) {
       )}
 
       <div className="space-y-1.5">
-        <div className="text-[11px] font-medium text-slate-400">Active backend rules (10.207.0.0/24)</div>
+        <div className="text-[11px] font-medium text-slate-400">Active backend rules ({summary.n6_subnet})</div>
         {rules.length === 0 ? (
           <div className="text-xs text-slate-500">No N6 rules detected in active backend.</div>
         ) : (

@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
-import { IconArrowLeft } from "../components/icons";
 import { Panel, inputCls, btn, Field, Toggle } from "../components/ui";
 import Loader from "../components/Loader";
 import LogViewer from "../components/LogViewer";
@@ -69,7 +67,7 @@ export default function AppsPage() {
   const toast = useToast();
   const confirm = useConfirm();
 
-  const [state, setState] = useState({ apps: [], loaded: false, ready: false, registryHost: "" });
+  const [state, setState] = useState({ apps: [], loaded: false, ready: false, registryHost: "", staticBand: "" });
   const [registry, setRegistry] = useState({ reachable: false, images: [], loaded: false });
   const [updates, setUpdates] = useState({}); // {name: true} when registry has a newer digest
   const [regBusy, setRegBusy] = useState(false); // registry refresh in-flight (button feedback)
@@ -94,7 +92,7 @@ export default function AppsPage() {
   const refresh = useCallback(async () => {
     try {
       const res = await getApps();
-      setState({ apps: res.apps || [], loaded: true, ready: !!res.ready, registryHost: res.registry_host || "" });
+      setState({ apps: res.apps || [], loaded: true, ready: !!res.ready, registryHost: res.registry_host || "", staticBand: res.n6m_static_band || "" });
     } catch {
       setState((s) => ({ ...s, loaded: true }));
     }
@@ -255,11 +253,7 @@ export default function AppsPage() {
   return (
     <div className="svc-fade flex flex-col gap-5 pb-8">
       <header className="flex flex-col gap-2">
-        <Link to="/services" className="inline-flex w-fit items-center gap-1 text-xs text-slate-400 hover:text-slate-200">
-          <IconArrowLeft size={14} /> Services
-        </Link>
         <div>
-          <h2 className="text-lg font-semibold text-slate-100">Edge apps</h2>
           <p className="text-xs text-slate-500">
             Your own application pods on the worker node. An exposed app is reachable at its own subdomain through the front-door.
             {isAdmin ? "" : " Read-only (dashboard-admin required to deploy)."}
@@ -489,8 +483,8 @@ export default function AppsPage() {
               <Toggle checked={attachMec} onChange={setAttachMec} label="Attach to MEC network (n6m)" hint="reachable by UEs over the 5G user plane (UPF → n6m)" />
               {attachMec && (
                 <div className="ml-11 grid grid-cols-1 gap-3 border-l border-teal-900/50 pl-3 sm:grid-cols-2">
-                  <Field label="Fixed n6m IP" hint="reserved band 10.208.0.200-.207; empty = dynamic">
-                    <input className={`${inputCls} w-full`} placeholder="10.208.0.200" value={mecIp} onChange={(e) => setMecIp(e.target.value)} />
+                  <Field label="Fixed n6m IP" hint={`reserved band ${state.staticBand}; empty = dynamic`}>
+                    <input className={`${inputCls} w-full`} placeholder={state.staticBand.split("/")[0]} value={mecIp} onChange={(e) => setMecIp(e.target.value)} />
                   </Field>
                   <Field label="UDP ingest ports" hint="comma-separated, e.g. 5005 (RTP video from the UE)">
                     <input className={`${inputCls} w-full`} placeholder="5005" value={udpPortsStr} onChange={(e) => setUdpPortsStr(e.target.value)} />

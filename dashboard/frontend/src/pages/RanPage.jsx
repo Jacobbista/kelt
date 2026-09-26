@@ -10,9 +10,8 @@ export default function RanPage() {
   const [tab, setTab] = useState("physical");
 
   return (
-    <div className="flex h-[calc(100vh-3rem)] flex-col">
+    <div className="flex h-[calc(100vh-6rem)] flex-col">
       <div className="mb-4 flex items-center gap-4 flex-shrink-0">
-        <h2 className="text-lg font-semibold">RAN Control</h2>
         <div className="flex rounded-lg border border-slate-700 bg-slate-900 p-0.5">
           {TABS.map((t) => (
             <button

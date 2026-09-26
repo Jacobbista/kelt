@@ -119,16 +119,20 @@ export const disableDevFrontend = () => post("/api/v1/dev-frontend/disable", {})
 
 // Cluster
 export const getClusterSummary = () => get("/api/v1/cluster/summary");
+export const getStatusSummary = () => get("/api/v1/status/summary");
 export const getNfStatus = () => get("/api/v1/nf/status");
-export const getPods = (ns = "5g") => get(`/api/v1/pods?namespace=${ns}`);
+// Namespace omitted -> the backend uses the core namespace from all.yml.
+const nsQuery = (ns) => (ns ? `?namespace=${encodeURIComponent(ns)}` : "");
+export const getPods = (ns) => get(`/api/v1/pods${nsQuery(ns)}`);
 
 // Pod details
-export const describePod = (pod, ns = "5g") => get(`/api/v1/pods/${pod}/describe?namespace=${ns}`);
+export const describePod = (pod, ns) => get(`/api/v1/pods/${pod}/describe${nsQuery(ns)}`);
 
 // AMF CNI file-exists alert & repair
 export const getAmfCniAlert = () => get("/api/v1/pods/amf-cni-alert");
 
-export const scaleAmfController = (kind, name, replicas, namespace = "5g") =>
+// namespace omitted -> the backend uses the core namespace from all.yml.
+export const scaleAmfController = (kind, name, replicas, namespace) =>
   post("/api/v1/pods/amf-controllers/scale", {
     namespace,
     kind,
@@ -140,14 +144,14 @@ export const scaleAmfController = (kind, name, replicas, namespace = "5g") =>
 export const restartDeployment = (ns, dep) => post(`/api/v1/deployments/${dep}/restart`, { namespace: ns });
 
 // NF log level (Open5GS)
-export const getNfLogLevel = (deployment, ns = "5g") => get(`/api/v1/nf/${deployment}/log-level?namespace=${ns}`);
-export const setNfLogLevel = (deployment, level, ns = "5g") => patch(`/api/v1/nf/${deployment}/log-level?namespace=${ns}`, { level });
+export const getNfLogLevel = (deployment, ns) => get(`/api/v1/nf/${deployment}/log-level${nsQuery(ns)}`);
+export const setNfLogLevel = (deployment, level, ns) => patch(`/api/v1/nf/${deployment}/log-level${nsQuery(ns)}`, { level });
 
 // Topology & Network
-export const getTopology = (ns = "5g") => get(`/api/v1/topology?namespace=${ns}`);
+export const getTopology = (ns) => get(`/api/v1/topology${nsQuery(ns)}`);
 export const getBridgeFlows = (bridge) => get(`/api/v1/ovs/bridges/${bridge}/flows`);
-export const getNads = (ns = "5g") => get(`/api/v1/network/nads?namespace=${ns}`);
-export const getNetworkInterfaces = (ns = "5g") => get(`/api/v1/network/interfaces?namespace=${ns}`);
+export const getNads = (ns) => get(`/api/v1/network/nads${nsQuery(ns)}`);
+export const getNetworkInterfaces = (ns) => get(`/api/v1/network/interfaces${nsQuery(ns)}`);
 
 // Subscribers
 export const getSubscribers = () => get("/api/v1/subscribers");
@@ -257,6 +261,8 @@ export async function disablePhysicalModeStream(onProgress) {
 }
 
 export const disablePhysicalMode = () => post("/api/v1/ran/modes/physical/disable", {});
+// Re-runs the OVS setup that owns the worker's RAN NIC and waits for the link.
+export const bringRanLinkUp = () => post("/api/v1/ran/modes/physical/link-up", {});
 export const enableUeransimMode = () => post("/api/v1/ran/modes/ueransim/enable", {});
 export const disableUeransimMode = () => post("/api/v1/ran/modes/ueransim/disable", {});
 export const getUeransimStatus = () => get("/api/v1/ran/ueransim/status");
@@ -283,6 +289,13 @@ export const getNfMetricsRange = (mins = 30, step = "60s") => get(`/api/v1/metri
 
 // Network Health
 export const getNetworkHealth = () => get("/api/v1/network/health");
+
+// Isolation: the plane filter and the NetworkPolicies (read-only, viewer).
+export const getIsolationPlanes = (window = "24h") => get(`/api/v1/isolation/planes?window=${encodeURIComponent(window)}`);
+export const getIsolationSamples = (limit = 5) => get(`/api/v1/isolation/planes/samples?limit=${limit}`);
+export const getIsolationPolicies = () => get("/api/v1/isolation/policies");
+export const getIsolationTargets = () => get("/api/v1/isolation/targets");
+export const checkIsolationFlow = (source, destination) => post("/api/v1/isolation/check", { source, destination });
 export const runNetworkHealthCheck = () => post("/api/v1/network/health/run", {});
 export const getN6NatDiagnostics = () => get("/api/v1/network/n6-nat");
 
@@ -294,7 +307,7 @@ export const getActiveUes = () => get("/api/v1/ue/active");
 export const getUeGnbs = () => get("/api/v1/ue/gnbs");
 export const getUePods = () => get("/api/v1/ue/pods");
 export const runUePing = (pod, target = "8.8.8.8") => post("/api/v1/ue/test/ping", { pod, target });
-export const runUeIperf = (pod, server = "10.45.0.1", duration = 5) => post("/api/v1/ue/test/iperf", { pod, server, duration });
+export const runUeIperf = (pod, server = null, duration = 5) => post("/api/v1/ue/test/iperf", { pod, server, duration });
 export const getNfRawLogs = (nf, tail = 100) => get(`/api/v1/ue/logs/${nf}?tail=${tail}`);
 
 // UE personalizations (dashboard-only nickname/icon, persisted in Mongo)
@@ -351,7 +364,7 @@ export function buildExecWsUrl(namespace, pod, container, command = "/bin/sh") {
 }
 
 // Deployment scaling
-export const scaleDeployment = (name, replicas, ns = "5g") =>
+export const scaleDeployment = (name, replicas, ns) =>
   post(`/api/v1/deployments/${name}/scale`, { replicas, namespace: ns });
 
 // Kubernetes inventory (generic cluster section, not 5G-specific)
@@ -461,6 +474,7 @@ export const upgradeNorthboundAdapter = (name, image) =>
 export const enableNorthboundPersistence = (name) =>
   post(`/api/v1/northbound/services/${encodeURIComponent(name)}/enable-persistence`, {});
 export const deployNorthboundImage = (body) => post("/api/v1/northbound/deploy", body);
+export const getWorkloadNamespaces = () => get("/api/v1/northbound/workloads/namespaces");
 export const deployNorthboundWorkload = (body) => post("/api/v1/northbound/workloads", body);
 export const deleteNorthboundWorkload = (name) =>
   del(`/api/v1/northbound/workloads/${encodeURIComponent(name)}`);

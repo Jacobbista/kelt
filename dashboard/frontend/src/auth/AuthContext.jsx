@@ -27,9 +27,14 @@ function buildEndSessionUrl(idToken, clientId, postLogoutUri) {
 
 const AuthCtx = createContext(null);
 
+// OIDC with PKCE needs crypto.subtle, which browsers give only to secure
+// contexts (HTTPS or localhost): on the plain-HTTP LAN address the login cannot
+// even start. App.jsx then sends the user to the HTTPS origin instead.
+const INSECURE_ORIGIN = AUTH_ENABLED && typeof window !== "undefined" && !window.isSecureContext;
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(AUTH_ENABLED);
+  const [loading, setLoading] = useState(AUTH_ENABLED && !INSECURE_ORIGIN);
   // True from the moment logout starts until the browser leaves the page.
   // removeUser() sets the user to null, which would otherwise trip the
   // auto-login effect (App.jsx) and re-authenticate through the still-alive
@@ -39,7 +44,7 @@ export function AuthProvider({ children }) {
   const [loggingOut, setLoggingOut] = useState(false);
 
   useEffect(() => {
-    if (!AUTH_ENABLED) return;
+    if (!AUTH_ENABLED || INSECURE_ORIGIN) return;
     const um = getUserManager();
     if (!um) {
       setLoading(false);
@@ -85,7 +90,7 @@ export function AuthProvider({ children }) {
 
   const login = useCallback(async () => {
     const um = getUserManager();
-    if (!um) return;
+    if (!um || INSECURE_ORIGIN) return;
     // Preserve where the user was so the callback returns them there, not to "/"
     // (CallbackPage navigates to user.state). Keeps deep links across login.
     const here = window.location.pathname + window.location.search;
@@ -117,6 +122,7 @@ export function AuthProvider({ children }) {
   const roles = extractRoles(user);
   const value = {
     enabled: AUTH_ENABLED,
+    insecureOrigin: INSECURE_ORIGIN,
     loading,
     loggingOut,
     user,

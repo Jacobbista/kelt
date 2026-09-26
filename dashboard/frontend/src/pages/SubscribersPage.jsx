@@ -9,12 +9,28 @@ import {
 } from "../api";
 import Loader from "../components/Loader";
 
+// 128-bit key as 32 hex characters, from the browser's CSPRNG.
+function randomKey() {
+  const b = new Uint8Array(16);
+  crypto.getRandomValues(b);
+  return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+}
+
+// A new subscriber starts with its own random K and OPc (right for a simulated
+// UE); a physical SIM's card values replace them.
+function newSubscriber() {
+  const sub = structuredClone(EMPTY_SUB);
+  sub.security.k = randomKey();
+  sub.security.opc = randomKey();
+  return sub;
+}
+
 const EMPTY_SUB = {
   imsi: "",
   security: {
     k: "",
     amf: "8000",
-    op: "11111111111111111111111111111111",
+    op: null,
     opc: null,
   },
   subscribed_rau_tau_timer: 12,
@@ -54,6 +70,7 @@ function ambrStr(ambr) {
 export default function SubscribersPage() {
   const [subscribers, setSubscribers] = useState([]);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(null);
   const [editing, setEditing] = useState(null);
@@ -109,7 +126,12 @@ export default function SubscribersPage() {
     try {
       const text = await file.text();
       const json = JSON.parse(text);
-      await importSubscribers(json);
+      const res = await importSubscribers(json);
+      const skipped = res.skipped || [];
+      setNotice(
+        `Imported ${res.count} subscriber(s)` +
+          (skipped.length ? `; ${skipped.length} already present and left unchanged: ${skipped.join(", ")}` : ""),
+      );
       refresh();
     } catch (err) {
       setError(String(err.message || err));
@@ -128,17 +150,14 @@ export default function SubscribersPage() {
   return (
     <div>
       <div className="mb-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <h2 className="text-lg font-semibold">Subscribers</h2>
-        </div>
-        <div className="flex gap-2">
+        <div className="ml-auto flex gap-2">
           <label className="cursor-pointer rounded bg-slate-700 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-600 transition-colors">
             Import JSON
             <input type="file" accept=".json" onChange={handleImport} className="hidden" />
           </label>
           <button
             type="button"
-            onClick={() => { setShowAdd(true); setEditing(structuredClone(EMPTY_SUB)); }}
+            onClick={() => { setShowAdd(true); setEditing(newSubscriber()); }}
             className="rounded bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 transition-colors"
           >
             Add Subscriber
@@ -146,6 +165,12 @@ export default function SubscribersPage() {
         </div>
       </div>
 
+      {notice && (
+        <div className="mb-4 flex items-center justify-between rounded border border-emerald-700 bg-emerald-950/40 p-3 text-sm text-emerald-300">
+          <span>{notice}</span>
+          <button type="button" onClick={() => setNotice("")} className="ml-3 text-emerald-400 hover:text-white">&#x2715;</button>
+        </div>
+      )}
       {error && (
         <div className="mb-4 flex items-center justify-between rounded border border-rose-700 bg-rose-950/50 p-3 text-sm text-rose-300">
           <span>{error}</span>
@@ -155,7 +180,7 @@ export default function SubscribersPage() {
 
       {(showAdd || editing) && (
         <SubscriberForm
-          data={editing || structuredClone(EMPTY_SUB)}
+          data={editing || newSubscriber()}
           isNew={showAdd}
           onSave={handleSave}
           onCancel={() => { setEditing(null); setShowAdd(false); }}
@@ -345,8 +370,13 @@ function SubscriberForm({ data, isNew, onSave, onCancel }) {
         <FormField label="IMSI" value={form.imsi} onChange={(v) => setField("imsi", v)} disabled={!isNew} mono />
         <FormField label="Key (K)" value={form.security?.k || ""} onChange={(v) => setField("security.k", v)} mono />
         <FormField label="OP" value={form.security?.op ?? ""} onChange={setOp} mono />
-        <FormField label="OPc (optional)" value={form.security?.opc ?? ""} onChange={setOpc} mono />
+        <FormField label="OPc" value={form.security?.opc ?? ""} onChange={setOpc} mono />
         <FormField label="AMF" value={form.security?.amf || ""} onChange={(v) => setField("security.amf", v)} mono />
+        {isNew && (
+          <p className="col-span-2 text-[11px] text-slate-500">
+            K and OPc are generated at random, which is what a simulated UE needs. For a physical SIM, enter the card's K and its OP or OPc.
+          </p>
+        )}
 
         <div className="col-span-2 border-t border-slate-800 pt-2 mt-1">
           <div className="text-slate-400 mb-1">Aggregate AMBR</div>

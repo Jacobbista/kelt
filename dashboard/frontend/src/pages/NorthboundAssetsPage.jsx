@@ -3,8 +3,6 @@
 // import/export) that deserves its own page rather than living behind a small
 // header switcher where it competes for attention with Deploy adapter.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
-import { IconArrowLeft } from "../components/icons";
 import { Panel, Modal, Field, inputCls, btn } from "../components/ui";
 import { useToast } from "../context/ToastContext";
 import { env } from "../runtime-env";
@@ -611,10 +609,6 @@ export default function NorthboundAssetsPage() {
   return (
     <div className="svc-fade flex flex-col gap-5 pb-8">
       <header className="flex flex-col gap-2">
-        <Link to="/services/northbound" className="inline-flex w-fit items-center gap-1 text-xs text-slate-400 hover:text-slate-200">
-          <IconArrowLeft size={14} /> Northbound
-        </Link>
-        <h2 className="text-lg font-semibold text-slate-100">Asset Identity Map</h2>
         <p className="text-xs text-slate-500">
           CAMARA private-asset profile: assetId maps to a positioning source. The gateway is the authority
           (GET/PUT /assets); the engine broadcasts each device from its adapter's capability, so an onboarded

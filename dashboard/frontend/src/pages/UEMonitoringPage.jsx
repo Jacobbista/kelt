@@ -442,7 +442,6 @@ export default function UEMonitoringPage() {
 
   return (
     <div className="space-y-6 p-6">
-      <h2 className="text-xl font-semibold text-white">UE Monitoring</h2>
 
       {error && (
         <div className="rounded border border-rose-700/40 bg-rose-950/30 p-3 text-sm text-rose-300">

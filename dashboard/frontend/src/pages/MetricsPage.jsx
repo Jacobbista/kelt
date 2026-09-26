@@ -5,6 +5,7 @@ import {
 } from "recharts";
 import { getNfMetrics, getNfMetricsRange, getNodeMetrics, getNodeMetricsRange } from "../api";
 import Loader from "../components/Loader";
+import { env } from "../runtime-env";
 
 const COLORS = ["#6366f1", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4"];
 
@@ -296,14 +297,25 @@ export default function MetricsPage() {
 
       {/* ── Header ── */}
       <div className="mb-4 flex flex-wrap items-center gap-3 flex-shrink-0">
-        <h2 className="text-lg font-semibold">Metrics</h2>
         <TabBar tab={tab} onTab={setTab} />
         <RangeSelector value={rangeMins} onChange={setRangeMins} />
-        {updatedAt && (
-          <span className="ml-auto text-[10px] tabular-nums text-slate-600">
-            updated {updatedAt.toLocaleTimeString()}
-          </span>
-        )}
+        <div className="ml-auto flex items-center gap-3">
+          {updatedAt && (
+            <span className="text-[10px] tabular-nums text-slate-600">
+              updated {updatedAt.toLocaleTimeString()}
+            </span>
+          )}
+          {/* Grafana is for what these charts do not show: Explore, the Loki
+              logs, long ranges. The only link to it in the dashboard. */}
+          <a
+            href={env("VITE_GRAFANA_URL")}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-700 px-2.5 py-1 text-xs text-slate-300 transition-colors hover:bg-slate-800"
+          >
+            <span aria-hidden="true">&#x2197;</span> Open in Grafana
+          </a>
+        </div>
       </div>
 
       {error && (

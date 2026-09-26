@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
-import { IconArrowLeft, IconRefresh, IconTrash } from "../components/icons";
+import { IconRefresh, IconTrash } from "../components/icons";
 import { Panel, Modal, Banner, Field, inputCls, btn } from "../components/ui";
 import { useToast } from "../context/ToastContext";
 import { useConfirm } from "../context/ConfirmContext";
@@ -403,12 +403,8 @@ export default function NorthboundPage() {
   return (
     <div className="svc-fade flex flex-col gap-5 pb-8">
       <header className="flex flex-col gap-2">
-        <Link to="/services" className="inline-flex w-fit items-center gap-1 text-xs text-slate-400 hover:text-slate-200">
-          <IconArrowLeft size={14} /> Services
-        </Link>
         <div className="flex items-center justify-between gap-4">
           <div>
-            <h2 className="text-lg font-semibold text-slate-100">Northbound</h2>
             <p className="text-xs text-slate-500">
               Positioning engine adapters and the CAMARA Location stack.
               {isAdmin ? "" : " Read-only (dashboard-admin required for changes)."}

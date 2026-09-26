@@ -1,13 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
-import { IconArrowLeft } from "../components/icons";
 import { Panel, inputCls, btn } from "../components/ui";
 import { useToast } from "../context/ToastContext";
-import { deployNorthboundWorkload } from "../api";
-
-// Namespaces a custom workload may land in (must match the backend allow-list).
-const NAMESPACES = ["mec", "positioning", "camara"];
+import { deployNorthboundWorkload, getWorkloadNamespaces } from "../api";
 
 export default function CustomWorkloadPage() {
   const auth = useAuth();
@@ -16,11 +12,23 @@ export default function CustomWorkloadPage() {
   const [name, setName] = useState("");
   const [image, setImage] = useState("");
   const [port, setPort] = useState(8080);
-  const [namespace, setNamespace] = useState("mec");
+  // Allowed namespaces come from the backend (all.yml), never a copy here.
+  const [namespaces, setNamespaces] = useState([]);
+  const [namespace, setNamespace] = useState("");
   const [pullSecret, setPullSecret] = useState("");
   const [env, setEnv] = useState([]);
   const [busy, setBusy] = useState(false);
   const toast = useToast();
+
+  useEffect(() => {
+    getWorkloadNamespaces()
+      .then((r) => {
+        setNamespaces(r.namespaces);
+        setNamespace(r.default);
+      })
+      .catch((err) => toast.error(`cannot load namespaces: ${err.message}`));
+    // Once on mount: the toast api object is rebuilt on every provider render.
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const addEnv = () => setEnv((e) => [...e, { name: "", value: "", sensitive: false }]);
   const setEnvAt = (i, k, v) => setEnv((e) => e.map((row, j) => (j === i ? { ...row, [k]: v } : row)));
@@ -28,7 +36,7 @@ export default function CustomWorkloadPage() {
 
   const submit = async (e) => {
     e.preventDefault();
-    if (!name || !image) return;
+    if (!name || !image || !namespace) return;
     setBusy(true);
     try {
       const res = await deployNorthboundWorkload({
@@ -50,11 +58,7 @@ export default function CustomWorkloadPage() {
   return (
     <div className="svc-fade flex flex-col gap-5 pb-8">
       <header className="flex flex-col gap-2">
-        <Link to="/services" className="inline-flex w-fit items-center gap-1 text-xs text-slate-400 hover:text-slate-200">
-          <IconArrowLeft size={14} /> Services
-        </Link>
         <div>
-          <h2 className="text-lg font-semibold text-slate-100">Custom workload</h2>
           <p className="text-xs text-slate-500">
             Deploy any container image as a scheduled workload (Deployment + ClusterIP Service) in an allowed namespace.
             {isAdmin ? "" : " Read-only (dashboard-admin required to deploy)."}
@@ -71,8 +75,9 @@ export default function CustomWorkloadPage() {
               <input className={inputCls} placeholder="name" value={name} onChange={(e) => setName(e.target.value)} />
               <input className={`${inputCls} min-w-[24rem] flex-1`} placeholder="image:tag" value={image} onChange={(e) => setImage(e.target.value)} />
               <input className={`${inputCls} w-20`} type="number" placeholder="port" value={port} onChange={(e) => setPort(e.target.value)} />
-              <select className={inputCls} value={namespace} onChange={(e) => setNamespace(e.target.value)}>
-                {NAMESPACES.map((n) => <option key={n} value={n}>{n}</option>)}
+              <select className={inputCls} value={namespace} disabled={!namespaces.length} onChange={(e) => setNamespace(e.target.value)}>
+                {!namespaces.length && <option value="">loading…</option>}
+                {namespaces.map((n) => <option key={n} value={n}>{n}</option>)}
               </select>
               <input className={inputCls} placeholder="imagePullSecret (optional)" value={pullSecret} onChange={(e) => setPullSecret(e.target.value)} />
             </div>

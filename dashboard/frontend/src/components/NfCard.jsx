@@ -56,18 +56,22 @@ export default function NfCard({ nf, onRestart, onOpenLogs, onOpenTerminal, onOp
   const showRestarting = !isTerminating && (isRestarting || nf.phase === "Pending" || nf.phase === "ContainerCreating");
 
   return (
-    <div className={`rounded-lg border transition-colors ${
-      isTerminating
-        ? "border-slate-700/50 bg-slate-950 opacity-60"
-        : showRestarting
-          ? "border-amber-600/40 bg-slate-900"
-          : nf.phase === "Running"
-            ? "border-slate-700 bg-slate-900 hover:border-slate-600"
-            : "border-rose-700/40 bg-slate-900"
-    }`}>
+    <div
+      data-open={expanded ? "true" : "false"}
+      className={`t-acc rounded-lg border transition-colors ${
+        isTerminating
+          ? "border-slate-700/50 bg-slate-950 opacity-60"
+          : showRestarting
+            ? "border-amber-600/40 bg-slate-900"
+            : nf.phase === "Running"
+              ? "border-slate-700 bg-slate-900 hover:border-slate-600"
+              : "border-rose-700/40 bg-slate-900"
+      }`}
+    >
       <button
         type="button"
         onClick={onToggle}
+        aria-expanded={expanded}
         className="flex w-full items-center gap-3 px-4 py-3 text-left"
       >
         <span className={`h-2.5 w-2.5 flex-shrink-0 rounded-full ${dot}`} />
@@ -120,11 +124,16 @@ export default function NfCard({ nf, onRestart, onOpenLogs, onOpenTerminal, onOp
             );
           })()}
           <span className="tabular-nums">{timeSince(nf.start_time)}</span>
-          <span className="text-slate-600">{expanded ? "\u25B2" : "\u25BC"}</span>
+          <span className="t-acc-chevron text-slate-600">
+            <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M4 6.5L8 10.5L12 6.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </span>
         </span>
       </button>
 
-      {expanded && (
+      <div className="t-acc-panel">
+        <div className="t-acc-panel-inner">
         <div className="border-t border-slate-800 px-4 py-3">
           <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-xs mb-3">
             <div>
@@ -218,12 +227,14 @@ export default function NfCard({ nf, onRestart, onOpenLogs, onOpenTerminal, onOp
                     <div className="flex items-center gap-1.5 rounded border border-slate-700 bg-slate-800/50 px-2 py-1" onClick={(e) => e.stopPropagation()}>
                       <button
                         type="button"
+                        aria-label="Decrease replicas"
                         onClick={() => setScaleTarget(Math.max(0, scaleTarget - 1))}
                         className="rounded bg-slate-700 px-1.5 py-0.5 text-xs text-slate-300 hover:bg-slate-600"
                       >−</button>
                       <span className="min-w-[20px] text-center text-xs font-mono text-slate-200">{scaleTarget}</span>
                       <button
                         type="button"
+                        aria-label="Increase replicas"
                         onClick={() => setScaleTarget(Math.min(10, scaleTarget + 1))}
                         className="rounded bg-slate-700 px-1.5 py-0.5 text-xs text-slate-300 hover:bg-slate-600"
                       >+</button>
@@ -243,6 +254,7 @@ export default function NfCard({ nf, onRestart, onOpenLogs, onOpenTerminal, onOp
                       >{scaling ? "..." : "Apply"}</button>
                       <button
                         type="button"
+                        aria-label="Cancel scale"
                         onClick={() => setShowScale(false)}
                         className="text-xs text-slate-500 hover:text-slate-300"
                       >✕</button>
@@ -286,7 +298,8 @@ export default function NfCard({ nf, onRestart, onOpenLogs, onOpenTerminal, onOp
             <div className="mt-2 rounded border border-rose-700/40 bg-rose-950/30 p-2 text-xs text-rose-300">{details._error}</div>
           )}
         </div>
-      )}
+        </div>
+      </div>
     </div>
   );
 }
