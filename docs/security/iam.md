@@ -111,7 +111,7 @@ below.
 | `WS /api/v1/ws/exec/*` (pod shell) | ✓ | ✗ |
 | `WS /api/v1/ws/sniffer/*` | ✓ | ✗ |
 | `POST /api/v1/nf/update/stream` (image rollout) | ✓ | ✗ |
-| `POST /watchdog/restart` | ✓ | ✗ |
+| `POST /watchdog/restart` (token) | ✓ | ✗ |
 
 Routers assigned to the **viewer-or-admin** group:
 `cluster`, `kubernetes`, `pods`, `logs_ws`, `topology`, `network`, `metrics`,
@@ -144,9 +144,33 @@ only probe and return a result: `POST /api/v1/network/health/run`,
 `POST /api/v1/ue/test/ping`, `POST /api/v1/ue/test/iperf`. The viewer role is
 meant for looking around a live testbed without breaking it, not for hiding it.
 
-Unauthenticated lanes:
-`health` (browser useBackendHealth + watchdog probes) and the legacy `admin`
-router that uses the `DASHBOARD_ADMIN_TOKEN` header for emergency restart.
+### Default deny
+
+Every backend route requires at least the viewer role unless it is on the public
+list in `dashboard/backend/app/route_guard.py`:
+
+| Route | Why it is public |
+|-------|------------------|
+| `GET /health` | liveness, for the browser and the watchdog |
+| `GET /api/v1/cluster/info` | mode and runtime source, read before login |
+| `GET /api/v1/apps/public` | the front-door app list |
+
+At startup the backend walks its routes and refuses to start on any route that has
+no role and is not on that list, naming the route. A router added without a role is
+therefore an error at the next restart, not an open endpoint. Routes whose
+dependencies it cannot read (a mounted app, a plain Starlette route, FastAPI's own
+docs pages if turned back on) count as having no role.
+
+The `admin` router (backend restart, service status, watchdog token) requires the
+admin role on each route. The API description is `GET /api/v1/openapi.json`, for any
+logged-in user; there is no public docs page.
+
+The watchdog is a separate process on the ansible VM that restarts the backend when
+the backend itself is down. It accepts requests carrying `DASHBOARD_ADMIN_TOKEN`,
+which the `kelt` CLI generates into `.testbed.secrets` like the other secrets and
+phase 09 writes into the backend's `.env.runtime` (mode 0600, owned by the service
+user) and, alone, into `/etc/dashboard-watchdog.env` (root, 0600) for the watchdog;
+the token is in no systemd unit file. The watchdog compares it in constant time. Phase 09 refuses to run without it.
 
 The `camara-location-read` role is checked by the CAMARA gateway only and is
 unrelated to the dashboard backend.

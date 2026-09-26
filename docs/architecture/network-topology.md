@@ -16,7 +16,7 @@ A real 5G AMF must have:
 
 A UPF must have N3 (GTP-U from gNBs), N4 (PFCP from SMF), and N6 (towards the data network), all on different subnets, all expected to be isolated from each other.
 
-Putting everything on one Flannel interface is not acceptable: it breaks the 3GPP reference point architecture, mixes traffic from different planes on the same IP, and prevents per-interface traffic policies.
+Putting everything on one Flannel interface is not acceptable: it breaks the 3GPP reference point architecture, mixes traffic from different planes on the same IP, and prevents per-interface traffic policies. The rules for which planes may cross, and where, are in [Plane Isolation](plane-isolation.md).
 
 ---
 
@@ -83,7 +83,7 @@ The OVS CNI plugin connects a pod's network namespace to a named OVS bridge by c
 
 `host-local` IPAM (the Kubernetes default) allocates IPs from a per-node pool. Two pods on different nodes can get the same IP, fine for Flannel, catastrophic for the 5G overlays where AMF on worker and gNB on edge must reach each other by IP.
 
-Whereabouts stores IP allocations in Kubernetes CRDs (`IPAllocation` objects), so it has cluster-wide visibility and ensures uniqueness across nodes. Static IP reservations (for NFs like AMF that need a predictable IP) are excluded from the dynamic pool in the NAD configuration.
+Whereabouts stores IP allocations in Kubernetes CRDs (`IPAllocation` objects), so it has cluster-wide visibility and ensures uniqueness across nodes. It serves the pool NADs only; fixed endpoints use static IPAM (see below), and their addresses are excluded from the pool.
 
 ### Open vSwitch
 
@@ -281,7 +281,12 @@ See [known-issues/kubeedge-multus-env-injection.md](../known-issues/kubeedge-mul
 
 ## NetworkAttachmentDefinitions (NADs)
 
-Each N-interface is defined as a NAD in the `5g` namespace. The NAD specifies the OVS bridge to attach to and the Whereabouts IPAM configuration:
+Each plane has two NADs on the same OVS bridge, created by phase 04 from the network plan in `ansible/group_vars/all.yml`:
+
+- `<plane>-net`: Whereabouts pool, for attachments that need no fixed address.
+- `<plane>-static`: static IPAM, for fixed endpoints. The pod gets exactly the address in its `ips` annotation and nothing else.
+
+The pool NAD:
 
 ```yaml
 apiVersion: k8s.cni.cncf.io/v1
@@ -298,14 +303,14 @@ spec:
       "ipam": {
         "type": "whereabouts",
         "range": "10.202.0.0/24",
-        "range_start": "10.202.0.10",
+        "range_start": "10.202.0.100",
         "range_end": "10.202.0.250",
         "exclude": ["10.202.0.100/32"]
       }
     }
 ```
 
-The `exclude` list prevents Whereabouts from assigning static NF IPs (like AMF's `10.202.0.100`) dynamically to other pods. NFs then request their exact static IP via pod annotations.
+The `exclude` list keeps the fixed endpoints (like the AMF's `10.202.0.100`) out of the pool. The AMF attaches to `n2-static` with `"ips": ["10.202.0.100/24"]`. A fixed endpoint must not request its address on the pool NAD: Whereabouts would allocate a pool address first and Multus would add the requested one on top, leaving the pool address as the interface's primary. Which endpoints are fixed, and why, is in [5G Interfaces: Fixed Endpoints](5g-interfaces.md#fixed-endpoints).
 
 ---
 

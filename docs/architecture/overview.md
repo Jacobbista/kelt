@@ -61,6 +61,11 @@ graph TB
 | edge | 192.168.56.12 | 4 | 4 GB | KubeEdge EdgeCore, RAN workloads |
 | ansible | 192.168.56.13 | 2 | 1 GB | Ansible orchestration, Dashboard |
 
+The node addresses and the management subnet are declared as `node_ips` and
+`mgmt_subnet` in `ansible/group_vars/all.yml`. The Vagrantfile reads them to create
+the VMs and to generate the Ansible inventory, so roles take node addresses from the
+inventory rather than repeating them.
+
 ---
 
 ## Kubernetes Layer: K3s + KubeEdge

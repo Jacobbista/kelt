@@ -2,17 +2,21 @@
 
 Base URL: `http://192.168.56.13:31880`
 
-Interactive API docs (Swagger UI): `http://192.168.56.13:31880/docs`
+The OpenAPI description is `GET /api/v1/openapi.json`, for any logged-in user.
 
 ## Authentication
 
-Read operations are open. Mutating operations require a Bearer token:
+Every route requires a Keycloak access token for the `dashboard` realm client:
 
 ```
-Authorization: Bearer <DASHBOARD_ADMIN_TOKEN>
+Authorization: Bearer <access token>
 ```
 
-The token is set in `dashboard/backend/.env` (`DASHBOARD_ADMIN_TOKEN`).
+Reads need the `dashboard-viewer` or `dashboard-admin` role, writes need
+`dashboard-admin`. Three routes answer without a token: `/health`,
+`/api/v1/cluster/info` and `/api/v1/apps/public`. The backend refuses to start with
+any other route that has no role. See [security/iam.md](../security/iam.md#default-deny)
+for the full matrix. In the tables below, "—" means any logged-in role.
 
 ---
 
@@ -113,8 +117,28 @@ See [RAN Modes](../deployment/ran-modes-dashboard.md) for the full workflow.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/api/v1/network/health` | — | Cached N-interface connectivity results (N2/N3/N4/N6) |
-| POST | `/api/v1/network/health/run` | — | Trigger immediate health check (bypasses cache) |
+| GET | `/api/v1/network/health` | — | N-interface connectivity results (N2/N3/N4/N6): the last run when it is younger than 25 s, otherwise a new run |
+| POST | `/api/v1/network/health/run` | — | Run the checks now |
+
+---
+
+## Status
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/v1/status/summary` | — | Overall state for the header: `state` (`ok`, `warn`, `error`) and `problems` (`area`, `text`, `severity`). Sources: nodes not Ready; 5G pods Failed, Pending, Running but not ready, or stuck (CrashLoopBackOff, image pull errors); the last network check run if younger than 10 min, with its age (never starts one); the AMF CNI alert. A source that cannot be read is a `warn` problem; an unreachable Kubernetes API is the single `error` problem |
+
+---
+
+## Isolation
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/api/v1/isolation/planes` | — | Plane filter counters per rule over `?window=` (default `24h`, max `7d`): mode, planes, every pair with verdict and packets, drops outside the planes |
+| GET | `/api/v1/isolation/planes/samples` | — | Latest packets the filter logged on the worker, per rule (`?limit=`, default 5), last 24 h |
+| GET | `/api/v1/isolation/policies` | — | Per isolated namespace: role, allowed sources per app, egress limits, policy names; unlisted namespaces; common sources |
+| GET | `/api/v1/isolation/targets` | — | Sources and destinations (Services with ports) for the flow check |
+| POST | `/api/v1/isolation/check` | — | Evaluate a flow on the live NetworkPolicies without sending it. Body: `{"source": "mec", "destination": {"namespace": "5g", "service": "mongodb", "port": 27017}}` or `{"destination": {"internet": true}}` |
 
 ---
 
@@ -140,14 +164,14 @@ See [RAN Modes](../deployment/ran-modes-dashboard.md) for the full workflow.
 
 ## Edge apps (phase 12)
 
-Operator-deployed application pods in the `mec` namespace; the local registry lives in the `apps` namespace. See [architecture/edge-apps.md](../architecture/edge-apps.md).
+Operator-deployed application pods in the `mec` namespace; the local registry lives in the `registry` namespace. See [architecture/edge-apps.md](../architecture/edge-apps.md).
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | GET | `/api/v1/apps` | — | Inventory of deployed apps (name, image, replicas, ready, exposed, public URL `kelt-<name>.<base>`, `mec_attached`, `mec_ip`, `pods` for log streaming) |
 | GET | `/api/v1/apps/public` | — | Unauthenticated (no token even in auth mode): names + public URLs of exposed apps, for the front-door welcome page |
 | GET | `/api/v1/apps/updates` | — | Per app: whether the registry digest for its tag is newer than the running pod's |
-| POST | `/api/v1/apps` | ✅ Admin | Deploy an app. Requires `DASHBOARD_ALLOW_WORKLOAD_CREATE=true`. Body: `{name, image, port?, replicas?, env[], image_pull_secret?, expose?, attach_mec?, mec_ip?, udp_ports[]}`. Creates a Deployment (+ Service on port 80 when exposed) pinned to the worker; `attach_mec` adds an `n6m-net` interface so UEs reach it over the user plane |
+| POST | `/api/v1/apps` | ✅ Admin | Deploy an app. Requires `DASHBOARD_ALLOW_WORKLOAD_CREATE=true`. Body: `{name, image, port?, replicas?, env[], image_pull_secret?, expose?, attach_mec?, mec_ip?, udp_ports[]}`. Creates a Deployment (+ Service on port 80 when exposed) pinned to the worker; `attach_mec` adds an N6m interface (`n6m-net`, or `n6m-static` when `mec_ip` is set) so UEs reach it over the user plane |
 | PUT | `/api/v1/apps/{name}/image` | ✅ Admin | Retarget a deployed app to a chosen registry tag (date-ordered picker), preserving its other settings. Body: `{image}`. Requires `DASHBOARD_ALLOW_WORKLOAD_CREATE=true` |
 | DELETE | `/api/v1/apps/{name}` | ✅ Admin | Delete an app (Deployment, Service, config ConfigMap/Secret) |
 | GET | `/api/v1/apps/registry-credentials` | ✅ Admin | Local-registry host + basic-auth credentials, so an admin can `docker login` and push |

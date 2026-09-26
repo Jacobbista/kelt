@@ -24,10 +24,11 @@ Access app covers it, instead of a tunnel route and Access app per service. The
 prefix keeps KELT's names clear of the operator's own first-level subdomains: an
 explicit DNS record for the operator's `blog.<base>` wins over the wildcard, so it
 never reaches the front-door; only undefined first-level names fall through to KELT.
-Subdomains, the base, the prefix, the scheme, and the front-door NodePort all live
-in `ansible/group_vars/all.yml`; the realm redirect URIs (phase 08) and the
-dashboard public links derive from the same values, so a surface's external address
-is defined in exactly one place.
+Subdomains, the base, the prefix, the scheme, the external origins and every
+NodePort (the Ports block) live in `ansible/group_vars/all.yml`; the realm redirect
+URIs (phase 08), each service's settings (phases 09-11), the dashboard public links,
+the tests and the `testbed` CLI read the same values, so a surface's external
+address is defined in exactly one place.
 
 A request that matches no real surface (an unknown Host, direct-IP access, or a
 mistyped / undeployed app name) is served a branded 404 with a button back to the
@@ -156,7 +157,7 @@ It is selected automatically under the single-base model.
 ## Variables to override at deploy time
 
 External hostnames are not hardcoded. The realm template and frontend env
-read the following Ansible variables:
+read the following variables, all declared in `ansible/group_vars/all.yml`:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
@@ -166,10 +167,10 @@ read the following Ansible variables:
 | `dashboard_subdomain` / `camara_subdomain` / `positioning_demo_subdomain` / `placement_editor_subdomain` / `dashboard_dev_subdomain` | `kelt-dashboard` / `kelt-camara` / `kelt-demo` / `kelt-placement` / `kelt-dev` | Per-surface first-level labels (derived from `kelt_prefix`); overridable. The front-door, realm origins, and dashboard links all read these. `catalogue_subdomain` (`kelt`) serves the catalogue. |
 | `dashboard_external_origin` | `<scheme>://kelt-dashboard.<base>` (else `http://<worker-ip>:31573`) | OIDC redirect URI and Web Origin for the `dashboard` client. Also `KC_HOSTNAME` so Keycloak emits browser-coherent URLs behind a proxy. |
 | `dashboard_dev_external_url` | `""` | Optional second origin for the opt-in Vite dev frontend. When set, added to the `dashboard` client allow lists. |
-| `camara_gateway_external_origin` | `http://<worker-ip>:31920` | Advertised in the gateway's OpenAPI `servers` block and in any absolute URL the gateway emits. Operator routes the chosen hostname to the worker NodePort. |
-| `positioning_demo_external_origin` | `http://<worker-ip>:31940` | OIDC redirect URI and Web Origin for the `positioning-demo` client. |
-| `placement_editor_external_origin` | `http://<worker-ip>:31950` | Redirect URI base for the `placement-editor-proxy` front-door gate. Set to `https://placement.<root>` when exposed externally. |
-| `keycloak_path_prefix` | `""` | Path under which Keycloak is served (e.g. `"/auth"` for single-origin layout). |
+| `camara_gateway_external_origin` | `<scheme>://kelt-camara.<base>` (else `http://<worker-ip>:31920`) | Advertised in the gateway's OpenAPI `servers` block and in any absolute URL the gateway emits. Operator routes the chosen hostname to the worker NodePort. |
+| `positioning_demo_external_origin` | `<scheme>://kelt-demo.<base>` (else `http://<worker-ip>:31940`) | OIDC redirect URI and Web Origin for the `positioning-demo` client. |
+| `placement_editor_external_origin` | `<scheme>://kelt-placement.<base>` (else `http://<worker-ip>:31950`) | Redirect URI base for the `placement-editor-proxy` front-door gate. |
+| `keycloak_path_prefix` | `/auth` with a base domain, else `""` | Path under which Keycloak is served; under the single-origin layout the dashboard origin proxies `/auth/*` to it. |
 | `keycloak_admin_password` | `changeme-admin` | Keycloak master admin. Replace before any non-lab deploy. |
 | `keycloak_db_password` | `changeme-db` | PostgreSQL backing-store password. |
 | `camara_client_secret` | `changeme-camara` | Secret of the `camara-gateway` confidential client. |
@@ -233,8 +234,11 @@ satisfy the following:
    tunnel route and DNS record. The path-prefix layout collapses both into
    one hostname.
 2. **HTTPS termination at the edge.** Browser PKCE flows require HTTPS for
-   the realm to accept the redirect. The internal lab traffic can remain
-   HTTP because the tunnel terminates TLS upstream.
+   the realm to accept the redirect, and the browser gives the PKCE crypto only
+   to secure contexts (HTTPS or localhost). The internal lab traffic can remain
+   HTTP because the tunnel terminates TLS upstream. A dashboard opened on its
+   plain-HTTP LAN address shows "Sign-in needs HTTPS" with a link to the same
+   path on its HTTPS origin (`VITE_SECURE_URL`, set by phase 09).
 3. **WebSocket upgrade allowed.** The dashboard streams logs, packet captures,
    and pod exec over `wss://`. Tunnel must forward `Upgrade: websocket`.
 4. **HTTP Host header preserved.** Vite blocks unknown Host headers by
@@ -244,7 +248,9 @@ satisfy the following:
 5. **No exposure of NodePorts beyond the dashboard origin.** The backend
    (`:31880`), the watchdog (`:31881`), and Keycloak (`:31910`) must not be
    reachable directly from outside; all traffic flows through the dashboard
-   frontend's reverse proxy.
+   frontend's reverse proxy. The backend and the watchdog listen on the ansible
+   VM's management address, so the cluster frontend on the worker can proxy to
+   them; the watchdog also requires the admin token on every request.
 
 ## Front-end gating (recommended)
 

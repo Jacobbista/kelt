@@ -14,7 +14,7 @@ Common issues and their solutions.
 - **Systemd timer** (`chrony-force-sync.timer`): runs `chronyc makestep` every 5 minutes on all VMs. If drift exceeds the chrony threshold, the clock is stepped immediately; otherwise it's a no-op
 
 **Manual correction**:
-- **Dashboard**: open the Time Sync popover (click the clock in the sidebar). If drift is detected, a "Force Sync" button appears. This runs `chronyc makestep` on all VMs via SSH
+- **Dashboard**: open the Time Sync popover (click the clock in the header). If drift is detected, a "Force Sync" button appears. This runs `chronyc makestep` on all VMs via SSH
 - **CLI**: `vagrant ssh worker -c 'sudo chronyc -a makestep'`
 
 **Diagnostics**:
@@ -80,7 +80,7 @@ ssh edge 'echo OK'
 
 # Re-run with verbose (secrets sourced, as testbed run-phase does)
 set -a; . /vagrant/.testbed.env; . /vagrant/.testbed.secrets; set +a
-ansible-playbook phases/XX/playbook.yml -i inventory.ini -vvv
+ansible-playbook phases/XX/playbook.yml -vvv
 ```
 
 ---

@@ -62,7 +62,7 @@ dashboard's dev frontend, and the measurement scripts in `experiments/`. It
 does not touch traffic inside the cluster, between VMs, from a UE over the
 femtocell, or through the external tunnel. Throughput measurements over the
 radio are unaffected; latency measurements taken from the host are not, which
-is why `experiments/run.sh E1` reports the gateway's own per-hop times and
+is why `experiments/run.sh response-time` reports the per-component times from the services' own logs and
 treats the client-side number as informative only.
 
 Related: [../architecture/network-topology.md](../architecture/network-topology.md)

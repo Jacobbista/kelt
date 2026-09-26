@@ -41,6 +41,8 @@ documenting something, write it at its owner and link from elsewhere.
 | Topic | Owner |
 |-------|-------|
 | Interface matrix (subnets, static IPs, VXLAN VNIs) | [architecture/5g-interfaces.md](architecture/5g-interfaces.md) |
+| Plane isolation rules and how the planes are observed | [architecture/plane-isolation.md](architecture/plane-isolation.md) |
+| Namespaces: what each holds, where a workload goes | [architecture/namespaces.md](architecture/namespaces.md) |
 | Node/VM topology and IPs | [architecture/overview.md](architecture/overview.md) |
 | System design (layers, network, NFs, positioning) | [architecture/](architecture/) |
 | Deployment phases and how to run them | [deployment/phases.md](deployment/phases.md) |
@@ -71,7 +73,9 @@ These documents explain how the system is designed. Read them in order; each bui
 | [Virtualization Layers](architecture/virtualization-layers.md) | The 5 abstraction layers: host → VMs → K8s → overlay → 5G NFs |
 | [Network Topology](architecture/network-topology.md) | OVS bridges, VXLAN tunnels, Multus CNI — explained from first principles |
 | [5G Interfaces](architecture/5g-interfaces.md) | N1/N2/N3/N4/N6 subnets, static IPs, protocols, and verification commands |
-| [Subscriber Persistence](architecture/subscriber-persistence.md) | MongoDB PVC and `subscribers-snapshot` ConfigMap — how UE records survive restarts |
+| [Plane Isolation](architecture/plane-isolation.md) | Which planes may cross and where, fixed versus pool addresses, observing without routing |
+| [Namespaces](architecture/namespaces.md) | One namespace per role, never per location; the names and their single source |
+| [Subscriber Persistence](architecture/subscriber-persistence.md) | MongoDB PVC and `subscribers-snapshot` Secret — how UE records survive restarts |
 | [Positioning Adapters](architecture/positioning-adapters.md) | Pluggable positioning engine adapter model behind the CAMARA Location API |
 | [Edge Apps Platform](architecture/edge-apps.md) | Operator-deployed app pods: local registry, deploy-from-image console, dynamic `<name>.<base>` front-door route |
 | [NF Platform](architecture/nf-platform.md) | Companion `5g-nf-platform` repo design: per-NF image builds, patches, versioning ([dev plan](architecture/nf-platform-dev-plan.md)) |

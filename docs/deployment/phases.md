@@ -20,6 +20,7 @@ Phases fall into three classes. **Core** phases always run. **Optional** phases 
 | 10 | Northbound         | Optional addon                | CAMARA Location API gateway, positioning engine, and demo |
 | 11 | Front-door         | Core (base-domain-conditional) | Single-origin nginx edge; serves the catalogue at `kelt.<base>` and routes each `kelt-<name>.<base>` by Host. No-op unless `external_base_domain` is set |
 | 12 | Apps               | Optional addon (`apps_enabled`) | Edge apps platform: in-cluster local registry plus the namespace for deploy-from-image app pods. Pairs with the phase 11 dynamic `kelt-<name>.<base>` route |
+| 13 | Network policies   | Core (`network_policies_enabled`) | NetworkPolicies on the pod network: each namespace accepts only the declared flows; the apps namespace is also limited outbound. Runs last because it needs the namespaces |
 
 Optional addons are off by default (opt-in). Phase 6 (UERANSIM) is gated by `ueransim_enabled`, set automatically by `DEPLOY_MODE=full` or by `testbed run-phase 06-ueransim-mec`. Phase 10 (Northbound) bundles the CAMARA gateway, positioning engine, and demo into one phase with roles selectable by tag (`camara`, `positioning`, `placement`, `demo`); the parts are gated by `camara_enabled` / `positioning_enabled` / `positioning_demo_enabled` / `placement_editor_enabled` in `all.yml`, and the umbrella `testbed northbound on` enables them together. Phase 12 (Apps) is gated by `apps_enabled`, set by `testbed apps on`. See [gaps.md](../gaps.md) for the remaining CAMARA/positioning rework.
 
@@ -165,7 +166,8 @@ sudo k3s kubectl get nodes
 - Deploys Multus CNI DaemonSets
 - Creates OVS bridges (br-n1, br-n2, br-n3, br-n4, br-n6e, br-n6c, br-n6m)
 - Establishes VXLAN tunnels between worker and edge (when edge enabled)
-- Creates NetworkAttachmentDefinitions (NADs), including `n6m-net` in the `mec` namespace for MEC services
+- Creates NetworkAttachmentDefinitions (NADs): a pool `<plane>-net` and a static `<plane>-static` per plane, including `n6m-net`/`n6m-static` in the `mec` namespace for MEC services (with the routes to the UE pools through the UPF) and `5g/n6m-static` for the UPF, and moves fixed-address attachments that still sit on a pool NAD to its static twin
+- Rolls every Deployment attached to an overlay NAD whose config changed (annotation `kelt.io/nad-config`), since a pod reads its NADs only when it is created
 - Creates per-cell networks
 
 ### Key files
@@ -202,7 +204,7 @@ sudo k3s kubectl get net-attach-def -A
   - SMF (Session Management Function)
   - UPF (User Plane Function) - cloud and edge
   - UDM, UDR, AUSF, PCF, BSF, NSSF
-- Imports subscriber data
+- Imports subscriber data from the local `.testbed.subscribers.json` (gitignored; inserts only subscribers MongoDB does not have), see [architecture/subscriber-persistence.md](../architecture/subscriber-persistence.md)
 - Validates NF connectivity
 
 ### Key files
@@ -407,6 +409,20 @@ testbed run-phase 10-northbound camara
 ```
 
 See [architecture/positioning-adapters.md](../architecture/positioning-adapters.md).
+
+---
+
+## Phase 13: Network policies
+
+**Location**: `ansible/phases/13-network-policies/`
+
+Applies the Kubernetes NetworkPolicies declared in `roles/network_policies/defaults/main.yml` to the namespaces that exist, and removes any policy it manages that is no longer declared. A namespace created later (for example by running phase 12 for the first time) gets its policies on the next run of this phase. `network_policies_enabled: false` in `all.yml` removes them all.
+
+```bash
+testbed run-phase 13-network-policies
+```
+
+What the policies allow, and how they were measured, is in [architecture/namespaces.md](../architecture/namespaces.md#network-policies).
 
 ---
 

@@ -94,9 +94,9 @@ Authentication uses the Keycloak realm from phase 08. The backend validates the 
 
 WebSocket upgrades carry the token as a `?access_token=<jwt>` query parameter. Enforcement is applied at router-include time in `dashboard/backend/app/main.py`.
 
-Auth is controlled by the single switch `dashboard_auth_enabled`. While disabled (the default until the realm is wired into production, `skip_auth=true`), the backend runs a break-glass bypass that treats every request as a synthetic admin. The legacy `admin` router (emergency restart) stays gated by the `DASHBOARD_ADMIN_TOKEN` header, independent of Keycloak.
+Auth is controlled by the single switch `dashboard_auth_enabled`. While disabled (the default until the realm is wired into production, `skip_auth=true`), the backend runs a break-glass bypass that treats every request as a synthetic admin. Every route requires a role unless it is on the short public list; the watchdog, which restarts a dead backend, uses the generated `DASHBOARD_ADMIN_TOKEN` instead (see [security/iam.md](../security/iam.md#default-deny)).
 
-All mutating actions are audit-logged to `backend/logs/audit.log` in NDJSON format. OVS shell operations run through an allowlist (`ovs-vsctl list-br`, `ovs-vsctl list-ports <bridge>`, `ovs-ofctl dump-flows <bridge>`) with size-capped, time-bounded output.
+All mutating actions are audit-logged in NDJSON format to `backend/logs/audit.log` in the backend's working copy on the ansible VM (`/home/vagrant/dashboard-work`); re-running phase 09 syncs the source but leaves the log in place. OVS shell operations run through an allowlist (`ovs-vsctl list-br`, `ovs-vsctl list-ports <bridge>`, `ovs-ofctl dump-flows <bridge>`) with size-capped, time-bounded output.
 
 Full role model, client list, and the per-route matrix: [security/iam.md](../security/iam.md).
 
@@ -147,21 +147,22 @@ Copy `dashboard/backend/.env.example` to `dashboard/backend/.env`. The settings 
 - Cluster access: `kubeconfig_path`, `worker_ssh_host`
 - Data sources: `prometheus_url`, `mongodb_url`
 - Auth: `keycloak_url`, `keycloak_realm`, `skip_auth` (see [security/iam.md](../security/iam.md))
-- Legacy emergency restart: `admin_token`
+- Watchdog token: `admin_token` (generated, set by phase 09)
 - `allow_configmap_write` (default `false`): set `true` to enable ConfigMap editing from the UI
 
 ## Modules
 
-Modules are grouped into five areas. Services and Settings are hubs: a card per
-surface, each opening its own sub-page, so the sidebar stays short as surfaces
-are added.
+The sidebar only navigates: it groups the modules by domain. Services and Settings
+are hubs: a card per surface, each opening its own sub-page, so the sidebar stays
+short as surfaces are added. The header above every page holds the rest (see
+[modules.md](modules.md#header)).
 
-| Area | Modules |
-|------|---------|
-| Cluster | [Overview](modules.md#overview), [Kubernetes](modules.md#kubernetes), [Metrics](modules.md#metrics) |
-| 5G | [5G Core](modules.md#5g-core), [RAN](modules.md#ran), [Subscribers](modules.md#subscribers), [UE Monitor](modules.md#ue-monitor) |
-| Network | [Topology](modules.md#topology), [Diagnostics](modules.md#diagnostics) |
-| Services | [Northbound](modules.md#northbound), [Edge apps](modules.md#edge-apps) |
+| Group | Modules |
+|-------|---------|
+| (top) | [Overview](modules.md#overview) |
+| 5G Network | [Core](modules.md#5g-core), [RAN](modules.md#ran), [Subscribers](modules.md#subscribers), [UE Monitor](modules.md#ue-monitor) |
+| Network | [Topology](modules.md#topology), [Isolation](modules.md#isolation), [Health](modules.md#health), [Capture](modules.md#capture) |
+| Platform | [Kubernetes](modules.md#kubernetes), Services ([Northbound](modules.md#northbound), [Edge apps](modules.md#edge-apps)), [Metrics](modules.md#metrics) |
 | Settings (admin only) | [IAM](modules.md#iam), Branding, [Storage](modules.md#storage) |
 
 See [Dashboard Modules](modules.md) for full details on each module.

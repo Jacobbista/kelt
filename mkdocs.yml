@@ -48,6 +48,8 @@ nav:
       - Virtualization Layers: architecture/virtualization-layers.md
       - Network Topology: architecture/network-topology.md
       - 5G Interfaces: architecture/5g-interfaces.md
+      - Plane Isolation: architecture/plane-isolation.md
+      - Namespaces: architecture/namespaces.md
       - Subscriber Persistence: architecture/subscriber-persistence.md
       - Positioning Adapters: architecture/positioning-adapters.md
       - Edge Apps Platform: architecture/edge-apps.md

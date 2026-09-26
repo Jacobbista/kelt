@@ -40,10 +40,13 @@ sudo k3s kubectl -n 5g get net-attach-def n1-net -o yaml
 sudo k3s kubectl -n 5g get net-attach-def n2-net -o yaml
 sudo k3s kubectl -n 5g get net-attach-def n3-net -o yaml
 sudo k3s kubectl -n 5g get net-attach-def n4-net -o yaml
+# Static twins (fixed endpoints): n1-static ... n6m-static, "ipam": {"type": "static"}
+sudo k3s kubectl -n 5g get net-attach-def n3-static -o yaml
 
-# Check MEC NADs
-sudo k3s kubectl -n mec get net-attach-def n6-mec-net -o yaml
-sudo k3s kubectl -n 5g get net-attach-def n6-cld-net -o yaml
+# Check data-network NADs
+sudo k3s kubectl -n mec get net-attach-def n6e-net -o yaml
+sudo k3s kubectl -n mec get net-attach-def n6m-net -o yaml
+sudo k3s kubectl -n 5g get net-attach-def n6c-net -o yaml
 
 # Check NAD configuration details
 sudo k3s kubectl -n 5g get net-attach-def n3-net -o json | jq '.spec.config'

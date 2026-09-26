@@ -16,17 +16,17 @@ to it the moment its Service exists.
 
 | Piece | Where | Role |
 |---|---|---|
-| Local registry (`registry:2`) | phase 12, role `local_registry`, namespace `apps` | image store; insecure HTTP + basic-auth, NodePort only |
-| `mec` namespace | phase 12, role `apps_platform` | target for deployed app pods (the MEC data network `n6m-net` lives here too) |
+| Local registry (`registry:2`) | phase 12, role `local_registry`, namespace `registry` | image store; insecure HTTP + basic-auth, NodePort only |
+| `mec` namespace | phase 12, role `apps_platform` | target for deployed app pods (the MEC data network NADs `n6m-net` and `n6m-static` live here too) |
 | Worker registry mirror | phase 12, `/etc/rancher/k3s/registries.yaml` | lets k3s containerd pull pushed images |
 | Apps console | dashboard backend `/api/v1/apps` + frontend Apps page | deploy / list / delete / update apps |
 | Dynamic route | phase 11 front-door | proxies `kelt-<name>.<base>` to the same-named Service in `mec` |
 
-App pods deploy into the `mec` namespace (they are MEC apps, and the `n6m-net` NAD
-is there) while the registry is platform infrastructure in its own `apps` namespace.
-Variables are defined once in [`ansible/group_vars/all.yml`](../../ansible/group_vars/all.yml)
-(`apps_enabled`, `apps_namespace` = `mec`, `apps_registry_namespace` = `apps`,
-`apps_registry_*`). Registry credentials live in `.testbed.secrets`
+App pods deploy into the `mec` namespace (every deployed application, and the n6m
+NADs are there) while the registry is platform infrastructure in its own `registry`
+namespace; see [namespaces.md](namespaces.md). Variables are defined once in
+[`ansible/group_vars/all.yml`](../../ansible/group_vars/all.yml) (`apps_enabled`,
+`apps_namespace`, `registry_namespace`, `apps_registry_*`). Registry credentials live in `.testbed.secrets`
 (`APPS_REGISTRY_PASSWORD`, managed by `testbed secrets`).
 
 ## Image flow
@@ -118,36 +118,37 @@ covers only what the apps platform adds on top.
 UE  --GTP-U-->  gNB  -->  UPF-Cloud  --route-->  n6m DN  -->  app pod
 ```
 
-Because UPF-Cloud is attached to the MEC DN, a UE whose traffic transits it reaches
-a MEC app by IP with **no dedicated DNN or slice** required. A different DNN/slice
-is an isolation/steering choice (or needed once the app moves behind UPF-Edge on
-the edge node), not a reachability requirement.
+UPF-Cloud routes the UE pools to the apps and the apps route them back, so a UE
+reaches a MEC app by IP from its default `internet` session, and the app sees the
+UE's own address. Which DNN reaches what, and what the testbed does not do, is in
+[5g-interfaces.md: Data Networks](5g-interfaces.md#data-networks).
 
 A MEC app:
 
-- **attaches** to the DN by joining `n6m-net` (Multus annotation, namespace `mec`);
-  its HTTP UI stays exposed via the front-door as usual;
-- **gets a fixed IP** (so UEs have a stable target) the same way the NFs get their
-  N1-N4 addresses: an `ips` entry in the annotation
-  (`{"name": "n6m-net", "namespace": "mec", "ips": ["10.208.0.x/24"]}`), whereabouts
-  honoring it directly (see the static-IP convention in 5g-interfaces.md). Apps that
-  do not care take a dynamic pool IP.
+- **attaches** to the DN through a Multus annotation in namespace `mec`: `n6m-net`
+  for a pool address, or `n6m-static` with an `ips` entry for a fixed one (so UEs
+  have a stable target; see the static-IP convention in 5g-interfaces.md). Its HTTP
+  UI stays exposed via the front-door as usual;
+- **answers UEs on N6m**: both NADs route the UE pools via the UPF's fixed N6m
+  address, so replies never leave through the pod network (`eth0`), where the
+  plane filter would drop them ([plane-isolation.md](plane-isolation.md)).
 
 The video/data plane (e.g. a Raspberry Pi UE sending H264/RTP over UDP) targets the
-app's n6m IP and rides the GTP tunnel. For a one-way ingest (UE to app) no return
-route is needed.
-
-Return routing for two-way MEC apps is a **per-app** concern, added to the app pod
-only. It must NOT live on the `n6m-net` NAD: the UPF-Cloud also attaches that NAD
-and owns the UE pools (10.45/10.46) on `ogstun`, so a UE-pool route via n6m on the
-shared NAD hijacks the UE downlink and breaks internet for all UEs.
+app's n6m IP and rides the GTP tunnel.
 
 The Apps console drives the attach: the deploy form has an "attach to MEC network
 (n6m)" toggle, an optional fixed-IP field (reserved band in
-[5g-interfaces.md](5g-interfaces.md#static-ip-assignment-reference)), and a list of
+[5g-interfaces.md](5g-interfaces.md#fixed-endpoints); a fixed IP attaches through
+`n6m-static`, no IP through the `n6m-net` pool), and a list of
 extra container UDP ingest ports (for example `5005` for an RTP video stream that
 arrives on n6m rather than through the front-door). The inventory marks an attached
 app with its n6m IP.
+
+The testbed's own measurement server is attached the same way: `measurement-server`
+in `mec`, an iperf3 server (TCP 5201) that also answers ping, at the fixed address
+`apps_measurement_server_n6m_ip` (default `10.208.0.202`). It is the edge endpoint
+of the network measurements (`experiments/`). Phase 12 deploys it when
+`apps_measurement_server_enabled` is true and removes it when false.
 
 ## Verification
 

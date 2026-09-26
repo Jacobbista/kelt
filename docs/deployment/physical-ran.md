@@ -35,13 +35,24 @@ The worker VM acts as a **transport router** between the physical RAN network an
   └──────────┘                     │     └── patch-n2-ran ──┘  │       │──> │ n2: .202.0.100│
                                    │                           │       │    │ n2phy: .6.150 │
                                    │   br-n3  (10.203.0.1)    │       │    └──────────────┘
-                                   │          (10.203.0.254)   │       │
                                    │     └── patch-n3-ran ─────┘       │    ┌──────────────┐
                                    │                                   │──> │ UPF-Cloud    │
                                    │   br-n4  (10.204.0.1)            │    │ n3: .203.0.101│
                                    │                                   │    └──────────────┘
                                    └───────────────────────────────────┘
 ```
+
+### Who Owns the RAN Address
+
+Vagrant gives the worker's RAN NIC the address `physical_ran_gateway` so the OVS
+setup can find it. Once the NIC is a port of `br-ran`, the address belongs to the
+bridge only: the same address left on the NIC makes the worker send traffic (for
+example GTP-U downlink to the gNB) straight out of the NIC, around the bridge. The
+OVS setup therefore marks the NIC `Unmanaged` for systemd-networkd
+(`/etc/systemd/network/05-kelt-ran-unmanaged.network`), since networkd would
+otherwise restore the netplan address whenever it restarts, and then removes the
+address. After a reboot the NIC is found again as the physical port of `br-ran`.
+`make ran` checks that the address is on `br-ran` only.
 
 ### Why This Approach Is Correct
 
@@ -63,26 +74,29 @@ UE ──(Uu radio)──> gNB (192.168.6.100)
                      │
               patch-ran-n3 ──> patch-n3-ran
                      │
-              br-n3  (10.203.0.1/24, 10.203.0.254/24)
+              br-n3  (10.203.0.1/24)
                      │
               UPF-Cloud pod (n3: 10.203.0.101)
                      │
               ogstun  ──> iptables MASQUERADE ──> n6 ──> Data Network
 
 Return path:
-  UPF has route: 192.168.6.0/24 via 10.203.0.254 dev n3
-  Worker br-n3 (10.203.0.254) forwards to br-ran via patch ports
+  UPF has route: 192.168.6.0/24 via 10.203.0.1 dev n3 (the N3 gateway)
+  Worker routes from br-n3 to br-ran (192.168.6.1)
   br-ran delivers to gNB via enp0s9
 ```
 
 ### IP Addressing Summary
 
+Values are the defaults of the 5G network plan in `ansible/group_vars/all.yml`
+(`physical_ran_subnet`, `physical_ran_gateway`, `amf_physical_ran_ip`, the N2/N3 plane);
+change them there. The interface matrix is [5g-interfaces.md](../architecture/5g-interfaces.md).
+
 | Component | Interface         | IP               | Role                            |
 | --------- | ----------------- | ---------------- | ------------------------------- |
 | Worker    | br-ran            | 192.168.6.1/24   | Gateway for physical RAN subnet |
 | Worker    | br-n2             | 10.202.0.1/24    | N2 overlay gateway              |
-| Worker    | br-n3             | 10.203.0.1/24    | N3 overlay gateway              |
-| Worker    | br-n3 (secondary) | 10.203.0.254/24  | UPF return-route next-hop       |
+| Worker    | br-n3             | 10.203.0.1/24    | N3 overlay gateway, UPF return-route next hop |
 | AMF       | n2phy             | 192.168.6.150/24 | NGAP endpoint for physical gNB  |
 | AMF       | n2                | 10.202.0.100/24  | NGAP endpoint (overlay)         |
 | UPF-Cloud | n3                | 10.203.0.101/24  | GTP-U endpoint                  |
@@ -119,43 +133,32 @@ requires the apps route to be enabled. See
 
 ## 1. Enable Integration
 
-### Step 1: Configure Ansible
-
-Edit `ansible/group_vars/all.yml`:
-
-```yaml
-physical_ran_enabled: true
-physical_ran_interface: "" # Leave empty for auto-detect by subnet IP
-physical_ran_subnet: "192.168.6.0/24"
-amf_physical_ran_ip: "192.168.6.150"
-ran_bridge_mode: n2_n3
-ran_interface: "{{ physical_ran_interface }}"
-```
-
-`physical_ran_interface` is the **worker** NIC name (e.g. `enp0s9`). When empty, the OVS setup script auto-detects it by finding the interface with an IP in `physical_ran_subnet`.
-
-### Step 2: Configure Vagrantfile
-
-The worker VM needs a bridged network adapter connected to the same physical network as the gNB. In the Vagrantfile this is the `ran_network`:
-
-```ruby
-worker.vm.network "private_network", ip: "192.168.6.1",
-  virtualbox__intnet: "5g-ran-network"
-```
-
-If using a USB Ethernet adapter on the host, bridge it instead:
-
-```ruby
-worker.vm.network "public_network", bridge: "enxe2b7aa97626e"
-```
-
-After changing the Vagrantfile, reload the VM:
+### Step 1: Select the Host NIC
 
 ```bash
-vagrant reload worker
+testbed ran <host_nic>     # e.g. enp88s0; `testbed ran disable` turns it off
 ```
 
-### Step 3: Apply Overlay + Core Changes
+This writes `PHYSICAL_RAN_ENABLED=true` and `PHYSICAL_RAN_BRIDGE=<host_nic>` to
+`.testbed.env`. The subnet and the AMF address come from `ansible/group_vars/all.yml`
+(`physical_ran_subnet`, `amf_physical_ran_ip`); `physical_ran_interface` is the
+**worker** NIC and is auto-detected when left empty (the interface holding an IP in
+`physical_ran_subnet`).
+
+### Step 2: Provision
+
+```bash
+testbed provision
+```
+
+When the bridge changed, the CLI first runs `vagrant reload worker`: the Vagrantfile
+bridges `PHYSICAL_RAN_BRIDGE` into the worker with the gateway IP `192.168.6.1`.
+The playbook then creates `br-ran` and the patch ports (phase 04) and adds the
+`n2-physical` NAD to the AMF and `PHYSICAL_RAN_SUBNET` to the UPF (phase 05).
+
+### Re-applying Only the RAN Parts
+
+On a running testbed where the worker already carries the bridge:
 
 ```bash
 # Re-deploy the OVS DaemonSet (creates br-ran, patch ports, gateway IPs)
@@ -261,7 +264,7 @@ Bridge br-ran
 
 ```bash
 ip -4 addr show br-ran | grep inet    # 192.168.6.1/24
-ip -4 addr show br-n3 | grep inet     # 10.203.0.1/24 and 10.203.0.254/24
+ip -4 addr show br-n3 | grep inet     # 10.203.0.1/24 only
 ```
 
 ### gNB Reachability
@@ -287,14 +290,24 @@ Expected:
 
 ### UPF Return Route
 
+The UPF must send GTP-U downlink to the gNB over N3. Without this route it falls
+back to its default route on N6 and the tunnel crosses `br-n6c`: traffic still
+flows, so the leak is silent. The suite checks both the route and the wire:
+
 ```bash
-sudo k3s kubectl exec -n 5g deploy/upf-cloud -- ip route show | grep 192.168.5
+cd tests && make ran    # "UPF Downlink Route via N3", "No GTP-U on N6 Bridges"
+```
+
+By hand (the UPF image has no `ip`), the network-setup init log must show the route:
+
+```bash
+sudo k3s kubectl logs -n 5g deploy/upf-cloud -c network-setup | grep "return route"
 ```
 
 Expected:
 
 ```
-192.168.6.0/24 via 10.203.0.254 dev n3
+[UPF][init] Adding return route for physical RAN subnet: 192.168.6.0/24
 ```
 
 ---

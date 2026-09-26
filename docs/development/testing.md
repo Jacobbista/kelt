@@ -68,6 +68,7 @@ make e2e
 - RAN mode primitives (dashboard-compatible gNB/UE labels)
 - RAN overlay labeling (baseline Ansible vs runtime dashboard)
 - Edge placement semantics (gNB/UE scheduled on edge)
+- MEC data network (UPF fixed N6m address; every N6m app routes the UE pools through it)
 - End-to-end connectivity
 
 ### Protocol Tests
@@ -140,12 +141,16 @@ make ran
 ```
 
 **Tests**:
-- OVS bridge configuration
-- RAN interface detection
-- br-ran bridge existence
-- Patch port configuration
-- AMF/UPF overlay reachability
-- gNB connection status
+- OVS bridge configuration and overlay gateway ownership
+- RAN gateway address on `br-ran` only (not on the bridged NIC)
+- br-ran bridge existence and patch ports
+- AMF/UPF overlay reachability on their fixed addresses
+- gNB connection status and UE NGAP context
+- UPF downlink route to the physical RAN over N3
+- No GTP-U on the N6 bridges while the tunnel is active (skipped without traffic)
+
+Addresses come from the network plan in `ansible/group_vars/all.yml` through
+`TestConfig.plan()`; `test_config.yaml` does not repeat them.
 
 ## Running Tests
 
@@ -177,6 +182,22 @@ make list         # List available tests
 make clean        # Remove caches
 make clean-all    # Remove venv too
 ```
+
+## Dashboard backend unit tests
+
+Logic that needs no cluster (the NetworkPolicy evaluator, the plane filter rule
+parsing, the isolation service with fake clients, the route guard) is covered by
+standard-library `unittest` tests in `dashboard/backend/tests/`. They run on the
+ansible VM with the backend's virtualenv, against the source mount, with a clean
+environment so no testbed secret reaches an error message:
+
+```bash
+vagrant ssh ansible -c 'cd /vagrant/dashboard/backend && env -i HOME=/home/vagrant PATH=/usr/bin:/bin \
+  PYTHONDONTWRITEBYTECODE=1 /home/vagrant/.venvs/dashboard-backend/bin/python -m unittest discover -s tests -t .'
+```
+
+The NetworkPolicy fixture (`tests/fixtures/netpol-*.json`) is a dump of the policies
+phase 13 renders; refresh it when the phase 13 table changes.
 
 ## Configuration
 

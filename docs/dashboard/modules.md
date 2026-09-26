@@ -1,7 +1,10 @@
 # Dashboard Modules
 
-The dashboard has 11 modules, reachable from the sidebar. This page describes
-what each one does, the data it shows, and the actions it provides. Role gating
+The sidebar groups the modules by domain: Overview; 5G Network (Core, RAN,
+Subscribers, UE Monitor); Network (Topology, Isolation, Health, Capture); Platform
+(Kubernetes, Services, Metrics); then Settings and the Manual. The
+[header](#header) shows where you are and what holds for the whole dashboard. This page describes
+what each module does, the data it shows, and the actions it provides. Role gating
 follows the two-tier model: read views are open to `dashboard-viewer`, write and
 exec actions require `dashboard-admin`. See [security/iam.md](../security/iam.md)
 for the per-route matrix.
@@ -57,7 +60,7 @@ Admin actions: restart an NF deployment, scale the AMF controller, trigger a str
 
 ## Topology
 
-**Area**: Network
+**Area**: Network · `/network/topology`
 
 Visual map of the running system.
 
@@ -113,16 +116,47 @@ Admin actions: run ping or iperf3, edit UE personalization. UE session data come
 
 ---
 
-## Diagnostics
+## Isolation
 
-**Area**: Network
+**Area**: Network · `/network/isolation`
 
-Connectivity and traffic inspection.
+What may talk to what, and what was stopped. Read-only, open to viewers; the rules
+change in the playbooks, which the page names.
 
-- "Network Health" tab: per-interface health (N2, N3, N4, N6c), latency, live PPS and throughput, on-demand in-pod probes, and an animated data-path diagram driven by OVS counter deltas
-- "Packet Sniffer" tab: live packet capture
+- 5G planes: a from/to matrix of the plane bridges on the worker. Allowed crossings
+  (RAN to N2 and N3, N6c to the internet) show their packets over the last 24 h;
+  blocked ones show the packets dropped, counted per ordered pair. Selecting a cell
+  shows its filter rule. Beside it: drops from outside the planes and the latest
+  packets the filter logged, with interfaces, addresses, protocol and rule.
+- Pod network: one row per namespace phase 13 isolates, with what it holds, who may
+  enter which app, and whether its outbound traffic is limited; expanding a row
+  lists the destinations and the policy names.
+- Check a flow: pick a source namespace (or the management network, or a node) and
+  a destination Service or the internet; the backend evaluates the live policies and
+  answers with the verdict and the policy behind each step. Nothing is sent.
 
-Admin actions: run health checks and packet captures.
+The Overview has an Isolation card and the sidebar shows the blocked count when it
+is above zero (one shared poll a minute feeds both). API: `GET /api/v1/isolation/planes`, `/planes/samples`, `/policies`,
+`/targets`, `POST /api/v1/isolation/check`.
+
+---
+
+## Health
+
+**Area**: Network · `/network/health`
+
+Per-interface health of the planes (N2, N3, N4, N6c): latency, live PPS and
+throughput, on-demand in-pod probes, and an animated data-path diagram driven by OVS
+counter deltas. Viewers may run the checks (they only probe).
+
+---
+
+## Capture
+
+**Area**: Network · `/network/capture` · admin only
+
+Live packet capture on a chosen interface. It runs a privileged pod, so the page and
+its router are admin-only.
 
 ---
 
@@ -136,7 +170,9 @@ Resource metrics from Prometheus, with a Nodes tab and an NFs tab.
 - NFs: per-NF CPU (millicores) and memory (MB) bars plus a CPU trend chart
 - Range selector: 15m, 30m, 1h, 6h, 24h
 
-Read-only. A "Grafana (advanced)" link in the sidebar opens the full Grafana stack.
+Read-only. "Open in Grafana" in the page's toolbar opens the full Grafana stack,
+for what these charts do not show: Explore, the Loki logs, long ranges. It is the
+only link to Grafana in the dashboard.
 
 ---
 
@@ -268,13 +304,29 @@ Reading is open to `dashboard-viewer`; every action requires `dashboard-admin`
 and an explicit confirmation. See [api-reference.md](api-reference.md) for the
 endpoints and [../security/iam.md](../security/iam.md) for the role matrix.
 
-## Sidebar: Cluster Clock & Time Sync
+## Header
 
 **Area**: Infrastructure visibility
 
-The sidebar footer includes a live clock and a time synchronization monitor.
+A 48 px bar above every page. Left, the breadcrumb: a top-level page shows its
+sidebar group as plain text (groups have no page), a sub-page shows its parents as
+links (Services / Northbound / Assets). Right, in order:
 
-### Features
+- **Status**: one pill for the whole testbed, from `GET /api/v1/status/summary`,
+  polled every 30 s. Green "All systems up", or amber/red with the number of
+  problems; a click lists them, with a button to Health. Sources: the Kubernetes
+  API itself, nodes not Ready, 5G pods Failed, Pending, not ready or stuck
+  (CrashLoopBackOff, image pull errors), the last network check run if younger
+  than 10 minutes, with its age (the pill never starts one; Health does), the AMF
+  CNI alert. Hidden, with the breadcrumb, until there is a session.
+- **Updates** (admin): shown only while a dashboard component has an update
+  available; opens the update section of the Manual.
+- **Environment**: DEV or PROD, the frontend source in its tooltip.
+- **Cluster clock** and the time sync popover (below).
+- **Account menu**: user, what the role allows, tenant scope; the frontend source;
+  the switch that starts the dev frontend (admin, on prod); log out.
+
+### Cluster clock and time sync
 
 **Live clock**:
 - Displays current time in the user's local timezone (e.g. `01:32:05 CET`)
