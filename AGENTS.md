@@ -29,6 +29,10 @@ the code and its owner document disagree, say so instead of picking one.
 confirmed gaps and bugs, and `docs/known-issues/` explains platform limitations
 whose workarounds are load-bearing.
 
+Work in progress lives outside git, in `.local/` (specs, plans, previews; never
+committed). If that folder exists, read the newest `.local/plans/*-state-and-next.md`
+first: it says what is done, what waits on others, and what comes next.
+
 ## Commands
 
 ```bash

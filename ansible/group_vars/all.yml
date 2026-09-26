@@ -439,6 +439,10 @@ northbound_image_tags:
 dashboard_image_registry: "ghcr.io/jacobbista"
 dashboard_frontend_tag: "0.3.0"
 
+# Secret scanner for contributors: `kelt dev-hooks on` installs this release
+# (checksum verified) into ~/.local/bin when gitleaks is missing.
+gitleaks_version: "8.30.1"
+
 # ── CAMARA tenant (single-org testbed) ───────────────────────────────────────
 # The one CAMARA tenant the testbed uses. The gateway scopes an asset's visibility
 # by matching the caller's `org` token claim against `asset.org`; a caller with no

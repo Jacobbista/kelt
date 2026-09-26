@@ -337,16 +337,29 @@ Do not add co-author trailers.
 
 ### Git hooks (developer-only)
 
-Optional local hooks, opt-in and not part of the operator install:
+Local hooks, opt-in and not part of the operator install. Anyone who commits
+should turn them on once:
 
 ```
-testbed dev-hooks on       # install (sets core.hooksPath=.githooks)
+testbed dev-hooks on       # install (sets core.hooksPath=.githooks), and gitleaks if missing
 testbed dev-hooks status   # show hook + release state
 testbed dev-hooks off      # uninstall
 ```
 
-- **pre-commit** runs `gitleaks` on staged changes and blocks on a secret. Without
-  `gitleaks` installed the scan is skipped and CI still scans on push.
+- **pre-commit** blocks three things before they leave your machine:
+  - files that are local by design, even when forced past `.gitignore`:
+    `.local/` (specs, plans, previews), `.superpowers/`, `.claude/`,
+    `experiments/runs/`, and the operator files `.testbed.*`;
+  - the real SIM keys (K, OP, OPc) of the local `.testbed.subscribers.json`,
+    anywhere in the staged changes; values already in the committed tree, like
+    the public UERANSIM test key, are not a leak. Keys are never printed;
+  - secrets found by `gitleaks` in the staged changes, the same scan CI runs on
+    push.
+
+  `dev-hooks on` installs the `gitleaks` release pinned as `gitleaks_version` in
+  `ansible/group_vars/all.yml` into `~/.local/bin`, after checking its SHA-256
+  against the release's checksum file. A `gitleaks` already on `PATH` is left
+  alone. Tests for the hook: `bash .githooks/tests/pre-commit.test.sh`.
 - **commit-msg** blocks a non-conforming subject. Pure bash, no Node dependency.
   Merge, revert, and rebase autosquash subjects pass through.
 - **pre-push** is advisory only: it flags a frontend change that needs a version

@@ -1,10 +1,70 @@
 #!/usr/bin/env bash
 # Developer pre-commit hook. Installed by: testbed dev-hooks on
-# Blocks commits containing secrets, mirroring the CI gitleaks scan so leaks are
-# caught before they ever leave your machine. Developer-only (not part of the
-# operator install). See docs/development/contributing.md.
+# Three checks, all before anything leaves your machine:
+#   1. local-only paths (notes, results, operator config) never get committed,
+#      even when forced past .gitignore;
+#   2. the real SIM keys in the local subscribers file never appear in a change;
+#   3. gitleaks scans the staged changes, mirroring the CI scan.
+# Developer-only (not part of the operator install). Tests:
+# .githooks/tests/pre-commit.test.sh. See docs/development/contributing.md.
 set -euo pipefail
 
+root="$(git rev-parse --show-toplevel)"
+cd "$root"
+
+# ── 1. local-only paths ─────────────────────────────────────────────────────
+# Work in progress, results and operator config that live only on the machine
+# (see AGENTS.md). Deleting one that was committed by mistake is allowed.
+LOCAL_ONLY='^(\.local/|\.superpowers/|\.claude/|experiments/runs/|\.testbed\.)'
+if bad="$(git diff --cached --name-only --diff-filter=ACMR | grep -E "$LOCAL_ONLY")"; then
+  echo "✗ local-only files are staged — commit blocked:" >&2
+  printf '  %s\n' $bad >&2
+  echo "  Unstage them: git restore --staged <path>" >&2
+  exit 1
+fi
+
+# ── 2. real SIM keys ────────────────────────────────────────────────────────
+# K, OP and OPc of the subscribers in the local file. A value already in the
+# committed tree (the public UERANSIM test key) is not a leak. Keys are never
+# printed.
+SUBS="$root/.testbed.subscribers.json"
+if [ -f "$SUBS" ] && command -v python3 >/dev/null 2>&1; then
+  keys="$(python3 - "$SUBS" <<'PY'
+import json, re, sys
+try:
+    subs = json.load(open(sys.argv[1])).get("subscribers", [])
+except Exception:
+    sys.exit(0)
+seen = set()
+for s in subs:
+    for f in ("k", "op", "opc"):
+        v = ((s.get("security") or {}).get(f) or "").strip().lower()
+        if re.fullmatch(r"[0-9a-f]{32}", v) and v not in seen:
+            seen.add(v)
+            print(v)
+PY
+)"
+  if [ -n "$keys" ]; then
+    staged="$(git diff --cached --name-only --diff-filter=ACMR)"
+    hits=()
+    while IFS= read -r key; do
+      [ -z "$key" ] && continue
+      git rev-parse -q --verify HEAD >/dev/null && git grep -qiF "$key" HEAD -- 2>/dev/null && continue
+      while IFS= read -r f; do
+        [ -z "$f" ] && continue
+        git show ":$f" 2>/dev/null | grep -qiF "$key" && hits+=("$f")
+      done <<< "$staged"
+    done <<< "$keys"
+    if [ ${#hits[@]} -gt 0 ]; then
+      echo "✗ a SIM key from .testbed.subscribers.json is in the staged changes — commit blocked:" >&2
+      printf '  %s\n' $(printf '%s\n' "${hits[@]}" | sort -u) >&2
+      echo "  Remove the key from those files (the value is not printed here)." >&2
+      exit 1
+    fi
+  fi
+fi
+
+# ── 3. gitleaks ─────────────────────────────────────────────────────────────
 if command -v gitleaks >/dev/null 2>&1; then
   if ! gitleaks protect --staged --redact -v; then
     echo "" >&2
@@ -14,5 +74,5 @@ if command -v gitleaks >/dev/null 2>&1; then
   fi
 else
   echo "⚠ gitleaks not installed: local secret scan skipped (CI still scans on push)." >&2
-  echo "  Install it to block leaks locally: https://github.com/gitleaks/gitleaks" >&2
+  echo "  Install it with: kelt dev-hooks on" >&2
 fi

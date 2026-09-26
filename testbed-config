@@ -1978,14 +1978,46 @@ open(p, "w").write(re.sub(r'("version"\s*:\s*")[^"]*(")', r'\g<1>' + new + r'\g<
 PY
 }
 
+# gitleaks for the pre-commit hook: the release pinned in all.yml, checksum
+# verified, into ~/.local/bin. Never replaces a gitleaks already on PATH.
+_devhooks_gitleaks_version() {
+  sed -n 's/^gitleaks_version:[[:space:]]*"\(.*\)".*/\1/p' \
+    "${SCRIPT_DIR}/ansible/group_vars/all.yml" | head -1
+}
+_devhooks_gitleaks_install() {
+  local ver os arch tar base tmp expected actual dest="$HOME/.local/bin"
+  ver="$(_devhooks_gitleaks_version)"
+  [ -n "$ver" ] || { echo "  gitleaks: no gitleaks_version in all.yml, not installed." >&2; return 1; }
+  case "$(uname -s)" in Linux) os=linux ;; Darwin) os=darwin ;; *) echo "  gitleaks: unsupported OS $(uname -s), install it by hand." >&2; return 1 ;; esac
+  case "$(uname -m)" in x86_64|amd64) arch=x64 ;; aarch64|arm64) arch=arm64 ;; *) echo "  gitleaks: unsupported CPU $(uname -m), install it by hand." >&2; return 1 ;; esac
+  tar="gitleaks_${ver}_${os}_${arch}.tar.gz"
+  base="https://github.com/gitleaks/gitleaks/releases/download/v${ver}"
+  tmp="$(mktemp -d)"
+  echo "  gitleaks: downloading v${ver} (${os}/${arch})…"
+  if ! curl -fsSL -o "$tmp/$tar" "$base/$tar" || ! curl -fsSL -o "$tmp/sums" "$base/gitleaks_${ver}_checksums.txt"; then
+    echo "  gitleaks: download failed, not installed (CI still scans on push)." >&2; rm -rf "$tmp"; return 1
+  fi
+  expected="$(awk -v f="$tar" '$2 == f {print $1}' "$tmp/sums")"
+  if command -v sha256sum >/dev/null 2>&1; then actual="$(sha256sum "$tmp/$tar" | awk '{print $1}')"
+  else actual="$(shasum -a 256 "$tmp/$tar" | awk '{print $1}')"; fi
+  if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
+    echo "  gitleaks: checksum mismatch, not installed." >&2; rm -rf "$tmp"; return 1
+  fi
+  tar -xzf "$tmp/$tar" -C "$tmp" gitleaks && mkdir -p "$dest" && install -m 0755 "$tmp/gitleaks" "$dest/gitleaks"
+  rm -rf "$tmp"
+  echo "  gitleaks: v${ver} installed in $dest (checksum verified)."
+  case ":$PATH:" in *":$dest:"*) ;; *) echo "  ⚠ $dest is not on PATH: add it, or the hook cannot find gitleaks." >&2 ;; esac
+}
+
 _devhooks_install() {
   git -C "$SCRIPT_DIR" config core.hooksPath .githooks
   chmod +x "$SCRIPT_DIR"/.githooks/* 2>/dev/null || true
   echo "Dev git hooks enabled (core.hooksPath=.githooks)."
+  echo "  pre-commit: blocks local-only files (.local/, .superpowers/, .claude/, experiments/runs/, .testbed.*) and the real SIM keys."
   if command -v gitleaks &>/dev/null; then
-    echo "  gitleaks: found — pre-commit blocks commits containing secrets."
+    echo "  gitleaks: found ($(gitleaks version 2>/dev/null)) — pre-commit blocks commits containing secrets."
   else
-    echo "  gitleaks: NOT found — local leak scan skipped (CI still scans). Install: https://github.com/gitleaks/gitleaks"
+    _devhooks_gitleaks_install || true
   fi
   echo "  commit-msg: blocks subjects that are not Conventional Commits (see contributing.md)."
   echo "  pre-push: advisory reminders (frontend tag, WIP). Tag with: testbed dev-hooks release"
@@ -1998,7 +2030,7 @@ _devhooks_status() {
   local hp pkg last_tag last_ver
   hp="$(git -C "$SCRIPT_DIR" config --get core.hooksPath 2>/dev/null || true)"
   [ "$hp" = ".githooks" ] && echo "Dev hooks: enabled" || echo "Dev hooks: disabled (enable with: testbed dev-hooks on)"
-  command -v gitleaks &>/dev/null && echo "gitleaks: installed" || echo "gitleaks: not installed (local leak scan skipped; CI scans)"
+  command -v gitleaks &>/dev/null && echo "gitleaks: installed ($(gitleaks version 2>/dev/null), pinned $(_devhooks_gitleaks_version))" || echo "gitleaks: not installed (run: testbed dev-hooks on)"
   echo "commit-msg: Conventional Commits validation active when hooks enabled"
   pkg="$(_devhooks_fe_version || true)"; last_tag="$(_devhooks_fe_last_tag || true)"; last_ver="${last_tag#dashboard-frontend-v}"
   echo "frontend: package.json v${pkg:-?}, last published ${last_tag:-<none>}"
