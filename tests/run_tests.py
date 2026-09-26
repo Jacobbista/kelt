@@ -62,6 +62,21 @@ def ensure_venv():
     return str(venv_python)
 
 
+def master_ip_from_plan() -> str:
+    """node_ips.master from ansible/group_vars/all.yml. Parsed by hand: this runs
+    before the venv (and PyYAML) is set up."""
+    plan = Path(__file__).resolve().parent.parent / "ansible" / "group_vars" / "all.yml"
+    in_block = False
+    for line in plan.read_text().splitlines():
+        if line.startswith("node_ips:"):
+            in_block = True
+        elif in_block and not line.startswith(" "):
+            break
+        elif in_block and line.strip().startswith("master:"):
+            return line.split(":", 1)[1].strip().strip('"')
+    raise KeyError(f"node_ips.master missing from {plan}")
+
+
 def check_vagrant_vms():
     """Check if Vagrant VMs are running"""
     try:
@@ -111,8 +126,8 @@ def update_kubeconfig():
         idx = content.find("apiVersion")
         if idx > 0:
             content = content[idx:]
-        # Replace localhost with master IP
-        content = content.replace("127.0.0.1", "192.168.56.10")
+        # Replace localhost with the master address (node_ips in all.yml)
+        content = content.replace("127.0.0.1", master_ip_from_plan())
 
         with open(KUBECONFIG_PATH, "w") as f:
             f.write(content)

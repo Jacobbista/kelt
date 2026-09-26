@@ -8,7 +8,7 @@ import time
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.kubectl_client import KubectlClient
-from utils.test_helpers import TestConfig, TestLogger, NetworkValidator, ComponentValidator
+from utils.test_helpers import TestConfig, TestLogger, NetworkValidator, ComponentValidator, CORE_NS
 
 
 class ResilienceTestSuite:
@@ -73,7 +73,7 @@ class ResilienceTestSuite:
             
             # Delete AMF pod to trigger restart
             self.logger.info(f"Deleting AMF pod {amf_pod}...")
-            self.kubectl.run_command(["delete", "pod", amf_pod, "-n", "5g"])
+            self.kubectl.run_command(["delete", "pod", amf_pod, "-n", CORE_NS])
             
             # Wait for pod to be recreated and running
             recovery_timeout = self.config.get("test_configs.resilience.recovery_timeout", 180)
@@ -81,7 +81,7 @@ class ResilienceTestSuite:
             
             start_time = time.time()
             while time.time() - start_time < recovery_timeout:
-                pods = self.kubectl.get_pods("5g")
+                pods = self.kubectl.get_pods(CORE_NS)
                 amf_pods = [p for p in pods if "amf" in p["metadata"]["name"].lower()]
                 
                 if amf_pods:
@@ -113,33 +113,33 @@ class ResilienceTestSuite:
             amf_pod = amf_pods[0]["metadata"]["name"]
             
             # Check interfaces before restart
-            n1_ip = self.config.get("network.interfaces.n1.amf_ip")
-            n2_ip = self.config.get("network.interfaces.n2.amf_ip")
+            n1_ip = self.config.plan("amf_n1_ip")
+            n2_ip = self.config.plan("amf_n2_ip")
             
-            n1_ok = self.network_validator.check_interface_ip(amf_pod, "5g", "n1", n1_ip)
-            n2_ok = self.network_validator.check_interface_ip(amf_pod, "5g", "n2", n2_ip)
+            n1_ok = self.network_validator.check_interface_ip(amf_pod, CORE_NS, "n1", n1_ip)
+            n2_ok = self.network_validator.check_interface_ip(amf_pod, CORE_NS, "n2", n2_ip)
             
             if not n1_ok or not n2_ok:
                 self.logger.warning("Interfaces not properly configured before restart")
             
             # Restart pod
             self.logger.info("Restarting AMF pod...")
-            self.kubectl.run_command(["delete", "pod", amf_pod, "-n", "5g"])
+            self.kubectl.run_command(["delete", "pod", amf_pod, "-n", CORE_NS])
             
             # Wait for recovery
             recovery_timeout = self.config.get("test_configs.resilience.recovery_timeout", 180)
             start_time = time.time()
             
             while time.time() - start_time < recovery_timeout:
-                pods = self.kubectl.get_pods("5g")
+                pods = self.kubectl.get_pods(CORE_NS)
                 amf_pods = [p for p in pods if "amf" in p["metadata"]["name"].lower()]
                 
                 if amf_pods and amf_pods[0]["status"]["phase"] == "Running":
                     new_amf_pod = amf_pods[0]["metadata"]["name"]
                     
                     # Check interface recovery
-                    n1_recovered = self.network_validator.check_interface_ip(new_amf_pod, "5g", "n1", n1_ip)
-                    n2_recovered = self.network_validator.check_interface_ip(new_amf_pod, "5g", "n2", n2_ip)
+                    n1_recovered = self.network_validator.check_interface_ip(new_amf_pod, CORE_NS, "n1", n1_ip)
+                    n2_recovered = self.network_validator.check_interface_ip(new_amf_pod, CORE_NS, "n2", n2_ip)
                     
                     if n1_recovered and n2_recovered:
                         self.logger.success("Network interfaces recovered successfully")
@@ -214,22 +214,22 @@ class ResilienceTestSuite:
                 smf_pod = smf_pods[0]["metadata"]["name"]
                 
                 # Get AMF IP
-                amf_ip_result = self.kubectl.exec_in_pod(amf_pod, "5g", ["hostname", "-i"])
+                amf_ip_result = self.kubectl.exec_in_pod(amf_pod, CORE_NS, ["hostname", "-i"])
                 amf_ip = amf_ip_result.stdout.strip()
                 
-                if self.network_validator.check_connectivity(smf_pod, amf_pod, "5g", amf_ip):
+                if self.network_validator.check_connectivity(smf_pod, amf_pod, CORE_NS, amf_ip):
                     self.logger.success("AMF-SMF connectivity working")
                 else:
                     self.logger.warning("AMF-SMF connectivity issues (might be normal during startup)")
             
             # Test gNB-AMF connectivity
-            gnb_pods = [p for p in self.kubectl.get_pods("5g") if "gnb" in p["metadata"]["name"].lower()]
+            gnb_pods = [p for p in self.kubectl.get_pods(CORE_NS) if "gnb" in p["metadata"]["name"].lower()]
             if gnb_pods and amf_pods:
                 gnb_pod = gnb_pods[0]["metadata"]["name"]
                 amf_pod = amf_pods[0]["metadata"]["name"]
-                amf_n2_ip = self.config.get("network.interfaces.n2.amf_ip")
+                amf_n2_ip = self.config.plan("amf_n2_ip")
                 
-                if self.network_validator.check_connectivity(gnb_pod, amf_pod, "5g", amf_n2_ip):
+                if self.network_validator.check_connectivity(gnb_pod, amf_pod, CORE_NS, amf_n2_ip):
                     self.logger.success("gNB-AMF connectivity working")
                 else:
                     self.logger.warning("gNB-AMF connectivity issues (might be normal during startup)")
@@ -407,7 +407,7 @@ class ResilienceTestSuite:
         
         try:
             # Check MongoDB pods
-            mongo_pods = [p for p in self.kubectl.get_pods("5g") if "mongo" in p["metadata"]["name"].lower()]
+            mongo_pods = [p for p in self.kubectl.get_pods(CORE_NS) if "mongo" in p["metadata"]["name"].lower()]
             if not mongo_pods:
                 self.logger.warning("No MongoDB pods found (database might not be deployed)")
                 return True  # Database is optional
@@ -416,7 +416,7 @@ class ResilienceTestSuite:
             
             # Restart MongoDB pod
             self.logger.info(f"Restarting MongoDB pod {mongo_pod}...")
-            self.kubectl.run_command(["delete", "pod", mongo_pod, "-n", "5g"])
+            self.kubectl.run_command(["delete", "pod", mongo_pod, "-n", CORE_NS])
             
             # Wait for MongoDB recovery
             recovery_timeout = self.config.get("test_configs.resilience.recovery_timeout", 180)
@@ -424,7 +424,7 @@ class ResilienceTestSuite:
             
             start_time = time.time()
             while time.time() - start_time < recovery_timeout:
-                mongo_pods = [p for p in self.kubectl.get_pods("5g") if "mongo" in p["metadata"]["name"].lower()]
+                mongo_pods = [p for p in self.kubectl.get_pods(CORE_NS) if "mongo" in p["metadata"]["name"].lower()]
                 if mongo_pods and mongo_pods[0]["status"]["phase"] == "Running":
                     self.logger.success("MongoDB recovered successfully")
                     return True

@@ -7,7 +7,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.k8s_client import K8sClient  # <-- use API client
-from utils.test_helpers import TestConfig, TestLogger, NetworkValidator, ComponentValidator
+from utils.test_helpers import TestConfig, TestLogger, NetworkValidator, ComponentValidator, CORE_NS
 
 
 class E2ETestSuite:
@@ -38,7 +38,7 @@ class E2ETestSuite:
             ("RAN Mode Primitives", self.test_ran_mode_primitives),
             ("RAN Overlay Labeling", self.test_ran_overlay_labeling),
             ("Edge Placement Semantics", self.test_edge_placement_semantics),
-            ("MEC Deployment", self.test_mec_deployment),
+            ("MEC Data Network", self.test_mec_data_network),
             ("End-to-End Connectivity", self.test_end_to_end_connectivity)
         ]
         
@@ -175,7 +175,7 @@ class E2ETestSuite:
             # Core NADs required for 5G Core
             required_nads = ["n1-net", "n2-net", "n3-net", "n4-net"]
             # Optional NADs for MEC
-            optional_nads = ["n6-mec-net", "n6-cld-net"]
+            optional_nads = ["n6c-net", "n6m-net"]
             
             nad_names = [nad["metadata"]["name"] for nad in nads]
             missing_required = [nad for nad in required_nads if nad not in nad_names]
@@ -200,7 +200,7 @@ class E2ETestSuite:
         self.logger.info("Testing 5G Core deployment...")
         
         try:
-            fiveg_pods = self.kubectl.get_pods("5g")
+            fiveg_pods = self.kubectl.get_pods(CORE_NS)
             if not fiveg_pods:
                 self.logger.error("No 5G pods found")
                 return False
@@ -237,15 +237,15 @@ class E2ETestSuite:
             
             amf_pod = amf_pods[0]["metadata"]["name"]
             
-            n1_ip = self.config.get("network.interfaces.n1.amf_ip")
-            if not self.network_validator.check_interface_ip(amf_pod, "5g", "n1", n1_ip):
+            n1_ip = self.config.plan("amf_n1_ip")
+            if not self.network_validator.check_interface_ip(amf_pod, CORE_NS, "n1", n1_ip):
                 self.logger.error(f"AMF N1 interface not configured with IP {n1_ip}")
                 return False
             
             self.logger.success("AMF N1 interface configured correctly")
             
-            n2_ip = self.config.get("network.interfaces.n2.amf_ip")
-            if not self.network_validator.check_interface_ip(amf_pod, "5g", "n2", n2_ip):
+            n2_ip = self.config.plan("amf_n2_ip")
+            if not self.network_validator.check_interface_ip(amf_pod, CORE_NS, "n2", n2_ip):
                 self.logger.error(f"AMF N2 interface not configured with IP {n2_ip}")
                 return False
             
@@ -269,7 +269,7 @@ class E2ETestSuite:
             
             amf_pod = amf_pods[0]["metadata"]["name"]
             
-            if not self.network_validator.check_port_listening(amf_pod, "5g", 38412, "SCTP"):
+            if not self.network_validator.check_port_listening(amf_pod, CORE_NS, 38412, "SCTP"):
                 self.logger.error("AMF not listening on SCTP port 38412")
                 return False
             
@@ -282,7 +282,7 @@ class E2ETestSuite:
             
             smf_pod = smf_pods[0]["metadata"]["name"]
             
-            if not self.network_validator.check_port_listening(smf_pod, "5g", 8805, "UDP"):
+            if not self.network_validator.check_port_listening(smf_pod, CORE_NS, 8805, "UDP"):
                 self.logger.error("SMF not listening on PFCP port 8805")
                 return False
             
@@ -305,8 +305,8 @@ class E2ETestSuite:
         self.logger.info("Testing UERANSIM deployment (parked)...")
 
         try:
-            gnb_pods = [p for p in self.kubectl.get_pods("5g") if "gnb" in p["metadata"]["name"].lower()]
-            ue_pods = [p for p in self.kubectl.get_pods("5g") if "ue" in p["metadata"]["name"].lower()]
+            gnb_pods = [p for p in self.kubectl.get_pods(CORE_NS) if "gnb" in p["metadata"]["name"].lower()]
+            ue_pods = [p for p in self.kubectl.get_pods(CORE_NS) if "ue" in p["metadata"]["name"].lower()]
 
             if not gnb_pods and not ue_pods:
                 self.logger.warning("UERANSIM not deployed (parked); physical gNB/UE in use. See: make ran")
@@ -329,33 +329,76 @@ class E2ETestSuite:
             self.logger.error(f"UERANSIM deployment test failed: {e}")
             return False
     
-    def test_mec_deployment(self) -> bool:
-        """Test MEC deployment"""
-        self.logger.info("Testing MEC deployment...")
-        
-        try:
-            mec_pods = self.kubectl.get_pods("mec")
-            if not mec_pods:
-                self.logger.warning("No MEC pods found (MEC might not be deployed)")
-                return True  # MEC is optional
-            
-            running_mec = [p for p in mec_pods if p["status"]["phase"] == "Running"]
-            if not running_mec:
-                self.logger.warning("No running MEC pods found")
-                return True  # MEC is optional
-            
-            self.logger.success(f"Found {len(running_mec)} running MEC pods")
+    def test_mec_data_network(self) -> bool:
+        """Test the MEC data network (N6m) is routed through the UPF.
+
+        The UPF holds its fixed N6m address, and every app attached to N6m routes
+        both UE pools back through it, so an app never answers a UE through eth0.
+        See docs/architecture/5g-interfaces.md#data-networks. App images may lack
+        `ip`, so routes are read from /proc/net/route.
+        """
+        import ipaddress
+        import json
+        import socket
+        import struct
+
+        def hex_ip(h):
+            return socket.inet_ntoa(struct.pack("<I", int(h, 16)))
+
+        def n6m_ip(pod):
+            raw = (pod["metadata"].get("annotations") or {}).get("k8s.v1.cni.cncf.io/network-status", "[]")
+            for n in json.loads(raw):
+                if n.get("interface") == "n6m" and n.get("ips"):
+                    return n["ips"][0]
+            return None
+
+        upf_ip = self.config.plan("upf_cloud_n6m_ip")
+        ue_pools = [ipaddress.ip_network(self.config.plan(k)) for k in ("ue_internet_subnet", "ue_mec_subnet")]
+
+        upf = [p for p in self.kubectl.get_pods(CORE_NS)
+               if p["metadata"]["name"].startswith("upf-cloud") and p["status"]["phase"] == "Running"]
+        if not upf:
+            self.logger.error("No running upf-cloud pod found")
+            return False
+        if n6m_ip(upf[0]) != upf_ip:
+            self.logger.error(f"UPF N6m address is {n6m_ip(upf[0])}, the plan fixes {upf_ip}")
+            return False
+        self.logger.success(f"UPF N6m address {upf_ip}")
+
+        ns = self.config.plan("apps_namespace")
+        apps = [p for p in self.kubectl.get_pods(ns)
+                if p["status"]["phase"] == "Running" and n6m_ip(p)]
+        if not apps:
+            self.logger.warning(f"No running app attached to N6m in {ns}: nothing to check")
             return True
-            
-        except Exception as e:
-            self.logger.warning(f"MEC deployment test failed (MEC might not be deployed): {e}")
-            return True  # MEC is optional
+
+        ok = True
+        for pod in apps:
+            name = pod["metadata"]["name"]
+            res = self.kubectl.exec_in_pod(name, ns, ["cat", "/proc/net/route"])
+            if not res:
+                self.logger.error(f"{name}: cannot read the route table")
+                ok = False
+                continue
+            routes = {}
+            for line in res.stdout.splitlines()[1:]:
+                f = line.split()
+                if len(f) >= 8:
+                    routes[ipaddress.ip_network(f"{hex_ip(f[1])}/{hex_ip(f[7])}")] = (f[0], hex_ip(f[2]))
+            wrong = [pool for pool in ue_pools if routes.get(pool) != ("n6m", upf_ip)]
+            for pool in wrong:
+                self.logger.error(f"{name}: {pool} is routed {routes.get(pool) or 'by the default route'}, expected via {upf_ip} dev n6m")
+            if wrong:
+                ok = False
+            else:
+                self.logger.success(f"{name}: UE pools routed via {upf_ip} dev n6m")
+        return ok
 
     def test_ran_mode_primitives(self) -> bool:
         """Validate resources required by dashboard RAN mode control."""
         self.logger.info("Testing RAN mode primitives...")
         try:
-            fiveg_pods = self.kubectl.get_pods("5g")
+            fiveg_pods = self.kubectl.get_pods(CORE_NS)
             gnb_like = [p for p in fiveg_pods if "gnb" in p["metadata"]["name"].lower()]
             ue_like = [p for p in fiveg_pods if "ue" in p["metadata"]["name"].lower()]
 
@@ -383,7 +426,7 @@ class E2ETestSuite:
         """Check expected edge/datacenter placement model for infra topology."""
         self.logger.info("Testing edge placement semantics...")
         try:
-            fiveg_pods = self.kubectl.get_pods("5g")
+            fiveg_pods = self.kubectl.get_pods(CORE_NS)
             edge_gnb_ue = []
             wrong_place = []
             for p in fiveg_pods:
@@ -411,7 +454,7 @@ class E2ETestSuite:
         """Ensure simulated RAN resources are labeled for runtime overlay management."""
         self.logger.info("Testing RAN overlay labeling...")
         try:
-            fiveg_pods = self.kubectl.get_pods("5g")
+            fiveg_pods = self.kubectl.get_pods(CORE_NS)
             ran_pods = [p for p in fiveg_pods if ("gnb" in p["metadata"]["name"].lower() or "ue" in p["metadata"]["name"].lower())]
             if not ran_pods:
                 self.logger.warning("No RAN pods found for overlay labeling checks")
@@ -440,7 +483,7 @@ class E2ETestSuite:
         try:
             # Pick a running target pod and read its cluster IP from the API
             # (NF pods lack `hostname -i`); ping it from netshoot.
-            running = [p for p in self.kubectl.get_pods("5g")
+            running = [p for p in self.kubectl.get_pods(CORE_NS)
                        if p["status"].get("phase") == "Running" and p["status"].get("pod_ip")]
             target = next((p for p in running if "netshoot" not in p["metadata"]["name"].lower()), None)
             if not target:
@@ -450,7 +493,7 @@ class E2ETestSuite:
             target_name = target["metadata"]["name"]
             target_ip = target["status"]["pod_ip"]
 
-            if not self.network_validator.check_connectivity("netshoot", target_name, "5g", target_ip):
+            if not self.network_validator.check_connectivity("netshoot", target_name, CORE_NS, target_ip):
                 self.logger.error(f"netshoot cannot reach {target_name} ({target_ip})")
                 return False
 

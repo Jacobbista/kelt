@@ -9,6 +9,21 @@ import yaml
 from .k8s_client import K8sClient
 
 
+def plan_value(key_path: str) -> Any:
+    """Value from ansible/group_vars/all.yml, the single source of addresses and
+    namespace names, with dot notation for nested keys (e.g. "node_ips.worker")."""
+    plan_file = Path(__file__).resolve().parents[2] / "ansible" / "group_vars" / "all.yml"
+    value: Any = yaml.safe_load(plan_file.read_text()) or {}
+    for key in key_path.split("."):
+        value = value[key]
+    return value
+
+
+# Namespaces of the deployment under test (all.yml Namespaces block).
+CORE_NS = plan_value("namespace_5g")
+APPS_NS = plan_value("apps_namespace")
+
+
 class TestConfig:
     """Test configuration manager with kubeconfig override logic."""
 
@@ -36,6 +51,10 @@ class TestConfig:
             }
         with open(config_file, "r") as f:
             return yaml.safe_load(f) or {}
+
+    def plan(self, key_path: str) -> Any:
+        """Value from ansible/group_vars/all.yml; see plan_value()."""
+        return plan_value(key_path)
 
     def get(self, key_path: str, default: Any = None) -> Any:
         """
@@ -108,7 +127,7 @@ class NetworkValidator:
         self.config = config
         self._netshoot_cache = None
 
-    def _netshoot_pod(self, namespace: str = "5g"):
+    def _netshoot_pod(self, namespace: str = CORE_NS):
         """Return a running netshoot pod name in the namespace, or None."""
         if self._netshoot_cache:
             return self._netshoot_cache
@@ -213,19 +232,19 @@ class ComponentValidator:
         self.kubectl = kubectl
         self.config = config
 
-    def get_component_pods(self, component_name: str, namespace: str = "5g") -> List[Dict[str, Any]]:
+    def get_component_pods(self, component_name: str, namespace: str = CORE_NS) -> List[Dict[str, Any]]:
         """Get pods for a specific component."""
         pods = self.kubectl.get_pods(namespace)
         return [pod for pod in pods if component_name in pod["metadata"]["name"].lower()]
 
-    def is_component_ready(self, component_name: str, namespace: str = "5g") -> bool:
+    def is_component_ready(self, component_name: str, namespace: str = CORE_NS) -> bool:
         """Check if all pods for a component are running."""
         pods = self.get_component_pods(component_name, namespace)
         if not pods:
             return False
         return all(pod["status"]["phase"] == "Running" for pod in pods)
 
-    def get_component_interfaces(self, component_name: str, namespace: str = "5g") -> List[str]:
+    def get_component_interfaces(self, component_name: str, namespace: str = CORE_NS) -> List[str]:
         """List non-loopback interfaces from the first pod of the component."""
         pods = self.get_component_pods(component_name, namespace)
         if not pods:

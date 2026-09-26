@@ -21,6 +21,7 @@ from pathlib import Path
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import time
 import requests
 
 from utils.test_helpers import TestConfig, TestLogger
@@ -44,15 +45,15 @@ class CamaraTestSuite:
         self.verbose = verbose
 
         # Keycloak token endpoint — reuse the iam block so realm/host live once.
-        kc_host = self.config.get("iam.keycloak_host") or self.config.get("cluster.worker_host")
-        kc_port = self.config.get("iam.keycloak_nodeport", 31910)
+        kc_host = self.config.plan("node_ips.worker")
+        kc_port = self.config.plan("keycloak_nodeport")
         kc_prefix = self.config.get("iam.keycloak_path_prefix", "")
         self.realm = self.config.get("iam.realm", "5g-testbed")
         self.token_url = f"http://{kc_host}:{kc_port}{kc_prefix}/realms/{self.realm}/protocol/openid-connect/token"
 
         # CAMARA gateway (worker NodePort).
-        gw_host = self.config.get("camara.gateway_host") or self.config.get("cluster.worker_host")
-        gw_port = self.config.get("camara.gateway_nodeport", 31920)
+        gw_host = self.config.plan("node_ips.worker")
+        gw_port = self.config.plan("camara_gateway_nodeport")
         self.gw = f"http://{gw_host}:{gw_port}"
         self.timeout = self.config.get("camara.request_timeout", 15)
         self.demo_asset_id = self.config.get("camara.demo_asset_id", "demo-asset-01")
@@ -165,28 +166,65 @@ class CamaraTestSuite:
         self.logger.success(f"/capabilities profile={caps.get('profile')} sources={caps.get('sources')} kinds={caps.get('kinds')}")
         return True
 
-    def test_retrieve_by_assetid(self) -> bool:
-        tok = self._need_operator()
-        if not tok:
-            return True
-        r = requests.post(
+    def _retrieve(self, tok: str) -> requests.Response:
+        return requests.post(
             f"{self.gw}/location-retrieval/v0.5/retrieve",
             headers={**self._bearer(tok), "Content-Type": "application/json"},
             json={"device": {"assetId": self.demo_asset_id}, "maxAge": 60},
             timeout=self.timeout,
         )
-        if r.status_code != 200:
-            self.logger.error(f"retrieve HTTP {r.status_code}: {r.text[:200]}")
-            return False
-        body = r.json()
-        center = body.get("area", {}).get("center", {})
-        if "latitude" not in center or "longitude" not in center:
-            self.logger.error(f"retrieve missing area.center lat/lon: {body}")
-            return False
-        self.logger.success(
-            f"retrieve {self.demo_asset_id}: center=({center.get('latitude')},{center.get('longitude')}) "
-            f"source={body.get('source')} kind={body.get('kind')} altitude={body.get('altitude')}")
-        return True
+
+    def test_retrieve_by_assetid(self) -> bool:
+        """Retrieve the demo asset's location.
+
+        The synthetic source reports a device only while it is placed on the
+        floor plan (SPAWN_REQUIRED). If the asset is not placed, the test places
+        it (PUT /assets/{id}/placement, the flow the demo uses), retrieves, and
+        removes the placement again so the demo is left as it was found.
+        """
+        tok = self._need_operator()
+        if not tok:
+            return True
+        placed_here = False
+        r = self._retrieve(tok)
+        if r.status_code == 422 and "UNABLE_TO_LOCATE" in r.text:
+            p = requests.put(
+                f"{self.gw}/assets/{self.demo_asset_id}/placement",
+                headers={**self._bearer(tok), "Content-Type": "application/json"},
+                json={"x": 1.0, "z": 1.0},
+                timeout=self.timeout,
+            )
+            if p.status_code != 200:
+                self.logger.error(f"placement HTTP {p.status_code}: {p.text[:200]}")
+                return False
+            placed_here = True
+            self.logger.info(f"placed {self.demo_asset_id}: {p.text[:160]}")
+            # The source reports on its own cadence: wait for the first fix.
+            for _ in range(15):
+                time.sleep(2)
+                r = self._retrieve(tok)
+                if r.status_code == 200:
+                    break
+        try:
+            if r.status_code != 200:
+                self.logger.error(f"retrieve HTTP {r.status_code}: {r.text[:200]}")
+                return False
+            body = r.json()
+            center = body.get("area", {}).get("center", {})
+            if "latitude" not in center or "longitude" not in center:
+                self.logger.error(f"retrieve missing area.center lat/lon: {body}")
+                return False
+            self.logger.success(
+                f"retrieve {self.demo_asset_id}: center=({center.get('latitude')},{center.get('longitude')}) "
+                f"radius={body.get('area', {}).get('radius')} horizontalAccuracy={body.get('horizontalAccuracy')} "
+                f"source={body.get('source')} kind={body.get('kind')} altitude={body.get('altitude')}")
+            return True
+        finally:
+            if placed_here:
+                d = requests.delete(f"{self.gw}/assets/{self.demo_asset_id}/placement",
+                                    headers=self._bearer(tok), timeout=self.timeout)
+                if d.status_code not in (200, 204):
+                    self.logger.warning(f"could not remove the test placement: HTTP {d.status_code}")
 
     def test_assets_seed(self) -> bool:
         tok = self._need_operator()

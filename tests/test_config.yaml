@@ -64,17 +64,11 @@ suites:
 # Cluster configuration
 cluster:
   kubeconfig_path: "/home/vagrant/kubeconfig"
-  master_host: "192.168.56.10"
-  worker_host: "192.168.56.11"
-  edge_host: "192.168.56.12"
 
-# IAM (Keycloak) configuration for the iam suite.
-# Must mirror ansible/phases/08-iam/roles/keycloak_setup/defaults/main.yml.
-# keycloak_path_prefix matches KEYCLOAK_PATH_PREFIX (empty for root-path deploys).
+# IAM (Keycloak) configuration for the iam suite. The NodePort comes from
+# all.yml; realm and keycloak_path_prefix mirror all.yml keycloak_realm and
+# keycloak_path_prefix (KEYCLOAK_PATH_PREFIX, empty for root-path deploys).
 iam:
-  namespace: "iam"
-  keycloak_host: "192.168.56.11"   # worker NodePort
-  keycloak_nodeport: 31910
   keycloak_path_prefix: "/auth"
   realm: "5g-testbed"
   admin_user: "admin"
@@ -85,7 +79,7 @@ iam:
     - dashboard
     - dashboard-readonly
     - placement-editor-proxy
-    - camara-consumer-demo
+    - camara-api-demo
   expected_realm_roles:
     - camara-location-read
     - dashboard-admin
@@ -93,102 +87,33 @@ iam:
     - positioning-edit
 
 # CAMARA / northbound (phase 10) configuration for the camara suite. The gateway
-# is reached on the worker NodePort; tokens use the iam.* Keycloak block above.
+# is reached on the worker NodePort (all.yml); tokens use the iam.* block above.
 camara:
-  gateway_host: "192.168.56.11"   # worker NodePort
-  gateway_nodeport: 31920
   request_timeout: 15
   demo_asset_id: "demo-asset-01"
 
-# Network configuration (from ansible/group_vars/all.yml)
-network:
-  namespaces:
-    fiveg: "5g"
-    mec: "mec"
-    kube_system: "kube-system"
-    kubeedge: "kubeedge"
-
-  # 5G Network Interfaces
-  interfaces:
-    n1:
-      amf_ip: "10.201.0.100"
-      subnet: "10.201.0.0/24"
-      nad_name: "n1-net"
-      nad_namespace: "5g"
-      protocol: "SCTP"
-      port: 38412
-    
-    n2:
-      amf_ip: "10.202.0.100"
-      subnet: "10.202.0.0/24"
-      nad_name: "n2-net"
-      nad_namespace: "5g"
-      protocol: "SCTP"
-      port: 38412
-    
-    n3:
-      upf_edge_ip: "10.203.0.100"
-      upf_cloud_ip: "10.203.0.101"
-      subnet: "10.203.0.0/24"
-      nad_name: "n3-net"
-      nad_namespace: "5g"
-      protocol: "GTP-U"
-      port: 2152
-    
-    n4:
-      smf_ip: "10.204.0.100"
-      upf_edge_ip: "10.204.0.101"
-      upf_cloud_ip: "10.204.0.102"
-      subnet: "10.204.0.0/24"
-      nad_name: "n4-net"
-      nad_namespace: "5g"
-      protocol: "PFCP"
-      port: 8805
-    
-    n6e:
-      subnet: "10.206.0.0/24"
-      nad_name: "n6-mec-net"
-      nad_namespace: "mec"
-    
-    n6c:
-      subnet: "10.207.0.0/24"
-      nad_name: "n6-cld-net"
-      nad_namespace: "5g"
-
-  # VXLAN configuration
-  vxlan:
-    keys:
-      n1: 1
-      n2: 2
-      n3: 3
-      n4: 4
-      n6e: 6
-      n6c: 7
-    mtu: 1450
+# Network addresses are not repeated here: tests read them from the network
+# plan in ansible/group_vars/all.yml through TestConfig.plan().
 
 # 5G Core components
 core_components:
   amf:
     name: "amf"
-    namespace: "5g"
     ports: [38412]  # SCTP for N1/N2
     interfaces: ["n1", "n2"]
   
   smf:
     name: "smf"
-    namespace: "5g"
     ports: [8805]   # PFCP for N4
     interfaces: ["n4"]
   
   upf_edge:
     name: "upf-edge"
-    namespace: "5g"
     ports: [2152, 8805]  # GTP-U for N3, PFCP for N4
     interfaces: ["n3", "n4"]
   
   upf_cloud:
     name: "upf-cloud"
-    namespace: "5g"
     ports: [2152, 8805]  # GTP-U for N3, PFCP for N4
     interfaces: ["n3", "n4"]
 
@@ -199,12 +124,10 @@ core_components:
 ueransim:
   gnb:
     name: "gnb"
-    namespace: "5g"
     interfaces: ["n2", "n3"]
 
   ue:
     name: "ue"
-    namespace: "5g"
     interfaces: ["n1", "n3"]
 
 # Performance thresholds

@@ -7,7 +7,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.k8s_client import K8sClient
-from utils.test_helpers import TestConfig, TestLogger, NetworkValidator, ComponentValidator
+from utils.test_helpers import TestConfig, TestLogger, NetworkValidator, ComponentValidator, CORE_NS
 
 
 class ProtocolTestSuite:
@@ -70,11 +70,11 @@ class ProtocolTestSuite:
             
             smf_pod = smf_pods[0]["metadata"]["name"]
             
-            ok, out = self.network_validator.check_port_listening(smf_pod, "5g", 8805, "UDP", capture=True)
+            ok, out = self.network_validator.check_port_listening(smf_pod, CORE_NS, 8805, "UDP", capture=True)
             if not ok:
                 self.logger.error("SMF not listening on PFCP port 8805")
                 self.logger.info(f"[debug] ss -unap (SMF {smf_pod}):\n{out}")
-                self.component_validator.debug_pod(smf_pod, "5g", self.logger)
+                self.component_validator.debug_pod(smf_pod, CORE_NS, self.logger)
                 return False
             self.logger.success("SMF listening on PFCP port 8805")
             
@@ -85,20 +85,20 @@ class ProtocolTestSuite:
             
             for upf_pod in upf_pods:
                 upf_name = upf_pod["metadata"]["name"]
-                ok, out = self.network_validator.check_port_listening(upf_name, "5g", 8805, "UDP", capture=True)
+                ok, out = self.network_validator.check_port_listening(upf_name, CORE_NS, 8805, "UDP", capture=True)
                 if not ok:
                     self.logger.error(f"UPF {upf_name} not listening on PFCP port 8805")
                     self.logger.info(f"[debug] ss -unap ({upf_name}):\n{out}")
-                    self.component_validator.debug_pod(upf_name, "5g", self.logger)
+                    self.component_validator.debug_pod(upf_name, CORE_NS, self.logger)
                     return False
                 self.logger.success(f"UPF {upf_name} listening on PFCP port 8805")
             
-            smf_n4_ip = self.config.get("network.interfaces.n4.smf_ip")
-            ok, out = self.network_validator.check_interface_ip(smf_pod, "5g", "n4", smf_n4_ip, capture=True)
+            smf_n4_ip = self.config.plan("smf_n4_ip")
+            ok, out = self.network_validator.check_interface_ip(smf_pod, CORE_NS, "n4", smf_n4_ip, capture=True)
             if not ok:
                 self.logger.error(f"SMF N4 interface not configured with IP {smf_n4_ip}")
                 self.logger.info(f"[debug] ip addr show n4 (SMF {smf_pod}):\n{out}")
-                self.component_validator.debug_pod(smf_pod, "5g", self.logger)
+                self.component_validator.debug_pod(smf_pod, CORE_NS, self.logger)
                 return False
             self.logger.success(f"SMF N4 interface configured with IP {smf_n4_ip}")
             return True
@@ -119,27 +119,27 @@ class ProtocolTestSuite:
             
             amf_pod = amf_pods[0]["metadata"]["name"]
             
-            ok, out = self.network_validator.check_port_listening(amf_pod, "5g", 38412, "SCTP", capture=True)
+            ok, out = self.network_validator.check_port_listening(amf_pod, CORE_NS, 38412, "SCTP", capture=True)
             if not ok:
                 self.logger.error("AMF not listening on SCTP port 38412 for NGAP")
                 self.logger.info(f"[debug] ss -S -na (AMF {amf_pod}):\n{out}")
-                self.component_validator.debug_pod(amf_pod, "5g", self.logger)
+                self.component_validator.debug_pod(amf_pod, CORE_NS, self.logger)
                 return False
             self.logger.success("AMF listening on SCTP port 38412 for NGAP")
             
-            amf_n2_ip = self.config.get("network.interfaces.n2.amf_ip")
-            ok, out = self.network_validator.check_interface_ip(amf_pod, "5g", "n2", amf_n2_ip, capture=True)
+            amf_n2_ip = self.config.plan("amf_n2_ip")
+            ok, out = self.network_validator.check_interface_ip(amf_pod, CORE_NS, "n2", amf_n2_ip, capture=True)
             if not ok:
                 self.logger.error(f"AMF N2 interface not configured with IP {amf_n2_ip}")
                 self.logger.info(f"[debug] ip addr show n2 (AMF {amf_pod}):\n{out}")
-                self.component_validator.debug_pod(amf_pod, "5g", self.logger)
+                self.component_validator.debug_pod(amf_pod, CORE_NS, self.logger)
                 return False
             self.logger.success(f"AMF N2 interface configured with IP {amf_n2_ip}")
             
-            gnb_pods = [p for p in self.kubectl.get_pods("5g") if "gnb" in p["metadata"]["name"].lower()]
+            gnb_pods = [p for p in self.kubectl.get_pods(CORE_NS) if "gnb" in p["metadata"]["name"].lower()]
             if gnb_pods:
                 gnb_pod = gnb_pods[0]["metadata"]["name"]
-                ok, out = self.network_validator.check_connectivity(gnb_pod, amf_pod, "5g", amf_n2_ip, capture=True)
+                ok, out = self.network_validator.check_connectivity(gnb_pod, amf_pod, CORE_NS, amf_n2_ip, capture=True)
                 if ok:
                     self.logger.success("gNB can reach AMF on N2 interface")
                 else:
@@ -163,22 +163,22 @@ class ProtocolTestSuite:
             
             for upf_pod in upf_pods:
                 upf_name = upf_pod["metadata"]["name"]
-                ok, out = self.network_validator.check_port_listening(upf_name, "5g", 2152, "UDP", capture=True)
+                ok, out = self.network_validator.check_port_listening(upf_name, CORE_NS, 2152, "UDP", capture=True)
                 if not ok:
                     self.logger.error(f"UPF {upf_name} not listening on GTP-U port 2152")
                     self.logger.info(f"[debug] ss -unap ({upf_name}):\n{out}")
-                    self.component_validator.debug_pod(upf_name, "5g", self.logger)
+                    self.component_validator.debug_pod(upf_name, CORE_NS, self.logger)
                     return False
                 self.logger.success(f"UPF {upf_name} listening on GTP-U port 2152")
                 
-                expected_ip = (self.config.get("network.interfaces.n3.upf_edge_ip")
+                expected_ip = (self.config.plan("upf_edge_n3_ip")
                                if "edge" in upf_name.lower()
-                               else self.config.get("network.interfaces.n3.upf_cloud_ip"))
-                ok, out = self.network_validator.check_interface_ip(upf_name, "5g", "n3", expected_ip, capture=True)
+                               else self.config.plan("upf_cloud_n3_ip"))
+                ok, out = self.network_validator.check_interface_ip(upf_name, CORE_NS, "n3", expected_ip, capture=True)
                 if not ok:
                     self.logger.error(f"UPF {upf_name} N3 interface not configured with IP {expected_ip}")
                     self.logger.info(f"[debug] ip addr show n3 ({upf_name}):\n{out}")
-                    self.component_validator.debug_pod(upf_name, "5g", self.logger)
+                    self.component_validator.debug_pod(upf_name, CORE_NS, self.logger)
                     return False
                 self.logger.success(f"UPF {upf_name} N3 interface configured with IP {expected_ip}")
             return True
@@ -199,27 +199,27 @@ class ProtocolTestSuite:
             
             amf_pod = amf_pods[0]["metadata"]["name"]
             
-            ok, out = self.network_validator.check_port_listening(amf_pod, "5g", 38412, "SCTP", capture=True)
+            ok, out = self.network_validator.check_port_listening(amf_pod, CORE_NS, 38412, "SCTP", capture=True)
             if not ok:
                 self.logger.error("AMF not listening on SCTP port 38412 for NAS")
                 self.logger.info(f"[debug] ss -S -na (AMF {amf_pod}):\n{out}")
-                self.component_validator.debug_pod(amf_pod, "5g", self.logger)
+                self.component_validator.debug_pod(amf_pod, CORE_NS, self.logger)
                 return False
             self.logger.success("AMF listening on SCTP port 38412 for NAS")
             
-            amf_n1_ip = self.config.get("network.interfaces.n1.amf_ip")
-            ok, out = self.network_validator.check_interface_ip(amf_pod, "5g", "n1", amf_n1_ip, capture=True)
+            amf_n1_ip = self.config.plan("amf_n1_ip")
+            ok, out = self.network_validator.check_interface_ip(amf_pod, CORE_NS, "n1", amf_n1_ip, capture=True)
             if not ok:
                 self.logger.error(f"AMF N1 interface not configured with IP {amf_n1_ip}")
                 self.logger.info(f"[debug] ip addr show n1 (AMF {amf_pod}):\n{out}")
-                self.component_validator.debug_pod(amf_pod, "5g", self.logger)
+                self.component_validator.debug_pod(amf_pod, CORE_NS, self.logger)
                 return False
             self.logger.success(f"AMF N1 interface configured with IP {amf_n1_ip}")
             
-            ue_pods = [p for p in self.kubectl.get_pods("5g") if "ue" in p["metadata"]["name"].lower()]
+            ue_pods = [p for p in self.kubectl.get_pods(CORE_NS) if "ue" in p["metadata"]["name"].lower()]
             if ue_pods:
                 ue_pod = ue_pods[0]["metadata"]["name"]
-                ok, out = self.network_validator.check_connectivity(ue_pod, amf_pod, "5g", amf_n1_ip, capture=True)
+                ok, out = self.network_validator.check_connectivity(ue_pod, amf_pod, CORE_NS, amf_n1_ip, capture=True)
                 if ok:
                     self.logger.success("UE can reach AMF on N1 interface")
                 else:
@@ -235,7 +235,7 @@ class ProtocolTestSuite:
         """Test N3 gateway reachability from UPF pods"""
         self.logger.info("Testing N3 gateway reachability from UPFs...")
 
-        n3_gateway = "10.203.0.1"
+        n3_gateway = self.config.plan("n3_gateway")
 
         try:
             upf_pods = self.component_validator.get_component_pods("upf")
@@ -247,13 +247,13 @@ class ProtocolTestSuite:
                 upf_name = upf_pod["metadata"]["name"]
                 result = self.kubectl.exec_in_pod(
                     upf_name,
-                    "5g",
+                    CORE_NS,
                     ["ping", "-c", "2", "-W", "2", "-I", "n3", n3_gateway],
                 )
                 if result.returncode != 0:
                     self.logger.error(f"UPF {upf_name} cannot reach N3 gateway {n3_gateway}")
                     self.logger.info(f"[debug] ping output ({upf_name}):\n{result.stdout}\n{result.stderr}")
-                    self.component_validator.debug_pod(upf_name, "5g", self.logger)
+                    self.component_validator.debug_pod(upf_name, CORE_NS, self.logger)
                     return False
                 self.logger.success(f"UPF {upf_name} can reach N3 gateway {n3_gateway}")
 
@@ -275,20 +275,20 @@ class ProtocolTestSuite:
             
             amf_pod = amf_pods[0]["metadata"]["name"]
             
-            n1_ip = self.config.get("network.interfaces.n1.amf_ip")
-            ok, out = self.network_validator.check_interface_ip(amf_pod, "5g", "n1", n1_ip, capture=True)
+            n1_ip = self.config.plan("amf_n1_ip")
+            ok, out = self.network_validator.check_interface_ip(amf_pod, CORE_NS, "n1", n1_ip, capture=True)
             if not ok:
                 self.logger.error(f"AMF N1 interface IP mismatch: expected {n1_ip}")
                 self.logger.info(f"[debug] ip addr show n1 (AMF {amf_pod}):\n{out}")
-                self.component_validator.debug_pod(amf_pod, "5g", self.logger)
+                self.component_validator.debug_pod(amf_pod, CORE_NS, self.logger)
                 return False
             
-            n2_ip = self.config.get("network.interfaces.n2.amf_ip")
-            ok, out = self.network_validator.check_interface_ip(amf_pod, "5g", "n2", n2_ip, capture=True)
+            n2_ip = self.config.plan("amf_n2_ip")
+            ok, out = self.network_validator.check_interface_ip(amf_pod, CORE_NS, "n2", n2_ip, capture=True)
             if not ok:
                 self.logger.error(f"AMF N2 interface IP mismatch: expected {n2_ip}")
                 self.logger.info(f"[debug] ip addr show n2 (AMF {amf_pod}):\n{out}")
-                self.component_validator.debug_pod(amf_pod, "5g", self.logger)
+                self.component_validator.debug_pod(amf_pod, CORE_NS, self.logger)
                 return False
             
             self.logger.success("AMF interface IPs configured correctly")
@@ -299,12 +299,12 @@ class ProtocolTestSuite:
                 return False
             
             smf_pod = smf_pods[0]["metadata"]["name"]
-            n4_ip = self.config.get("network.interfaces.n4.smf_ip")
-            ok, out = self.network_validator.check_interface_ip(smf_pod, "5g", "n4", n4_ip, capture=True)
+            n4_ip = self.config.plan("smf_n4_ip")
+            ok, out = self.network_validator.check_interface_ip(smf_pod, CORE_NS, "n4", n4_ip, capture=True)
             if not ok:
                 self.logger.error(f"SMF N4 interface IP mismatch: expected {n4_ip}")
                 self.logger.info(f"[debug] ip addr show n4 (SMF {smf_pod}):\n{out}")
-                self.component_validator.debug_pod(smf_pod, "5g", self.logger)
+                self.component_validator.debug_pod(smf_pod, CORE_NS, self.logger)
                 return False
             
             self.logger.success("SMF interface IP configured correctly")
@@ -415,23 +415,23 @@ class ProtocolTestSuite:
                 amf_pod = amf_pods[0]["metadata"]["name"]
                 smf_pod = smf_pods[0]["metadata"]["name"]
                 
-                result = self.kubectl.exec_in_pod(amf_pod, "5g", ["hostname", "-i"])
+                result = self.kubectl.exec_in_pod(amf_pod, CORE_NS, ["hostname", "-i"])
                 amf_ip = result.stdout.strip()
                 
-                ok, out = self.network_validator.check_connectivity(smf_pod, amf_pod, "5g", amf_ip, capture=True)
+                ok, out = self.network_validator.check_connectivity(smf_pod, amf_pod, CORE_NS, amf_ip, capture=True)
                 if ok:
                     self.logger.success("SMF can reach AMF")
                 else:
                     self.logger.warning("SMF cannot reach AMF (might be normal during startup)")
                     self.logger.info(f"[debug] ping output (SMF {smf_pod} → AMF {amf_pod} {amf_ip}):\n{out}")
             
-            gnb_pods = [p for p in self.kubectl.get_pods("5g") if "gnb" in p["metadata"]["name"].lower()]
+            gnb_pods = [p for p in self.kubectl.get_pods(CORE_NS) if "gnb" in p["metadata"]["name"].lower()]
             if gnb_pods and amf_pods:
                 gnb_pod = gnb_pods[0]["metadata"]["name"]
                 amf_pod = amf_pods[0]["metadata"]["name"]
                 
-                amf_n2_ip = self.config.get("network.interfaces.n2.amf_ip")
-                ok, out = self.network_validator.check_connectivity(gnb_pod, amf_pod, "5g", amf_n2_ip, capture=True)
+                amf_n2_ip = self.config.plan("amf_n2_ip")
+                ok, out = self.network_validator.check_connectivity(gnb_pod, amf_pod, CORE_NS, amf_n2_ip, capture=True)
                 if ok:
                     self.logger.success("gNB can reach AMF on N2 interface")
                 else:
@@ -457,8 +457,8 @@ class ProtocolTestSuite:
             amf_pod = amf_pods[0]["metadata"]["name"]
             smf_pod = smf_pods[0]["metadata"]["name"]
 
-            amf_logs = self.kubectl.get_pod_logs(amf_pod, "5g", tail_lines=400)
-            smf_logs = self.kubectl.get_pod_logs(smf_pod, "5g", tail_lines=400)
+            amf_logs = self.kubectl.get_pod_logs(amf_pod, CORE_NS, tail_lines=400)
+            smf_logs = self.kubectl.get_pod_logs(smf_pod, CORE_NS, tail_lines=400)
 
             amf_patterns = [
                 "PDUSessionResourceSetupResponse(Unsuccessful)",

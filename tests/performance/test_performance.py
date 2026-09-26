@@ -9,7 +9,7 @@ import json
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.kubectl_client import KubectlClient
-from utils.test_helpers import TestConfig, TestLogger, NetworkValidator, ComponentValidator
+from utils.test_helpers import TestConfig, TestLogger, NetworkValidator, ComponentValidator, CORE_NS
 
 
 class PerformanceTestSuite:
@@ -65,7 +65,7 @@ class PerformanceTestSuite:
         
         try:
             # Find two pods for throughput testing
-            fiveg_pods = self.kubectl.get_pods("5g")
+            fiveg_pods = self.kubectl.get_pods(CORE_NS)
             if len(fiveg_pods) < 2:
                 self.logger.error("Need at least 2 pods for throughput testing")
                 return False
@@ -88,7 +88,7 @@ class PerformanceTestSuite:
             # Start iperf3 server
             self.logger.info("Starting iperf3 server...")
             server_result = self.kubectl.exec_in_pod(
-                server_pod, "5g", 
+                server_pod, CORE_NS, 
                 ["iperf3", "-s", "-D"]
             )
             
@@ -96,7 +96,7 @@ class PerformanceTestSuite:
             
             # Get server IP
             server_ip_result = self.kubectl.exec_in_pod(
-                server_pod, "5g", 
+                server_pod, CORE_NS, 
                 ["hostname", "-i"]
             )
             server_ip = server_ip_result.stdout.strip()
@@ -107,7 +107,7 @@ class PerformanceTestSuite:
             parallel = self.config.get("test_configs.performance.iperf_parallel", 10)
             
             client_result = self.kubectl.exec_in_pod(
-                client_pod, "5g",
+                client_pod, CORE_NS,
                 ["iperf3", "-c", server_ip, "-t", str(duration), "-P", str(parallel), "-J"]
             )
             
@@ -142,7 +142,7 @@ class PerformanceTestSuite:
         
         try:
             # Find two pods for latency testing
-            fiveg_pods = self.kubectl.get_pods("5g")
+            fiveg_pods = self.kubectl.get_pods(CORE_NS)
             if len(fiveg_pods) < 2:
                 self.logger.error("Need at least 2 pods for latency testing")
                 return False
@@ -152,7 +152,7 @@ class PerformanceTestSuite:
             
             # Get pod2 IP
             pod2_ip_result = self.kubectl.exec_in_pod(
-                pod2, "5g", 
+                pod2, CORE_NS, 
                 ["hostname", "-i"]
             )
             pod2_ip = pod2_ip_result.stdout.strip()
@@ -166,7 +166,7 @@ class PerformanceTestSuite:
                 self.logger.info(f"Testing latency with {size} byte packets...")
                 
                 ping_result = self.kubectl.exec_in_pod(
-                    pod1, "5g",
+                    pod1, CORE_NS,
                     ["ping", "-c", "10", "-s", str(size), "-W", "5", pod2_ip]
                 )
                 
@@ -202,7 +202,7 @@ class PerformanceTestSuite:
         
         try:
             # Find two pods for packet loss testing
-            fiveg_pods = self.kubectl.get_pods("5g")
+            fiveg_pods = self.kubectl.get_pods(CORE_NS)
             if len(fiveg_pods) < 2:
                 self.logger.error("Need at least 2 pods for packet loss testing")
                 return False
@@ -212,7 +212,7 @@ class PerformanceTestSuite:
             
             # Get pod2 IP
             pod2_ip_result = self.kubectl.exec_in_pod(
-                pod2, "5g", 
+                pod2, CORE_NS, 
                 ["hostname", "-i"]
             )
             pod2_ip = pod2_ip_result.stdout.strip()
@@ -220,7 +220,7 @@ class PerformanceTestSuite:
             # High rate ping test
             self.logger.info("Running high rate ping test...")
             ping_result = self.kubectl.exec_in_pod(
-                pod1, "5g",
+                pod1, CORE_NS,
                 ["ping", "-c", "100", "-i", "0.01", "-W", "1", pod2_ip]
             )
             
@@ -274,11 +274,11 @@ class PerformanceTestSuite:
             upf_pfcp_port = 8805
             
             # Check if ports are listening
-            if not self.network_validator.check_port_listening(smf_pod, "5g", smf_pfcp_port, "UDP"):
+            if not self.network_validator.check_port_listening(smf_pod, CORE_NS, smf_pfcp_port, "UDP"):
                 self.logger.error("SMF not listening on PFCP port")
                 return False
             
-            if not self.network_validator.check_port_listening(upf_pod, "5g", upf_pfcp_port, "UDP"):
+            if not self.network_validator.check_port_listening(upf_pod, CORE_NS, upf_pfcp_port, "UDP"):
                 self.logger.error("UPF not listening on PFCP port")
                 return False
             
@@ -286,12 +286,12 @@ class PerformanceTestSuite:
             
             # Test connectivity between SMF and UPF
             upf_ip_result = self.kubectl.exec_in_pod(
-                upf_pod, "5g", 
+                upf_pod, CORE_NS, 
                 ["hostname", "-i"]
             )
             upf_ip = upf_ip_result.stdout.strip()
             
-            if self.network_validator.check_connectivity(smf_pod, upf_pod, "5g", upf_ip):
+            if self.network_validator.check_connectivity(smf_pod, upf_pod, CORE_NS, upf_ip):
                 self.logger.success("SMF can reach UPF for PFCP communication")
                 return True
             else:
@@ -309,7 +309,7 @@ class PerformanceTestSuite:
         try:
             # Check AMF and gNB NGAP connectivity
             amf_pods = self.component_validator.get_component_pods("amf")
-            gnb_pods = [p for p in self.kubectl.get_pods("5g") if "gnb" in p["metadata"]["name"].lower()]
+            gnb_pods = [p for p in self.kubectl.get_pods(CORE_NS) if "gnb" in p["metadata"]["name"].lower()]
             
             if not amf_pods:
                 self.logger.error("AMF pods not found for NGAP testing")
@@ -318,7 +318,7 @@ class PerformanceTestSuite:
             amf_pod = amf_pods[0]["metadata"]["name"]
             
             # Check AMF SCTP port
-            if not self.network_validator.check_port_listening(amf_pod, "5g", 38412, "SCTP"):
+            if not self.network_validator.check_port_listening(amf_pod, CORE_NS, 38412, "SCTP"):
                 self.logger.error("AMF not listening on SCTP port for NGAP")
                 return False
             
@@ -327,9 +327,9 @@ class PerformanceTestSuite:
             # Test gNB connectivity if available
             if gnb_pods:
                 gnb_pod = gnb_pods[0]["metadata"]["name"]
-                amf_n2_ip = self.config.get("network.interfaces.n2.amf_ip")
+                amf_n2_ip = self.config.plan("amf_n2_ip")
                 
-                if self.network_validator.check_connectivity(gnb_pod, amf_pod, "5g", amf_n2_ip):
+                if self.network_validator.check_connectivity(gnb_pod, amf_pod, CORE_NS, amf_n2_ip):
                     self.logger.success("gNB can reach AMF for NGAP communication")
                 else:
                     self.logger.warning("gNB cannot reach AMF (might be normal during startup)")
@@ -348,7 +348,7 @@ class PerformanceTestSuite:
             # This is a simplified test - in a real scenario, you would test actual concurrent connections
             # For now, we'll check if multiple pods can communicate simultaneously
             
-            fiveg_pods = self.kubectl.get_pods("5g")
+            fiveg_pods = self.kubectl.get_pods(CORE_NS)
             if len(fiveg_pods) < 3:
                 self.logger.warning("Need at least 3 pods for concurrent connection testing")
                 return True
@@ -359,15 +359,15 @@ class PerformanceTestSuite:
             pod3 = fiveg_pods[2]["metadata"]["name"]
             
             # Get IPs
-            pod2_ip_result = self.kubectl.exec_in_pod(pod2, "5g", ["hostname", "-i"])
+            pod2_ip_result = self.kubectl.exec_in_pod(pod2, CORE_NS, ["hostname", "-i"])
             pod2_ip = pod2_ip_result.stdout.strip()
             
-            pod3_ip_result = self.kubectl.exec_in_pod(pod3, "5g", ["hostname", "-i"])
+            pod3_ip_result = self.kubectl.exec_in_pod(pod3, CORE_NS, ["hostname", "-i"])
             pod3_ip = pod3_ip_result.stdout.strip()
             
             # Test concurrent connectivity
-            if (self.network_validator.check_connectivity(pod1, pod2, "5g", pod2_ip) and
-                self.network_validator.check_connectivity(pod1, pod3, "5g", pod3_ip)):
+            if (self.network_validator.check_connectivity(pod1, pod2, CORE_NS, pod2_ip) and
+                self.network_validator.check_connectivity(pod1, pod3, CORE_NS, pod3_ip)):
                 self.logger.success("Concurrent connections working")
                 return True
             else:
@@ -384,7 +384,7 @@ class PerformanceTestSuite:
         
         try:
             # Run iperf3 for a longer duration
-            fiveg_pods = self.kubectl.get_pods("5g")
+            fiveg_pods = self.kubectl.get_pods(CORE_NS)
             if len(fiveg_pods) < 2:
                 self.logger.error("Need at least 2 pods for sustained load testing")
                 return False
@@ -397,11 +397,11 @@ class PerformanceTestSuite:
             self._install_iperf3(client_pod)
             
             # Start iperf3 server
-            self.kubectl.exec_in_pod(server_pod, "5g", ["iperf3", "-s", "-D"])
+            self.kubectl.exec_in_pod(server_pod, CORE_NS, ["iperf3", "-s", "-D"])
             time.sleep(2)
             
             # Get server IP
-            server_ip_result = self.kubectl.exec_in_pod(server_pod, "5g", ["hostname", "-i"])
+            server_ip_result = self.kubectl.exec_in_pod(server_pod, CORE_NS, ["hostname", "-i"])
             server_ip = server_ip_result.stdout.strip()
             
             # Run sustained load test
@@ -409,7 +409,7 @@ class PerformanceTestSuite:
             self.logger.info(f"Running sustained load test for {duration} seconds...")
             
             client_result = self.kubectl.exec_in_pod(
-                client_pod, "5g",
+                client_pod, CORE_NS,
                 ["iperf3", "-c", server_ip, "-t", str(duration), "-J"]
             )
             
@@ -441,7 +441,7 @@ class PerformanceTestSuite:
         
         try:
             # Check resource usage of 5G pods
-            fiveg_pods = self.kubectl.get_pods("5g")
+            fiveg_pods = self.kubectl.get_pods(CORE_NS)
             if not fiveg_pods:
                 self.logger.error("No 5G pods found for resource testing")
                 return False
@@ -455,7 +455,7 @@ class PerformanceTestSuite:
                 # Get resource usage
                 try:
                     result = self.kubectl.exec_in_pod(
-                        pod_name, "5g",
+                        pod_name, CORE_NS,
                         ["top", "-bn1"]
                     )
                     
@@ -491,7 +491,7 @@ class PerformanceTestSuite:
             # Check interface statistics
             try:
                 result = self.kubectl.exec_in_pod(
-                    amf_pod, "5g",
+                    amf_pod, CORE_NS,
                     ["cat", "/proc/net/dev"]
                 )
                 
@@ -530,15 +530,15 @@ class PerformanceTestSuite:
             self.logger.success("All components ready for end-to-end testing")
             
             # Test basic connectivity
-            fiveg_pods = self.kubectl.get_pods("5g")
+            fiveg_pods = self.kubectl.get_pods(CORE_NS)
             if len(fiveg_pods) >= 2:
                 pod1 = fiveg_pods[0]["metadata"]["name"]
                 pod2 = fiveg_pods[1]["metadata"]["name"]
                 
-                pod2_ip_result = self.kubectl.exec_in_pod(pod2, "5g", ["hostname", "-i"])
+                pod2_ip_result = self.kubectl.exec_in_pod(pod2, CORE_NS, ["hostname", "-i"])
                 pod2_ip = pod2_ip_result.stdout.strip()
                 
-                if self.network_validator.check_connectivity(pod1, pod2, "5g", pod2_ip):
+                if self.network_validator.check_connectivity(pod1, pod2, CORE_NS, pod2_ip):
                     self.logger.success("End-to-end connectivity working")
                     return True
                 else:
@@ -555,14 +555,14 @@ class PerformanceTestSuite:
         """Install iperf3 in pod if not available"""
         try:
             # Check if iperf3 is available
-            result = self.kubectl.exec_in_pod(pod_name, "5g", ["which", "iperf3"])
+            result = self.kubectl.exec_in_pod(pod_name, CORE_NS, ["which", "iperf3"])
             if result.returncode == 0:
                 return  # iperf3 already available
             
             # Install iperf3
             self.logger.info(f"Installing iperf3 in {pod_name}...")
             self.kubectl.exec_in_pod(
-                pod_name, "5g",
+                pod_name, CORE_NS,
                 ["apt-get", "update", "&&", "apt-get", "install", "-y", "iperf3"]
             )
         except:

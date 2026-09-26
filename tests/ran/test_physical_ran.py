@@ -2,13 +2,14 @@
 Physical RAN Integration Tests
 Tests for femtocell/small cell connectivity via OVS bridge
 """
+import json
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import subprocess
 from utils.k8s_client import K8sClient
-from utils.test_helpers import TestConfig, TestLogger
+from utils.test_helpers import TestConfig, TestLogger, CORE_NS
 
 
 class PhysicalRANTestSuite:
@@ -21,9 +22,9 @@ class PhysicalRANTestSuite:
         self.verbose = verbose
         
         # RAN network config
-        self.worker_host = self.config.get("cluster.worker_host", "192.168.56.11")
-        self.ran_network = "192.168.57.0/24"
-        self.ran_gateway = "192.168.57.1"
+        self.worker_host = self.config.plan("node_ips.worker")
+        self.ran_network = self.config.plan("physical_ran_subnet")
+        self.ran_gateway = self.config.plan("physical_ran_gateway")
     
     def run_all_tests(self) -> bool:
         """Run all physical RAN tests"""
@@ -39,6 +40,8 @@ class PhysicalRANTestSuite:
             ("UPF Overlay IP Reachable", self.test_upf_overlay_reachable),
             ("gNB Connection Status", self.test_gnb_connection),
             ("UE NGAP Context (physical UE)", self.test_ue_ngap_context),
+            ("UPF Downlink Route via N3", self.test_upf_ran_return_route),
+            ("No GTP-U on N6 Bridges", self.test_no_gtpu_on_n6),
         ]
         
         passed = 0
@@ -104,9 +107,8 @@ class PhysicalRANTestSuite:
         self.logger.info("Checking overlay gateway ownership on worker bridges...")
 
         expected_gateways = {
-            "br-n2": "10.202.0.1/24",
-            "br-n3": "10.203.0.1/24",
-            "br-n4": "10.204.0.1/24",
+            f"br-{plane}": f"{self.config.plan(plane + '_gateway')}/{self.config.plan(plane + '_subnet').split('/')[1]}"
+            for plane in ("n2", "n3", "n4")
         }
 
         for bridge, cidr in expected_gateways.items():
@@ -125,14 +127,20 @@ class PhysicalRANTestSuite:
         """Test RAN network interface exists on worker"""
         self.logger.info("Checking RAN interface on worker...")
         
-        # Check for interface with 192.168.57.x IP
-        rc, stdout, stderr = self._ssh_worker("ip addr show | grep '192.168.57'")
-        
-        if rc != 0 or "192.168.57" not in stdout:
+        # The worker owns the RAN gateway address, on br-ran only. The same address
+        # on the bridged NIC routes traffic out of the NIC and around the bridge.
+        rc, stdout, stderr = self._ssh_worker(f"ip -o -4 addr show | grep -F ' {self.ran_gateway}/'")
+
+        if rc != 0 or self.ran_gateway not in stdout:
             self.logger.info("RAN interface not configured (ran_bridge_mode might be disabled)")
             return None  # Skip - not configured
-        
-        self.logger.success(f"RAN interface found with IP in {self.ran_network}")
+
+        owners = sorted({line.split()[1] for line in stdout.splitlines() if self.ran_gateway in line})
+        if owners != ["br-ran"]:
+            self.logger.error(f"RAN gateway {self.ran_gateway} is on {owners}, expected br-ran only")
+            return False
+
+        self.logger.success(f"RAN gateway {self.ran_gateway} is on br-ran only")
         return True
     
     def test_ovs_ran_bridge(self) -> bool:
@@ -179,7 +187,7 @@ class PhysicalRANTestSuite:
         
         # Get AMF pod and its N2 IP
         try:
-            pods = self.kubectl.get_pods("5g")
+            pods = self.kubectl.get_pods(CORE_NS)
             amf_pods = [p for p in pods if "amf" in p["metadata"]["name"].lower() and p["status"]["phase"] == "Running"]
             
             if not amf_pods:
@@ -232,7 +240,7 @@ class PhysicalRANTestSuite:
         self.logger.info("Checking UPF overlay IP reachability...")
         
         try:
-            pods = self.kubectl.get_pods("5g")
+            pods = self.kubectl.get_pods(CORE_NS)
             upf_pods = [p for p in pods if "upf" in p["metadata"]["name"].lower() and p["status"]["phase"] == "Running"]
             
             if not upf_pods:
@@ -282,11 +290,11 @@ class PhysicalRANTestSuite:
     
     def _amf_logs(self, tail_lines: int = 500) -> str:
         """Return recent AMF logs, or '' if no running AMF pod."""
-        pods = self.kubectl.get_pods("5g")
+        pods = self.kubectl.get_pods(CORE_NS)
         amf_pods = [p for p in pods if "amf" in p["metadata"]["name"].lower() and p["status"]["phase"] == "Running"]
         if not amf_pods:
             return ""
-        return self.kubectl.get_pod_logs(amf_pods[0]["metadata"]["name"], "5g", tail_lines=tail_lines)
+        return self.kubectl.get_pod_logs(amf_pods[0]["metadata"]["name"], CORE_NS, tail_lines=tail_lines)
 
     def test_gnb_connection(self) -> bool:
         """Test that a gNB (physical or simulated) is connected to the AMF.
@@ -358,6 +366,114 @@ class PhysicalRANTestSuite:
         except Exception as e:
             self.logger.error(f"Failed to check UE NGAP context: {e}")
             return False
+
+    def _upf_cloud_pod(self):
+        pods = self.kubectl.get_pods(CORE_NS)
+        running = [p for p in pods
+                   if p["metadata"]["name"].startswith("upf-cloud")
+                   and p["status"]["phase"] == "Running"]
+        return running[0] if running else None
+
+    def test_upf_ran_return_route(self) -> bool:
+        """Test the UPF sends GTP-U downlink to the physical RAN over N3.
+
+        Without the return route the UPF falls back to its default route on
+        N6 and the worker forwards the tunnel from br-n6c to br-ran: traffic
+        still flows, but the N3 plane is no longer the only one carrying it.
+        The UPF image has no `ip`, so the kernel table is read from
+        /proc/net/route.
+        """
+        self.logger.info("Checking UPF return route toward the physical RAN...")
+
+        pod = self._upf_cloud_pod()
+        if not pod:
+            self.logger.error("No running upf-cloud pod found")
+            return False
+
+        # The route is declared on the NAD of the UPF's n3 attachment (phase 04),
+        # present only while the physical RAN is on: that NAD decides whether the
+        # check applies.
+        nets = json.loads((pod["metadata"].get("annotations") or {}).get("k8s.v1.cni.cncf.io/networks", "[]"))
+        n3 = next((n for n in nets if n.get("interface") == "n3"), None)
+        if not n3:
+            self.logger.error("upf-cloud has no n3 attachment")
+            return False
+        nad = next((d for d in self.kubectl.get_network_attachments(n3.get("namespace") or CORE_NS)
+                    if d["metadata"]["name"] == n3["name"]), None)
+        if not nad:
+            self.logger.error(f"NAD {n3['name']} of the UPF n3 attachment not found")
+            return False
+        subnet = self.config.plan("physical_ran_subnet")
+        routes = json.loads(nad["spec"]["config"]).get("ipam", {}).get("routes", [])
+        if not any(r.get("dst") == subnet for r in routes):
+            self.logger.info(f"NAD {n3['name']} carries no route to {subnet} (physical RAN disabled)")
+            return None
+
+        res = self.kubectl.exec_in_pod(pod["metadata"]["name"], CORE_NS,
+                                       ["cat", "/proc/net/route"], container="upf-cloud")
+        if not res:
+            self.logger.error(f"Cannot read UPF route table: {res.stderr}")
+            return False
+
+        import ipaddress
+        import socket
+        import struct
+
+        def hex_ip(h):
+            return socket.inet_ntoa(struct.pack("<I", int(h, 16)))
+
+        want = ipaddress.ip_network(subnet)
+        for line in res.stdout.splitlines()[1:]:
+            f = line.split()
+            if len(f) < 8:
+                continue
+            iface, dst, gw, mask = f[0], hex_ip(f[1]), hex_ip(f[2]), hex_ip(f[7])
+            if ipaddress.ip_network(f"{dst}/{mask}") == want:
+                if iface != "n3":
+                    self.logger.error(f"Route to {subnet} leaves via {iface} (gw {gw}), expected n3")
+                    return False
+                self.logger.success(f"UPF routes {subnet} via {gw} dev n3")
+                return True
+
+        self.logger.error(f"UPF has no route to {subnet}: downlink falls back to the default route on N6")
+        return False
+
+    def test_no_gtpu_on_n6(self) -> bool:
+        """Test GTP-U (udp/2152) never crosses an N6 bridge on the worker.
+
+        N6 carries decapsulated user traffic only; a tunnel packet on
+        br-n6* means a routing leak between planes. Absence is only
+        meaningful while the tunnel is active, so the test skips when
+        br-n3 carries no GTP-U during the capture window.
+        """
+        self.logger.info("Capturing GTP-U on worker bridges...")
+
+        window = 6
+        rc, stdout, _ = self._ssh_worker("ls /sys/class/net")
+        if rc != 0:
+            self.logger.error("Cannot list worker interfaces")
+            return False
+        n6_bridges = [i for i in stdout.split() if i.startswith("br-n6")]
+
+        def capture(iface):
+            _, out, _ = self._ssh_worker(
+                f"sudo timeout {window} tcpdump -ni {iface} -c 500 udp port 2152 2>/dev/null")
+            # Keep only packet lines: vagrant ssh can add its own noise to stdout.
+            return [l for l in out.splitlines() if ".2152 " in l or ".2152:" in l]
+
+        n3 = len(capture("br-n3"))
+        if n3 == 0:
+            self.logger.info("No GTP-U on br-n3 during the window (no active UE traffic)")
+            return None
+
+        leaks = {b: pkts for b in n6_bridges if (pkts := capture(b))}
+        if leaks:
+            for bridge, pkts in leaks.items():
+                self.logger.error(f"{len(pkts)} GTP-U pkts on {bridge} (br-n3: {n3}), e.g. {pkts[0]}")
+            return False
+
+        self.logger.success(f"GTP-U only on N3 ({n3} pkts on br-n3, none on {', '.join(n6_bridges)})")
+        return True
 
 
 def main():

@@ -53,12 +53,12 @@ class IamTestSuite:
         self.kubectl = K8sClient(kubeconfig)
         self.verbose = verbose
 
-        host = self.config.get("iam.keycloak_host") or self.config.get("cluster.worker_host")
-        port = self.config.get("iam.keycloak_nodeport", 31910)
+        host = self.config.plan("node_ips.worker")
+        port = self.config.plan("keycloak_nodeport")
         prefix = self.config.get("iam.keycloak_path_prefix", "")
         self.base_url = f"http://{host}:{port}{prefix}"
         self.realm = self.config.get("iam.realm", "5g-testbed")
-        self.namespace = self.config.get("iam.namespace", "iam")
+        self.namespace = self.config.plan("iam_namespace")
         self.admin_user = self.config.get("iam.admin_user", "admin")
         self.expected_clients = self.config.get("iam.expected_clients", [])
         self.expected_roles = self.config.get("iam.expected_realm_roles", [])
