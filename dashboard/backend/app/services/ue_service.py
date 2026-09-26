@@ -13,11 +13,12 @@ from typing import Any
 
 from app.config import settings
 from app.services.k8s_service import K8sService
+from app.services.network_plan import plan_value
 from app.services.prometheus_service import PrometheusService
 
 log = logging.getLogger(__name__)
 
-NS = "5g"
+NS = plan_value("namespace_5g")
 
 
 def _parse_imsi(imsi: str) -> dict[str, Any]:
@@ -919,8 +920,9 @@ class UEService:
         cmd = ["ping", "-c", str(count), "-I", "uesimtun0", "-W", "2", target]
         return self._exec_in_pod(pod, cmd)
 
-    def run_iperf(self, pod: str, server: str = "10.45.0.1", duration: int = 5) -> dict[str, Any]:
-        """Run iperf3 client from a UERANSIM UE pod."""
+    def run_iperf(self, pod: str, server: str | None = None, duration: int = 5) -> dict[str, Any]:
+        """Run iperf3 client from a UERANSIM UE pod (default server: the UPF on the internet DNN)."""
+        server = server or plan_value("ue_internet_gateway")
         cmd = ["iperf3", "-c", server, "-t", str(duration), "-J"]
         result = self._exec_in_pod(pod, cmd)
         if result.get("exit_code") == 0:

@@ -1,5 +1,8 @@
+import ipaddress
 import json
 import logging
+import socket
+import struct
 import subprocess
 import time
 from pathlib import Path
@@ -10,13 +13,14 @@ import yaml
 
 from app.config import settings
 from app.services.k8s_service import K8sService
+from app.services.network_plan import plan_value
 
 log = logging.getLogger(__name__)
 
 NAD_NAME = "n2-physical"
-NAD_NAMESPACE = "5g"
+NAD_NAMESPACE = plan_value("namespace_5g")
 AMF_DEPLOYMENT = "amf"
-AMF_NAMESPACE = "5g"
+AMF_NAMESPACE = plan_value("namespace_5g")
 NETWORK_ANNOTATION = "k8s.v1.cni.cncf.io/networks"
 OVS_DS_LABEL = "app=ds-net-setup-worker"
 OVS_DS_NAME = "ds-net-setup-worker"
@@ -26,6 +30,7 @@ ANSIBLE_DIR = "/home/vagrant/ansible-ro"
 ANSIBLE_CFG = f"{ANSIBLE_DIR}/ansible.cfg"
 ANSIBLE_PLAYBOOK_BIN = "/home/vagrant/.local/bin/ansible-playbook"
 GROUP_VARS = Path(ANSIBLE_DIR) / "group_vars" / "all.yml"
+TESTBED_ENV = Path("/vagrant/.testbed.env")
 # Persisted by Vagrantfile trigger when worker reloads with PHYSICAL_RAN_BRIDGE (synced to ansible /vagrant)
 HOST_NIC_APPLIED_PATH = Path("/vagrant/.physical_ran_bridge_applied")
 PHASE4_PLAYBOOK = f"{ANSIBLE_DIR}/phases/04-overlay-network/playbook.yml"
@@ -58,6 +63,14 @@ def _read_ran_bridge_mode_from_ovs_ds(k8s: K8sService) -> str | None:
     return None
 
 
+def _read_testbed_env() -> dict[str, str]:
+    try:
+        lines = TESTBED_ENV.read_text().splitlines()
+    except FileNotFoundError:
+        return {}
+    return dict(ln.split("=", 1) for ln in lines if "=" in ln and not ln.startswith("#"))
+
+
 def _read_ansible_config() -> dict[str, Any]:
     """Read physical RAN config from ansible group_vars/all.yml."""
     try:
@@ -65,7 +78,9 @@ def _read_ansible_config() -> dict[str, Any]:
             data = yaml.safe_load(f) or {}
     except FileNotFoundError:
         data = {}
-    physical_ran_enabled = bool(data.get("physical_ran_enabled", False))
+    # all.yml derives physical_ran_enabled from PHYSICAL_RAN_ENABLED in
+    # .testbed.env; read the flag at its source (the file _persist_physical_ran_state writes).
+    physical_ran_enabled = _read_testbed_env().get("PHYSICAL_RAN_ENABLED", "false").lower() == "true"
     ran_bridge_mode_raw = data.get("ran_bridge_mode", "n2_n3")
     # Resolve Jinja template if present (e.g. "{{ 'n2_n3' if ... else 'disabled' }}")
     if isinstance(ran_bridge_mode_raw, str) and "{{" in ran_bridge_mode_raw:
@@ -75,8 +90,11 @@ def _read_ansible_config() -> dict[str, Any]:
     return {
         "physical_ran_enabled": physical_ran_enabled,
         "physical_ran_interface": data.get("physical_ran_interface") or "",
-        "physical_ran_subnet": data.get("physical_ran_subnet", "192.168.6.0/24"),
-        "amf_physical_ran_ip": data.get("amf_physical_ran_ip", "192.168.6.150"),
+        "physical_ran_subnet": data["physical_ran_subnet"],
+        "physical_ran_gateway": data["physical_ran_gateway"],
+        "amf_physical_ran_ip": data["amf_physical_ran_ip"],
+        # The gNB needs a route to the UPF's N3 address through the worker.
+        "n3_subnet": data["n3_subnet"],
         "ran_bridge_mode": ran_bridge_mode,
     }
 
@@ -156,20 +174,50 @@ class RanService:
         except Exception:
             return None
 
+    def _ran_iface(self, cfg: dict[str, Any] | None = None) -> str:
+        """Name of the RAN NIC inside the worker VM (configured, else detected)."""
+        cfg = cfg or _read_ansible_config()
+        return cfg["physical_ran_interface"] or self._detect_ran_interface(cfg["physical_ran_subnet"]) or ""
+
+    def bring_link_up(self, retries: int = 20, delay: float = 3) -> dict[str, Any]:
+        """Re-run the OVS setup that owns the RAN NIC (phase 04 script in the
+        worker's network DaemonSet) and wait for the link. A missing NIC is a VM
+        matter (vagrant reload), not something the setup can fix."""
+        iface = self._ran_iface()
+        state = self._nic_state(iface)
+        if state == "missing":
+            return {"ok": False, "nic_state": state, "interface": iface or None}
+        self._restart_ovs_ds_pod()
+        for _ in range(retries):
+            time.sleep(delay)
+            state = self._nic_state(iface)
+            if state == "up":
+                break
+        return {"ok": state == "up", "nic_state": state, "interface": iface}
+
+    def _nic_state(self, iface: str) -> str:
+        """The worker's RAN NIC: "missing" (not in the VM), "down" (present, link
+        not brought up), "no_carrier" (up, nothing on the wire) or "up"."""
+        if not iface:
+            return "missing"
+        try:
+            links = json.loads(self._ssh(f"ip -j link show {iface} 2>/dev/null || echo '[]'"))
+        except Exception:
+            return "missing"
+        if not links:
+            return "missing"
+        flags = links[0].get("flags", [])
+        if "UP" not in flags:
+            return "down"
+        if "NO-CARRIER" in flags or links[0].get("operstate") != "UP":
+            return "no_carrier"
+        return "up"
+
     def _interface_detected(self, iface: str, subnet: str = "") -> bool:
         """Check if the bridged interface exists and is UP on the worker."""
         if not iface and subnet:
             iface = self._detect_ran_interface(subnet) or ""
-        if not iface:
-            return False
-        try:
-            out = self._ssh(f"ip -j link show {iface} 2>/dev/null || echo '[]'")
-            links = json.loads(out)
-            if not links:
-                return False
-            return links[0].get("operstate", "DOWN") == "UP"
-        except Exception:
-            return False
+        return self._nic_state(iface) == "up"
 
     def _br_ran_exists(self) -> bool:
         out = self._ssh("sudo ovs-vsctl br-exists br-ran 2>/dev/null; echo $?").strip()
@@ -205,8 +253,9 @@ class RanService:
         if ds_bridge_mode is not None:
             cfg = {**cfg, "ran_bridge_mode": ds_bridge_mode}
 
-        iface = cfg["physical_ran_interface"] or self._detect_ran_interface(cfg["physical_ran_subnet"])
-        bridge_detected = self._interface_detected(iface or "", cfg["physical_ran_subnet"])
+        iface = self._ran_iface(cfg)
+        nic_state = self._nic_state(iface or "")
+        bridge_detected = nic_state == "up"
         br_exists = self._br_ran_exists()
         br_ports = self._br_ran_ports() if br_exists else []
         nad_exists = self._nad_exists()
@@ -245,13 +294,14 @@ class RanService:
         except Exception:
             pass
 
-        upf_has_return_route = self._upf_has_physical_ran_subnet()
+        upf_has_return_route = self._upf_return_route_active(cfg["physical_ran_subnet"])
 
         host_nic_applied = _read_host_nic_applied()
 
         return {
             "config": cfg,
             "bridge_detected": bridge_detected,
+            "nic_state": nic_state,
             "enabled": enabled,
             "bridge_exists": br_exists,
             "bridge_ports": br_ports,
@@ -327,48 +377,35 @@ class RanService:
         nets.append({"name": NAD_NAME, "interface": "n2phy", "ips": [f"{ip}/24"]})
         return nets
 
-    def _upf_has_physical_ran_subnet(self) -> bool:
-        """Check if UPF-Cloud has PHYSICAL_RAN_SUBNET env (return route to gNB)."""
+    def _upf_return_route_active(self, subnet: str) -> bool:
+        """True if the running UPF-Cloud routes `subnet` over N3.
+
+        Reads the kernel table, not the Deployment env: the env only states
+        intent, and a route that never got installed leaves GTP-U downlink on
+        the default route over N6. The UPF image has no `ip`, hence /proc/net/route.
+        """
         try:
-            dep = self.k8s.apps.read_namespaced_deployment(
-                name="upf-cloud", namespace=AMF_NAMESPACE,
+            pods = self.k8s.core.list_namespaced_pod(
+                namespace=AMF_NAMESPACE, label_selector="app=upf-cloud",
             )
-            env = dep.spec.template.spec.containers[0].env or []
-            return any(e.name == "PHYSICAL_RAN_SUBNET" and (e.value or "").strip() for e in env)
+            running = [p for p in pods.items if p.status.phase == "Running"]
+            if not running:
+                return False
+            out = self.k8s.exec_in_pod(
+                AMF_NAMESPACE, running[0].metadata.name, ["cat", "/proc/net/route"], container="upf-cloud",
+            ) or ""
         except Exception:
             return False
-
-    def _patch_upf_physical_ran_subnet(self, subnet: str) -> None:
-        """Add PHYSICAL_RAN_SUBNET env to UPF-Cloud so init adds return route to gNB."""
-        dep = self.k8s.apps.read_namespaced_deployment(
-            name="upf-cloud", namespace=AMF_NAMESPACE,
-        )
-        env = list(dep.spec.template.spec.containers[0].env or [])
-        existing = next((e for e in env if e.name == "PHYSICAL_RAN_SUBNET"), None)
-        if existing:
-            existing.value = subnet
-        else:
-            from kubernetes.client import V1EnvVar
-            env.append(V1EnvVar(name="PHYSICAL_RAN_SUBNET", value=subnet))
-        dep.spec.template.spec.containers[0].env = env
-        self.k8s.apps.patch_namespaced_deployment(
-            name="upf-cloud", namespace=AMF_NAMESPACE, body=dep,
-        )
-        self.k8s.restart_deployment(AMF_NAMESPACE, "upf-cloud")
-        log.info("Patched UPF with PHYSICAL_RAN_SUBNET=%s and restarted", subnet)
-
-    def _remove_upf_physical_ran_subnet(self) -> None:
-        """Remove PHYSICAL_RAN_SUBNET from UPF-Cloud."""
-        dep = self.k8s.apps.read_namespaced_deployment(
-            name="upf-cloud", namespace=AMF_NAMESPACE,
-        )
-        env = [e for e in (dep.spec.template.spec.containers[0].env or []) if e.name != "PHYSICAL_RAN_SUBNET"]
-        dep.spec.template.spec.containers[0].env = env
-        self.k8s.apps.patch_namespaced_deployment(
-            name="upf-cloud", namespace=AMF_NAMESPACE, body=dep,
-        )
-        self.k8s.restart_deployment(AMF_NAMESPACE, "upf-cloud")
-        log.info("Removed PHYSICAL_RAN_SUBNET from UPF")
+        want = ipaddress.ip_network(subnet)
+        for line in out.splitlines()[1:]:
+            f = line.split()
+            if len(f) < 8:
+                continue
+            dst = socket.inet_ntoa(struct.pack("<I", int(f[1], 16)))
+            mask = socket.inet_ntoa(struct.pack("<I", int(f[7], 16)))
+            if f[0] == "n3" and ipaddress.ip_network(f"{dst}/{mask}") == want:
+                return True
+        return False
 
     def _amf_veth_on_br_ran(self, iface: str) -> bool:
         """True if br-ran carries the AMF's ovs-cni veth (a port that is not the
@@ -392,7 +429,7 @@ class RanService:
         the OVS DaemonSet to RAN_BRIDGE_MODE=disabled (which tears down br-ran).
         Best-effort: a missing or read-only file must never fail enable/disable."""
         try:
-            path = Path("/vagrant/.testbed.env")
+            path = TESTBED_ENV
             lines = path.read_text().splitlines() if path.exists() else []
             val = "true" if enabled else "false"
             out, seen = [], False
@@ -421,8 +458,10 @@ class RanService:
 
         # Pre-flight: detect NIC on the worker
         prog("nic_check", "in_progress", "Checking worker VM NIC…")
-        iface = cfg["physical_ran_interface"] or self._detect_ran_interface(cfg["physical_ran_subnet"])
-        nic_present = self._interface_detected(iface or "", cfg["physical_ran_subnet"]) if iface else False
+        iface = self._ran_iface(cfg)
+        # Only a missing NIC blocks: the OVS setup this runs brings a down link up,
+        # and a missing carrier is on the cable/gNB side, not in the config.
+        nic_present = self._nic_state(iface or "") != "missing"
         if not nic_present:
             prog("nic_check", "error", "Worker VM NIC not found")
             steps.append({
@@ -445,7 +484,7 @@ class RanService:
         br_exists = self._br_ran_exists()
         nad_exists = self._nad_exists()
         amf_has_phy = any(n.get("name") == NAD_NAME for n in self._get_amf_networks())
-        upf_has_route = self._upf_has_physical_ran_subnet()
+        upf_has_route = self._upf_return_route_active(cfg["physical_ran_subnet"])
         bridge_just_created = False
 
         extra = {
@@ -581,12 +620,24 @@ class RanService:
             prog("amf_reattach", "ok" if attached else "warning",
                  "AMF re-attached to br-ran" if attached else "AMF restart issued; re-attach not yet confirmed")
 
-        # 4. UPF return route: only if missing
-        if not upf_has_route:
-            prog("upf_return_route", "in_progress", "Patching UPF and restarting…")
-            self._patch_upf_physical_ran_subnet(cfg["physical_ran_subnet"])
-            steps.append({"step": "upf_return_route", "status": "ok"})
-            prog("upf_return_route", "ok", "Done")
+        # 4. UPF return route: part of the UPF's N3 NAD (n3-upf-static), written by
+        # the phase 04 NAD play with physical_ran_enabled; a changed NAD rolls the
+        # UPF. Only if missing (step 2 may already have rewritten it).
+        if not upf_has_route and not self._upf_return_route_active(cfg["physical_ran_subnet"]):
+            prog("upf_return_route", "in_progress", "Adding the RAN route to the UPF N3 attachment via Ansible…")
+            self._run_playbook(PHASE4_PLAYBOOK, tags=["nad"], extra_vars=extra, timeout=420)
+            # Confirm on the running pod: success means the route is installed,
+            # not that the play finished.
+            active = False
+            for i in range(20):
+                time.sleep(3)
+                if self._upf_return_route_active(cfg["physical_ran_subnet"]):
+                    active = True
+                    break
+                prog("upf_return_route", "in_progress", f"Waiting for the UPF return route ({i + 1}/20)…")
+            steps.append({"step": "upf_return_route", "status": "ok" if active else "warning"})
+            prog("upf_return_route", "ok" if active else "warning",
+                 "Return route active on N3" if active else "UPF N3 attachment updated; return route not yet confirmed")
         else:
             prog("upf_return_route", "ok", "Already existed")
             steps.append({"step": "upf_return_route", "status": "ok (already existed)"})
@@ -615,24 +666,14 @@ class RanService:
             "ran_bridge_mode": "disabled",
         }
 
-        # 2. Clean up NAD
+        # 2. Clean up NAD. The same play rewrites the UPF N3 NAD without the RAN
+        # route, which rolls the UPF (NAD hash), so the route goes with it.
         prog("nad_cleanup", "in_progress", "Removing NAD via Ansible…")
         self._run_playbook(PHASE4_PLAYBOOK, tags=["nad"], extra_vars=extra)
         steps.append({"step": "nad_cleanup", "status": "ok"})
         prog("nad_cleanup", "ok", "Done")
 
-        # 3. Remove PHYSICAL_RAN_SUBNET from UPF
-        prog("upf_return_route_removed", "in_progress", "Removing UPF return route…")
-        try:
-            self._remove_upf_physical_ran_subnet()
-            steps.append({"step": "upf_return_route_removed", "status": "ok"})
-            prog("upf_return_route_removed", "ok", "Done")
-        except Exception as exc:
-            log.warning("UPF patch failed: %s", exc)
-            steps.append({"step": "upf_return_route_removed", "status": "skipped"})
-            prog("upf_return_route_removed", "skipped", "Skipped")
-
-        # 4. Remove OVS bridge via SSH
+        # 3. Remove OVS bridge via SSH
         prog("ovs_bridge_removed", "in_progress", "Removing br-ran via SSH…")
         try:
             self._ssh(
@@ -648,7 +689,7 @@ class RanService:
             steps.append({"step": "ovs_bridge_removed", "status": "skipped"})
             prog("ovs_bridge_removed", "skipped", "Skipped")
 
-        # 5. Reset DaemonSet env to disabled (prevents br-ran re-creation on pod restart)
+        # 4. Reset DaemonSet env to disabled (prevents br-ran re-creation on pod restart)
         prog("ovs_daemonset_reset", "in_progress", "Resetting OVS DaemonSet…")
         self._run_playbook(PHASE4_PLAYBOOK, tags=["overlay"], extra_vars=extra)
         steps.append({"step": "ovs_daemonset_reset", "status": "ok"})

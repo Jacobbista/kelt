@@ -6,20 +6,31 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.config import settings
 from app.services.k8s_service import K8sService, get_k8s_service
+from app.services.network_plan import nad_plane, plan_value
 from app.services.network_health_service import NetworkHealthService
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/network", tags=["network"])
 
-INTERFACE_LABELS = {
-    "n1-net": "N1",
-    "n2-net": "N2",
-    "n3-net": "N3",
-    "n4-net": "N4",
-    "n6c-net": "N6-Cloud",
-    "n6e-net": "N6-Edge",
-    "n2-physical": "N2-Physical",
+PLANE_LABELS = {
+    "n1": "N1",
+    "n2": "N2",
+    "n3": "N3",
+    "n4": "N4",
+    "n6c": "N6-Cloud",
+    "n6e": "N6-Edge",
+    "n6m": "N6-MEC",
 }
+
+
+def _interface_label(nad_name: str) -> str:
+    if nad_name == "n2-physical":
+        return "N2-Physical"
+    return PLANE_LABELS.get(nad_plane(nad_name) or "", nad_name)
+
+
+# The Health page polls every 30 s: pollers within this window share one run.
+HEALTH_MAX_AGE = 25
 
 
 def _get_health_svc(
@@ -32,12 +43,9 @@ def _get_health_svc(
 def network_health(
     svc: NetworkHealthService = Depends(_get_health_svc),
 ) -> list[dict[str, Any]]:
-    """Return cached health check results (runs on first call)."""
-    cached = svc.get_cached()
-    if cached:
-        return cached
+    """The last check run when younger than HEALTH_MAX_AGE, otherwise a new run."""
     try:
-        return svc.run_health_checks()
+        return svc.latest(HEALTH_MAX_AGE)
     except Exception as exc:
         log.exception("Network health check failed")
         raise HTTPException(500, detail=str(exc)) from exc
@@ -69,7 +77,7 @@ def n6_nat_diagnostics(
 
 @router.get("/nads")
 def list_nads(
-    namespace: str = settings.default_namespace,
+    namespace: str = plan_value("namespace_5g"),
     k8s: K8sService = Depends(get_k8s_service),
 ) -> list[dict]:
     nads = k8s.list_nads(namespace)
@@ -79,7 +87,7 @@ def list_nads(
 
 @router.get("/interfaces")
 def list_interfaces(
-    namespace: str = settings.default_namespace,
+    namespace: str = plan_value("namespace_5g"),
     k8s: K8sService = Depends(get_k8s_service),
 ) -> list[dict]:
     """Per-NF interface mapping from pod network-status annotations."""
@@ -105,7 +113,7 @@ def list_interfaces(
             net_name = net.get("name", "").split("/")[-1]
             ifaces.append({
                 "name": net_name,
-                "label": INTERFACE_LABELS.get(net_name, net_name),
+                "label": _interface_label(net_name),
                 "interface": net.get("interface", ""),
                 "ips": net.get("ips", []),
                 "mac": net.get("mac", ""),

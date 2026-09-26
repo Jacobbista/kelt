@@ -9,6 +9,7 @@ from app.models import ConfigMapPayload, LogLevelPayload, PodSummary, RestartReq
 from app.services.audit import write_audit
 from app.services.amf_cni_service import check_alert, scale_controller
 from app.services.k8s_service import K8sService, get_k8s_service
+from app.services.network_plan import plan_value
 
 router = APIRouter(prefix="/api/v1", tags=["pods"])
 
@@ -21,7 +22,7 @@ _admin_only = [Depends(require_admin)]
 
 @router.get("/pods", response_model=list[PodSummary])
 def list_pods(
-    namespace: str = settings.default_namespace,
+    namespace: str = plan_value("namespace_5g"),
     k8s: K8sService = Depends(get_k8s_service),
 ) -> list[PodSummary]:
     return k8s.list_pods(namespace)
@@ -70,7 +71,7 @@ def scale_deployment(
     payload: dict[str, Any],
     k8s: K8sService = Depends(get_k8s_service),
 ) -> dict[str, Any]:
-    namespace = payload.get("namespace", settings.default_namespace)
+    namespace = payload.get("namespace", plan_value("namespace_5g"))
     replicas = int(payload.get("replicas", 1))
     if replicas < 0 or replicas > 10:
         raise HTTPException(status_code=400, detail="Replicas must be 0-10")
@@ -85,7 +86,7 @@ def scale_deployment(
 @router.get("/pods/{pod}/describe")
 def describe_pod(
     pod: str,
-    namespace: str = settings.default_namespace,
+    namespace: str = plan_value("namespace_5g"),
     k8s: K8sService = Depends(get_k8s_service),
 ) -> dict[str, Any]:
     try:
@@ -215,7 +216,7 @@ def _replace_log_level(yaml_str: str, new_level: str) -> str:
 @router.get("/nf/{deployment}/log-level")
 def get_nf_log_level(
     deployment: str,
-    namespace: str = settings.default_namespace,
+    namespace: str = plan_value("namespace_5g"),
     k8s: K8sService = Depends(get_k8s_service),
 ) -> dict[str, str]:
     """Get current log level for an Open5GS NF."""
@@ -236,7 +237,7 @@ def get_nf_log_level(
 def set_nf_log_level(
     deployment: str,
     payload: LogLevelPayload,
-    namespace: str = settings.default_namespace,
+    namespace: str = plan_value("namespace_5g"),
     k8s: K8sService = Depends(get_k8s_service),
 ) -> dict[str, str]:
     """Set log level for an Open5GS NF. Updates ConfigMap and restarts deployment.
@@ -273,7 +274,7 @@ def set_nf_log_level(
 @router.get("/configmaps/{name}")
 def get_configmap(
     name: str,
-    namespace: str = settings.default_namespace,
+    namespace: str = plan_value("namespace_5g"),
     k8s: K8sService = Depends(get_k8s_service),
 ) -> dict:
     return k8s.get_configmap(namespace=namespace, name=name)
@@ -283,7 +284,7 @@ def get_configmap(
 def update_configmap(
     name: str,
     payload: ConfigMapPayload,
-    namespace: str = settings.default_namespace,
+    namespace: str = plan_value("namespace_5g"),
     k8s: K8sService = Depends(get_k8s_service),
 ) -> dict[str, str]:
     if not settings.allow_configmap_write:

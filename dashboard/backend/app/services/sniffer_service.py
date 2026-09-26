@@ -24,11 +24,12 @@ from typing import Any, AsyncIterator
 from kubernetes.stream import stream as k8s_stream
 
 from app.config import settings
-from app.services.k8s_service import K8sService
+from app.services.k8s_service import K8sService, thread_core
+from app.services.network_plan import plan_value
 
 log = logging.getLogger(__name__)
 
-NS = "5g"
+NS = plan_value("namespace_5g")
 
 CAPTURE_POINTS = {
     "br-n3": {
@@ -320,14 +321,14 @@ def _run_short_capture_ssh(interface: str, bpf_filter: str, duration: int = 5) -
         return {"packets": 0, "sample_lines": [], "status": "error", "error": str(exc)}
 
 
-def _run_short_capture_pod(k8s: K8sService, pod_name: str, interface: str, bpf_filter: str, duration: int = 5) -> dict[str, Any]:
+def _run_short_capture_pod(pod_name: str, interface: str, bpf_filter: str, duration: int = 5) -> dict[str, Any]:
     cmd = ["timeout", str(duration), "tcpdump", "-i", interface, "-l", "-n", "-c", "100"]
     if bpf_filter:
         cmd.extend(bpf_filter.split())
 
     try:
         output = k8s_stream(
-            k8s.core.connect_get_namespaced_pod_exec,
+            thread_core().connect_get_namespaced_pod_exec,
             pod_name,
             NS,
             command=cmd,
@@ -386,7 +387,6 @@ def run_path_trace(k8s: K8sService, duration: int = 5) -> list[dict[str, Any]]:
             elif point["method"] == "pod" and upf_pod:
                 fut = pool.submit(
                     _run_short_capture_pod,
-                    k8s,
                     upf_pod,
                     point["interface"],
                     point["default_filter"],

@@ -12,7 +12,6 @@ OPEN5GS_SUBSCRIBER_DEFAULTS: dict[str, Any] = {
     "__v": 0,
 }
 
-DEFAULT_OP = "11111111111111111111111111111111"
 DEFAULT_AMF = "8000"
 
 
@@ -32,6 +31,10 @@ def _is_valid_hex(s: str, length: int = 32) -> bool:
 
 class SubscriberSchemaError(ValueError):
     """Raised when a subscriber payload contains invalid security key values."""
+
+
+class SubscriberExistsError(ValueError):
+    """Raised when creating a subscriber whose IMSI already exists."""
 
 
 def normalize_subscriber(payload: dict[str, Any]) -> dict[str, Any]:
@@ -58,14 +61,15 @@ def normalize_subscriber(payload: dict[str, Any]) -> dict[str, Any]:
     if not security.get("amf"):
         security["amf"] = DEFAULT_AMF
 
-    # Validate K (always required — 32 hex chars)
-    k = security.get("k")
-    if k is not None:
-        k = str(k).strip()
-        if k and not _is_valid_hex(k, 32):
-            raise SubscriberSchemaError(
-                f"Invalid K value '{k[:8]}…': must be a 32-character hex string (128-bit key)"
-            )
+    # K is required: a subscriber without it can never authenticate.
+    k = str(security.get("k") or "").strip()
+    if not k:
+        raise SubscriberSchemaError("K is required: a 32-character hex string (128-bit key)")
+    if not _is_valid_hex(k, 32):
+        raise SubscriberSchemaError(
+            f"Invalid K value '{k[:8]}…': must be a 32-character hex string (128-bit key)"
+        )
+    security["k"] = k
 
     # Validate OP / OPc — reject malformed values instead of silently dropping
     op = security.get("op")
@@ -94,9 +98,10 @@ def normalize_subscriber(payload: dict[str, Any]) -> dict[str, Any]:
     elif op is not None:
         opc = None
 
-    # Fall back to default OP only when neither OP nor OPc was given
+    # One of them is required. No default: a silent well-known OP would replace a
+    # SIM's real key whenever a request omitted it.
     if opc is None and not op:
-        op = DEFAULT_OP
+        raise SubscriberSchemaError("OP or OPc is required: a 32-character hex string")
 
     security["op"] = op
     security["opc"] = opc

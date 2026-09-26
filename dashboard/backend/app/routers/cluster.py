@@ -9,6 +9,7 @@ from app.models import (
     PodSummary,
 )
 from app.services.k8s_service import K8sService, get_k8s_service
+from app.services.network_plan import plan_value
 
 router = APIRouter(prefix="/api/v1", tags=["cluster"])
 
@@ -70,7 +71,7 @@ def get_cluster_summary(
     k8s: K8sService = Depends(get_k8s_service),
 ) -> ClusterSummary:
     nodes = k8s.list_nodes()
-    pods = k8s.list_pods(settings.default_namespace)
+    pods = k8s.list_pods(plan_value("namespace_5g"))
     active = _deduplicate_pods(pods)
     running = sum(1 for p in active if p.phase == "Running")
     pending = sum(1 for p in active if p.phase in ("Pending", "ContainerCreating"))
@@ -90,7 +91,7 @@ def get_cluster_summary(
 def get_nf_status(
     k8s: K8sService = Depends(get_k8s_service),
 ) -> NfStatusResponse:
-    pods = k8s.list_pods(settings.default_namespace)
+    pods = k8s.list_pods(plan_value("namespace_5g"))
     active = _deduplicate_pods(pods)
     result = NfStatusResponse()
     for pod in active:
@@ -100,6 +101,7 @@ def get_nf_status(
             nf_type=nf_type,
             category=category,
             name=pod.name,
+            namespace=pod.namespace,
             phase=pod.phase,
             restarts=pod.restarts,
             node=pod.node,

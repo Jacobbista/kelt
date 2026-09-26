@@ -25,6 +25,7 @@ from kubernetes.client.exceptions import ApiException
 from app.config import settings
 from app.models import DeployEnvVar, DeployImageRequest
 from app.services.k8s_service import K8sService
+from app.services.network_plan import plan_value
 from app.services.nf_service import ANSIBLE_CFG, ANSIBLE_DIR, ANSIBLE_PLAYBOOK_BIN
 
 # Operator-persisted config sourced into the ansible env for an update-all run, so
@@ -70,13 +71,16 @@ class GatewayError(Exception):
         super().__init__(detail)
 
 # Namespaces the console manages. Used as a strict allow-list for any create.
-NORTHBOUND_NAMESPACES = ["camara", "positioning", "mec"]
-POSITIONING_NS = "positioning"
+NORTHBOUND_NAMESPACES = [plan_value("camara_namespace"), plan_value("positioning_namespace"), plan_value("apps_namespace")]
+POSITIONING_NS = plan_value("positioning_namespace")
 ENGINE_SERVICE = "positioning-engine"
-ENGINE_PORT = 8080
-CAMARA_NS = "camara"
+ENGINE_PORT = plan_value("positioning_engine_service_port")
+CAMARA_NS = plan_value("camara_namespace")
 GATEWAY_SERVICE = "camara-gateway"
-GATEWAY_PORT = 8080
+GATEWAY_PORT = plan_value("camara_gateway_service_port")
+# Port the northbound images listen on; the default for a catalog adapter whose
+# own Deployment or Service does not say otherwise.
+ADAPTER_PORT = 8080
 
 # Per-service contract metadata (kind, configurable) cached by (name, image) so
 # the 5s inventory poll does not re-fetch /contract every time. Invalidated when
@@ -422,8 +426,12 @@ class NorthboundService:
             # each surface is reachable and link to it. ClusterIP-only services
             # (engine, mock) have no nodePort and are internal.
             node_ports: dict[str, int] = {}
+            # In-cluster port per service, for the URLs other services are wired to.
+            svc_ports: dict[str, int] = {}
             try:
                 for svc in self.k8s.core.list_namespaced_service(namespace=ns).items:
+                    if svc.spec.ports:
+                        svc_ports[svc.metadata.name] = svc.spec.ports[0].port
                     if svc.spec.type == "NodePort":
                         np = next((p.node_port for p in (svc.spec.ports or []) if p.node_port), None)
                         if np:
@@ -529,6 +537,7 @@ class NorthboundService:
                     "subtitle": subtitle,
                     "description": description,
                     "node_port": node_ports.get(name),
+                    "service_port": svc_ports.get(name),
                     "kind": meta["kind"],
                     "configurable": meta["configurable"],
                     "has_mapping": meta["has_mapping"],
@@ -673,8 +682,8 @@ class NorthboundService:
         re-reads the merged config via the existing envFrom and announces itself."""
         _validate_name(name)
         _validate_image(image)
-        # Port from the live deployment so ADAPTER_BASE_URL is right (fallback 8080).
-        port = 8080
+        # Port from the live deployment so ADAPTER_BASE_URL is right.
+        port = ADAPTER_PORT
         try:
             dep = self.k8s.apps.read_namespaced_deployment(name=name, namespace=POSITIONING_NS)
             cps = (dep.spec.template.spec.containers[0].ports or [])
@@ -913,13 +922,13 @@ class NorthboundService:
         # Push adapters (edge scanner POSTs over 5G) are useless without an n6m
         # foothold, so attach one automatically at the reserved IP from config.
         # Cross-namespace NAD reference: the adapter lives here (positioning) but
-        # the n6m-net NAD lives in the mec namespace. Pull adapters are not in the
+        # the n6m static NAD (fixed address) lives in the mec namespace. Pull adapters are not in the
         # map and get no n6m interface. See docs/architecture/positioning-adapters.md.
         pod_meta: dict[str, Any] = {"labels": labels}
         n6m_cidr = settings.n6m_push_adapter_map().get(name)
         if n6m_cidr:
             net = {
-                "name": settings.n6m_nad_name,
+                "name": settings.n6m_static_nad_name,
                 "namespace": settings.n6m_nad_namespace,
                 "interface": "n6m",
                 "ips": [n6m_cidr],
@@ -1580,7 +1589,7 @@ class NorthboundService:
                         current[e.get("name")] = e.get("value")
             for b in fields:
                 cands = [
-                    {"name": s["name"], "url": f"http://{s['name']}.{s['namespace']}.svc.cluster.local:8080"}
+                    {"name": s["name"], "url": f"http://{s['name']}.{s['namespace']}.svc.cluster.local:{s.get('service_port') or ADAPTER_PORT}"}
                     for s in services if _image_basename(s.get("image")) == b["kind"]
                 ]
                 cur = current.get(b["field"])

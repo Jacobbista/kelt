@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.services.audit import write_audit
 from app.services.mongo_service import MongoService, get_mongo_service
-from app.services.subscriber_schema import SubscriberSchemaError
+from app.services.subscriber_schema import SubscriberExistsError, SubscriberSchemaError, normalize_subscriber
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/subscribers", tags=["subscribers"])
@@ -40,6 +40,8 @@ def create_subscriber(
         raise HTTPException(status_code=400, detail="imsi is required")
     try:
         result = mongo.create_subscriber(payload)
+    except SubscriberExistsError as exc:
+        raise HTTPException(status_code=409, detail=f"{exc}: edit it instead") from exc
     except SubscriberSchemaError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     write_audit("subscriber.create", {"imsi": payload["imsi"]})
@@ -78,20 +80,35 @@ def import_subscribers(
     payload: dict[str, Any],
     mongo: MongoService = Depends(get_mongo_service),
 ) -> dict[str, Any]:
+    """Add the file's subscribers that do not exist yet. Existing ones are left
+    unchanged and reported as skipped (same rule as the phase 05 import), and the
+    whole file is validated before anything is written."""
     subs = payload.get("subscribers", [])
     if not isinstance(subs, list):
         raise HTTPException(status_code=400, detail="Expected { subscribers: [...] }")
-    created = 0
+    errors = []
+    for i, sub in enumerate(subs):
+        if not isinstance(sub, dict) or not sub.get("imsi"):
+            errors.append(f"entry {i}: imsi is required")
+            continue
+        try:
+            normalize_subscriber(sub)
+        except SubscriberSchemaError as exc:
+            errors.append(f"{sub['imsi']}: {exc}")
+    if errors:
+        raise HTTPException(status_code=422, detail="Nothing imported. " + "; ".join(errors))
+    created, skipped = [], []
     for sub in subs:
-        if "imsi" in sub:
+        try:
             mongo.create_subscriber(sub)
-            created += 1
-    # create_subscriber already syncs the snapshot after each upsert, but we
-    # force one more at the end to guarantee the ConfigMap reflects the final
-    # state even if an earlier sync failed transiently.
+            created.append(str(sub["imsi"]))
+        except SubscriberExistsError:
+            skipped.append(str(sub["imsi"]))
+    # create_subscriber syncs the snapshot after each insert; one more at the end
+    # guarantees the Secret reflects the final state even if a sync failed.
     mongo.sync_snapshot()
-    write_audit("subscriber.import", {"count": created})
-    return {"status": "imported", "count": created}
+    write_audit("subscriber.import", {"created": len(created), "skipped": len(skipped)})
+    return {"status": "imported", "count": len(created), "created": created, "skipped": skipped}
 
 
 @router.post("/sync")
@@ -119,7 +136,8 @@ def sync_snapshot(
 def init_subscribers(
     mongo: MongoService = Depends(get_mongo_service),
 ) -> dict[str, Any]:
-    """Run the Ansible subscriber_import phase to seed subscribers from subscribers.json."""
+    """Run the Ansible subscriber_import phase: insert the subscribers of the local
+    subscribers file (all.yml subscribers_file) that MongoDB does not have yet."""
     cmd = [
         ANSIBLE_PLAYBOOK_BIN, PHASE5_PLAYBOOK,
         "--tags", "subscribers",

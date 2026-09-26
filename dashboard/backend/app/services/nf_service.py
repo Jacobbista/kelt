@@ -17,10 +17,11 @@ import urllib.request
 import urllib.error
 
 from app.services.k8s_service import K8sService
+from app.services.network_plan import plan_value
 
 log = logging.getLogger(__name__)
 
-NS = "5g"
+NS = plan_value("namespace_5g")
 VERSIONS_URL = "https://raw.githubusercontent.com/Jacobbista/5g-nf-platform/main/versions.json"
 # Cache upstream versions.json for 5 minutes to avoid hammering GitHub API
 _versions_cache: dict[str, Any] = {}

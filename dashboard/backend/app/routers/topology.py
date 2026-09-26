@@ -1,23 +1,25 @@
+import re
+
 from fastapi import APIRouter, Depends
 
 from app.config import settings
 from app.models import TopologyEdge, TopologyNode, TopologyResponse
 from app.services.k8s_service import K8sService, get_k8s_service
+from app.services.network_plan import nad_plane, plan_value
 from app.services.ovs_service import OvsService
 
 router = APIRouter(prefix="/api/v1", tags=["topology"])
 
-NAD_TO_BRIDGE = {
-    "n1-net": "br-n1",
-    "n2-net": "br-n2",
-    "n2-cell-1": "br-n2-cell-1",
-    "n3-net": "br-n3",
-    "n3-cell-1": "br-n3-cell-1",
-    "n4-net": "br-n4",
-    "n6c-net": "br-n6c",
-    "n6e-net": "br-n6e",
-    "n6m-net": "br-n6m",
-}
+
+def _nad_bridge(nad_name: str) -> str | None:
+    """OVS bridge behind a NAD: br-<plane> for the overlay pool/static pair,
+    br-<name> for the per-cell NADs (n2-cell-N -> br-n2-cell-N)."""
+    plane = nad_plane(nad_name)
+    if plane:
+        return f"br-{plane}"
+    if re.match(r"^n[23]-cell-\d+$", nad_name):
+        return f"br-{nad_name}"
+    return None
 
 
 def infer_nf_type(name: str, labels: dict[str, str]) -> str:
@@ -31,7 +33,7 @@ def infer_nf_type(name: str, labels: dict[str, str]) -> str:
 
 @router.get("/topology", response_model=TopologyResponse)
 def get_topology(
-    namespace: str = settings.default_namespace,
+    namespace: str = plan_value("namespace_5g"),
     k8s: K8sService = Depends(get_k8s_service),
 ) -> TopologyResponse:
     ovs = OvsService()
@@ -65,7 +67,7 @@ def get_topology(
 
         for iface in pod.get("networks", []):
             net_name = iface.get("name", "").split("/")[-1]
-            bridge = NAD_TO_BRIDGE.get(net_name)
+            bridge = _nad_bridge(net_name)
             if not bridge:
                 continue
             bridge_id = f"bridge:{bridge}"

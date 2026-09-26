@@ -6,16 +6,18 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from fastapi import Depends, FastAPI
+from fastapi import APIRouter, Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.auth import require_admin, require_viewer_or_admin
 from app.config import settings
+from app.route_guard import PUBLIC_ROUTES, unguarded_routes
 from app.routers.admin import router as admin_router
 from app.routers.cluster import router as cluster_router
 from app.routers.dev_frontend import router as dev_frontend_router
 from app.routers.experiments import router as experiments_router
 from app.routers.health import router as health_router
+from app.routers.isolation import router as isolation_router
 from app.routers.kubernetes import router as kubernetes_router
 from app.routers.logs_ws import router as logs_ws_router
 from app.routers.metrics import router as metrics_router
@@ -23,6 +25,7 @@ from app.routers.network import router as network_router
 from app.routers.pods import router as pods_router
 from app.routers.ran import router as ran_router
 from app.routers.sniffer import router as sniffer_router
+from app.routers.status import router as status_router
 from app.routers.subscribers import router as subscribers_router
 from app.routers.topology import router as topology_router
 from app.routers.traffic import router as traffic_router
@@ -47,11 +50,13 @@ log = logging.getLogger(__name__)
 
 # Serve the auto-generated OpenAPI + Swagger UI under /api so it rides the
 # existing single-origin /api reverse proxy (the frontend nginx proxies /api).
+# No public docs pages: the browser keeps its token in memory, so an HTML docs
+# page cannot authenticate. The schema is served below, behind the viewer role.
 app = FastAPI(
     title=settings.app_name,
-    docs_url="/api/docs",
-    redoc_url="/api/redoc",
-    openapi_url="/api/openapi.json",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 
 
@@ -95,8 +100,8 @@ app.add_middleware(CatchAllMiddleware)
 _viewer = [Depends(require_viewer_or_admin)]
 _admin = [Depends(require_admin)]
 
-# Unauthenticated: liveness probes (browser useBackendHealth, watchdog) and
-# the legacy admin lane gated by DASHBOARD_ADMIN_TOKEN.
+# Liveness and pre-login info (public, see route_guard.PUBLIC_ROUTES); the admin
+# router guards each of its endpoints with the admin role itself.
 app.include_router(health_router)
 app.include_router(admin_router)
 
@@ -107,11 +112,13 @@ app.include_router(dev_frontend_router, dependencies=_admin)
 
 # Viewer-or-admin: cluster/NF status, pod metadata, log streaming, metrics.
 app.include_router(cluster_router,     dependencies=_viewer)
+app.include_router(status_router,      dependencies=_viewer)
 app.include_router(kubernetes_router,  dependencies=_viewer)
 app.include_router(pods_router,        dependencies=_viewer)
 app.include_router(logs_ws_router,     dependencies=_viewer)
 app.include_router(topology_router,    dependencies=_viewer)
 app.include_router(network_router,     dependencies=_viewer)
+app.include_router(isolation_router,   dependencies=_viewer)
 app.include_router(metrics_router,     dependencies=_viewer)
 # Disk state is diagnostic (viewer); anything that reclaims space is admin.
 app.include_router(storage_read_router,  dependencies=_viewer)
@@ -151,10 +158,21 @@ app.include_router(selfupdate_write_router, dependencies=_admin)
 # audit-logged). Admin-only even though it is a GET.
 app.include_router(iam_router, dependencies=_admin)
 
+# The API description, for any logged-in user.
+openapi_router = APIRouter()
+openapi_router.get("/api/v1/openapi.json", include_in_schema=False)(lambda: app.openapi())
+app.include_router(openapi_router, dependencies=_viewer)
+
+# Default-deny: a route with no role that is not on the public list stops the
+# backend from starting, naming the route. See app/route_guard.py.
+_unguarded = unguarded_routes(app, {require_admin, require_viewer_or_admin}, PUBLIC_ROUTES)
+if _unguarded:
+    raise RuntimeError("Routes without a role and not in route_guard.PUBLIC_ROUTES: " + ", ".join(_unguarded))
+
 
 @app.on_event("startup")
 def _sync_subscriber_snapshot_on_startup() -> None:
-    """Align the subscribers-snapshot ConfigMap with current MongoDB state.
+    """Align the subscriber snapshot Secret with current MongoDB state.
 
     Runs best-effort: any failure (Mongo down, k8s API unreachable) is logged
     and the app continues. This catches the case where the playbook seeded

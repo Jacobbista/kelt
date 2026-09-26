@@ -30,7 +30,8 @@ from app.models import (
 )
 from app.services.audit import write_audit
 from app.services.k8s_service import K8sService, get_k8s_service
-from app.services.northbound_service import GatewayError, NorthboundService
+from app.services.network_plan import plan_value
+from app.services.northbound_service import NORTHBOUND_NAMESPACES, GatewayError, NorthboundService
 
 read_router = APIRouter(prefix="/api/v1/northbound", tags=["northbound"])
 write_router = APIRouter(prefix="/api/v1/northbound", tags=["northbound"])
@@ -99,6 +100,12 @@ def update_all(nb: NorthboundService = Depends(_get_nb)):
 @read_router.get("/services")
 def inventory(nb: NorthboundService = Depends(_get_nb)) -> dict[str, Any]:
     return nb.inventory()
+
+
+@read_router.get("/workloads/namespaces")
+def workload_namespaces() -> dict[str, Any]:
+    """Namespaces a custom workload may land in (the create allow-list)."""
+    return {"namespaces": NORTHBOUND_NAMESPACES, "default": plan_value("apps_namespace")}
 
 
 @read_router.get("/versions")

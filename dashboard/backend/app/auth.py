@@ -188,7 +188,7 @@ def get_principal(
         return _SYNTHETIC_ADMIN
     token: str | None = None
     if authorization and authorization.lower().startswith("bearer "):
-        token = authorization.split(None, 1)[1].strip()
+        token = authorization[len("bearer "):].strip()  # "Bearer " alone: no token
     elif access_token:
         token = access_token.strip()
     if not token:

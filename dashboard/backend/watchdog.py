@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tiny standalone HTTP server (port 31881) that can restart the backend.
+"""Tiny standalone HTTP server that can restart the backend.
 
 Runs as a separate systemd service so it stays alive even when the main
 dashboard-backend is hung or crashed. Endpoints:
@@ -7,24 +7,33 @@ dashboard-backend is hung or crashed. Endpoints:
   GET  /status   — systemctl status + journalctl for dashboard-backend
   POST /restart  — systemctl restart dashboard-backend
 
-Auth model: binds to 127.0.0.1 so only requests proxied through the local
-Vite frontend reach it (the Vite proxy in turn is reachable from LAN/tunnel).
-Both endpoints require header `X-Watchdog-Token: <WATCHDOG_TOKEN>`; the
-token is provisioned via systemd Environment from the same value as
-DASHBOARD_ADMIN_TOKEN. The frontend fetches the token from the
-authenticated admin router and caches it in memory so it can still
-restart the backend after a crash. See docs/security/iam.md.
+Address and port come from WATCHDOG_BIND / WATCHDOG_PORT (phase 09 sets them to
+the ansible VM's management address and all.yml dashboard_watchdog_port), so both
+the cluster frontend and the Vite dev frontend can proxy /watchdog to it.
+Both endpoints require header `X-Watchdog-Token: <DASHBOARD_ADMIN_TOKEN>`,
+compared in constant time; the unit reads the token from a root-owned 0600 file
+holding only it (/etc/dashboard-watchdog.env, EnvironmentFile=).
+The frontend fetches the token from the authenticated admin router and caches
+it in memory so it can still restart the backend after a crash. See docs/security/iam.md.
 """
 
+import hmac
 import http.server
 import json
 import os
 import subprocess
 
-PORT = 31881
-BIND = "127.0.0.1"
+PORT = int(os.environ.get("WATCHDOG_PORT", "31881"))
+BIND = os.environ.get("WATCHDOG_BIND", "127.0.0.1")
 BACKEND_SERVICE = "dashboard-backend"
-WATCHDOG_TOKEN = os.environ.get("WATCHDOG_TOKEN", "")
+WATCHDOG_TOKEN = os.environ.get("DASHBOARD_ADMIN_TOKEN", "")
+
+
+def token_matches(given: str | None, expected: str) -> bool:
+    """Constant-time comparison; an unset token refuses every request."""
+    if not expected or given is None:
+        return False
+    return hmac.compare_digest(given.encode(), expected.encode())
 
 
 class WatchdogHandler(http.server.BaseHTTPRequestHandler):
@@ -36,9 +45,7 @@ class WatchdogHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _authorized(self) -> bool:
-        if not WATCHDOG_TOKEN:
-            return False
-        return self.headers.get("X-Watchdog-Token") == WATCHDOG_TOKEN
+        return token_matches(self.headers.get("X-Watchdog-Token"), WATCHDOG_TOKEN)
 
     def do_GET(self):
         if self.path == "/status":

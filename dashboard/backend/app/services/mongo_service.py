@@ -5,7 +5,7 @@ from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
 
 from app.config import settings
-from app.services.subscriber_schema import normalize_subscriber
+from app.services.subscriber_schema import SubscriberExistsError, normalize_subscriber
 from app.services.subscriber_snapshot import SubscriberSnapshotService
 
 log = logging.getLogger(__name__)
@@ -52,12 +52,16 @@ class MongoService:
         return self.subscribers.find_one({"imsi": imsi}, {"_id": 0})
 
     def create_subscriber(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Insert a new subscriber. An existing IMSI is never overwritten: that is
+        an update, with its own call."""
         data = normalize_subscriber(data)
-        self.subscribers.update_one(
+        res = self.subscribers.update_one(
             {"imsi": data["imsi"]},
-            {"$set": data},
+            {"$setOnInsert": data},
             upsert=True,
         )
+        if res.upserted_id is None:
+            raise SubscriberExistsError(f"Subscriber {data['imsi']} already exists")
         result = self.get_subscriber(data["imsi"]) or data
         self._sync_snapshot()
         return result
@@ -68,6 +72,18 @@ class MongoService:
             return None
         existing.pop("_id", None)
         merged = {**existing, **{k: v for k, v in data.items() if k != "imsi"}}
+        # Merge the security block key by key: a request that sends only some of
+        # K/OP/OPc/AMF must not drop the others.
+        # Setting OP (or OPc) alone replaces the other one, since a subscriber
+        # has exactly one of the two.
+        if isinstance(data.get("security"), dict):
+            new_sec = data["security"]
+            sec = {**(existing.get("security") or {}), **new_sec}
+            if new_sec.get("op") and "opc" not in new_sec:
+                sec["opc"] = None
+            if new_sec.get("opc") and "op" not in new_sec:
+                sec["op"] = None
+            merged["security"] = sec
         merged["imsi"] = imsi
         normalized = normalize_subscriber(merged)
         self.subscribers.update_one(
@@ -86,11 +102,11 @@ class MongoService:
         return False
 
     def sync_snapshot(self) -> bool:
-        """Force-write the current subscriber list into the snapshot ConfigMap."""
+        """Force-write the current subscriber list into the snapshot Secret."""
         return self._sync_snapshot()
 
     def _sync_snapshot(self) -> bool:
-        """Mirror the full subscriber list into the snapshot ConfigMap.
+        """Mirror the full subscriber list into the snapshot Secret.
 
         Best-effort: returns False on failure but never raises, so a transient
         Kubernetes API issue cannot break subscriber CRUD.

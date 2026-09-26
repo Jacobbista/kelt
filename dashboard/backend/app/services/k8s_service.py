@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -14,6 +15,26 @@ from app.config import settings
 from app.models import NodeSummary, PodSummary
 
 log = logging.getLogger(__name__)
+
+_thread_local = threading.local()
+
+
+def thread_core() -> client.CoreV1Api:
+    """A CoreV1Api on a client of the calling thread's own.
+
+    kubernetes.stream swaps `request` on the ApiClient it runs on for as long as
+    the exec lasts: any other thread sharing that client sends its plain API
+    calls as websocket upgrades, which fail with "Handshake status 200 OK".
+    Code that runs pod execs from several threads takes its client here.
+    """
+    if not hasattr(_thread_local, "core"):
+        cfg = client.Configuration()
+        config.load_kube_config(
+            config_file=os.environ.get("KUBECONFIG", settings.kubeconfig_path),
+            client_configuration=cfg,
+        )
+        _thread_local.core = client.CoreV1Api(client.ApiClient(configuration=cfg))
+    return _thread_local.core
 
 
 def _parse_cpu_millicores(qty: str) -> float:

@@ -169,6 +169,16 @@ def enable_physical_mode_stream(ran: RanService = Depends(_get_ran)):
     )
 
 
+@router.post("/modes/physical/link-up")
+def physical_link_up(ran: RanService = Depends(_get_ran)) -> dict[str, Any]:
+    """Bring the worker's RAN link up by re-running the OVS setup that owns it."""
+    try:
+        return ran.bring_link_up()
+    except Exception as exc:
+        log.exception("Failed to bring the RAN link up")
+        raise HTTPException(500, detail=str(exc)) from exc
+
+
 @router.post("/modes/physical/disable")
 def disable_physical_mode(ran: RanService = Depends(_get_ran)) -> dict[str, Any]:
     try:

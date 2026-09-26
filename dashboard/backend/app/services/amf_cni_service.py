@@ -9,10 +9,11 @@ from typing import Any, Callable
 
 from app.services.audit import write_audit
 from app.services.k8s_service import K8sService
+from app.services.network_plan import plan_value
 
 log = logging.getLogger(__name__)
 
-NS = "5g"
+NS = plan_value("namespace_5g")
 AMF_LABEL = "app=amf"
 REASON = "FailedCreatePodSandBox"
 FILE_EXISTS = "file exists"
@@ -22,8 +23,11 @@ def _event_ts(event: Any) -> str:
     return str(event.last_timestamp or event.event_time or event.metadata.creation_timestamp or "")
 
 
-def check_alert(k8s: K8sService) -> dict[str, Any]:
-    """Return AMF networking/controller alert context for dashboard UI."""
+def check_alert(k8s: K8sService, strict: bool = False) -> dict[str, Any]:
+    """Return AMF networking/controller alert context for dashboard UI.
+
+    The Core page treats a failed read as "no alert"; `strict` raises instead,
+    so the status summary can report that it could not read it."""
     try:
         amf_pods = k8s.core.list_namespaced_pod(namespace=NS, label_selector=AMF_LABEL).items
         pod_by_name = {p.metadata.name: p for p in amf_pods}
@@ -101,6 +105,8 @@ def check_alert(k8s: K8sService) -> dict[str, Any]:
             },
         }
     except Exception as exc:
+        if strict:
+            raise
         log.debug("AMF CNI alert check failed: %s", exc)
     return {"active": False}
 

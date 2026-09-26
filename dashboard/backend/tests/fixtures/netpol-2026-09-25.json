@@ -1,0 +1,990 @@
+{
+ "items": [
+  {
+   "apiVersion": "networking.k8s.io/v1",
+   "kind": "NetworkPolicy",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/managed-by": "kelt-network-policies"
+    },
+    "name": "allow-common-ingress",
+    "namespace": "5g"
+   },
+   "spec": {
+    "ingress": [
+     {
+      "from": [
+       {
+        "podSelector": {}
+       },
+       {
+        "namespaceSelector": {
+         "matchLabels": {
+          "kubernetes.io/metadata.name": "monitoring"
+         }
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "192.168.56.0/24"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.0.0/32"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.0.1/32"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.1.0/32"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.1.1/32"
+        }
+       }
+      ]
+     }
+    ],
+    "podSelector": {},
+    "policyTypes": [
+     "Ingress"
+    ]
+   }
+  },
+  {
+   "apiVersion": "networking.k8s.io/v1",
+   "kind": "NetworkPolicy",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/managed-by": "kelt-network-policies"
+    },
+    "name": "default-deny-ingress",
+    "namespace": "5g"
+   },
+   "spec": {
+    "podSelector": {},
+    "policyTypes": [
+     "Ingress"
+    ]
+   }
+  },
+  {
+   "apiVersion": "networking.k8s.io/v1",
+   "kind": "NetworkPolicy",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/managed-by": "kelt-network-policies"
+    },
+    "name": "allow-camara-gateway-ingress",
+    "namespace": "camara"
+   },
+   "spec": {
+    "ingress": [
+     {
+      "from": [
+       {
+        "namespaceSelector": {
+         "matchLabels": {
+          "kubernetes.io/metadata.name": "frontdoor"
+         }
+        }
+       },
+       {
+        "namespaceSelector": {
+         "matchLabels": {
+          "kubernetes.io/metadata.name": "mec"
+         }
+        }
+       }
+      ]
+     }
+    ],
+    "podSelector": {
+     "matchLabels": {
+      "app": "camara-gateway"
+     }
+    },
+    "policyTypes": [
+     "Ingress"
+    ]
+   }
+  },
+  {
+   "apiVersion": "networking.k8s.io/v1",
+   "kind": "NetworkPolicy",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/managed-by": "kelt-network-policies"
+    },
+    "name": "allow-common-ingress",
+    "namespace": "camara"
+   },
+   "spec": {
+    "ingress": [
+     {
+      "from": [
+       {
+        "podSelector": {}
+       },
+       {
+        "namespaceSelector": {
+         "matchLabels": {
+          "kubernetes.io/metadata.name": "monitoring"
+         }
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "192.168.56.0/24"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.0.0/32"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.0.1/32"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.1.0/32"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.1.1/32"
+        }
+       }
+      ]
+     }
+    ],
+    "podSelector": {},
+    "policyTypes": [
+     "Ingress"
+    ]
+   }
+  },
+  {
+   "apiVersion": "networking.k8s.io/v1",
+   "kind": "NetworkPolicy",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/managed-by": "kelt-network-policies"
+    },
+    "name": "default-deny-ingress",
+    "namespace": "camara"
+   },
+   "spec": {
+    "podSelector": {},
+    "policyTypes": [
+     "Ingress"
+    ]
+   }
+  },
+  {
+   "apiVersion": "networking.k8s.io/v1",
+   "kind": "NetworkPolicy",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/managed-by": "kelt-network-policies"
+    },
+    "name": "allow-all-ingress",
+    "namespace": "dashboard"
+   },
+   "spec": {
+    "ingress": [
+     {
+      "from": [
+       {
+        "namespaceSelector": {
+         "matchLabels": {
+          "kubernetes.io/metadata.name": "frontdoor"
+         }
+        }
+       }
+      ]
+     }
+    ],
+    "podSelector": {},
+    "policyTypes": [
+     "Ingress"
+    ]
+   }
+  },
+  {
+   "apiVersion": "networking.k8s.io/v1",
+   "kind": "NetworkPolicy",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/managed-by": "kelt-network-policies"
+    },
+    "name": "allow-common-ingress",
+    "namespace": "dashboard"
+   },
+   "spec": {
+    "ingress": [
+     {
+      "from": [
+       {
+        "podSelector": {}
+       },
+       {
+        "namespaceSelector": {
+         "matchLabels": {
+          "kubernetes.io/metadata.name": "monitoring"
+         }
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "192.168.56.0/24"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.0.0/32"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.0.1/32"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.1.0/32"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.1.1/32"
+        }
+       }
+      ]
+     }
+    ],
+    "podSelector": {},
+    "policyTypes": [
+     "Ingress"
+    ]
+   }
+  },
+  {
+   "apiVersion": "networking.k8s.io/v1",
+   "kind": "NetworkPolicy",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/managed-by": "kelt-network-policies"
+    },
+    "name": "default-deny-ingress",
+    "namespace": "dashboard"
+   },
+   "spec": {
+    "podSelector": {},
+    "policyTypes": [
+     "Ingress"
+    ]
+   }
+  },
+  {
+   "apiVersion": "networking.k8s.io/v1",
+   "kind": "NetworkPolicy",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/managed-by": "kelt-network-policies"
+    },
+    "name": "allow-common-ingress",
+    "namespace": "frontdoor"
+   },
+   "spec": {
+    "ingress": [
+     {
+      "from": [
+       {
+        "podSelector": {}
+       },
+       {
+        "namespaceSelector": {
+         "matchLabels": {
+          "kubernetes.io/metadata.name": "monitoring"
+         }
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "192.168.56.0/24"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.0.0/32"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.0.1/32"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.1.0/32"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.1.1/32"
+        }
+       }
+      ]
+     }
+    ],
+    "podSelector": {},
+    "policyTypes": [
+     "Ingress"
+    ]
+   }
+  },
+  {
+   "apiVersion": "networking.k8s.io/v1",
+   "kind": "NetworkPolicy",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/managed-by": "kelt-network-policies"
+    },
+    "name": "default-deny-ingress",
+    "namespace": "frontdoor"
+   },
+   "spec": {
+    "podSelector": {},
+    "policyTypes": [
+     "Ingress"
+    ]
+   }
+  },
+  {
+   "apiVersion": "networking.k8s.io/v1",
+   "kind": "NetworkPolicy",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/managed-by": "kelt-network-policies"
+    },
+    "name": "allow-common-ingress",
+    "namespace": "iam"
+   },
+   "spec": {
+    "ingress": [
+     {
+      "from": [
+       {
+        "podSelector": {}
+       },
+       {
+        "namespaceSelector": {
+         "matchLabels": {
+          "kubernetes.io/metadata.name": "monitoring"
+         }
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "192.168.56.0/24"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.0.0/32"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.0.1/32"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.1.0/32"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.1.1/32"
+        }
+       }
+      ]
+     }
+    ],
+    "podSelector": {},
+    "policyTypes": [
+     "Ingress"
+    ]
+   }
+  },
+  {
+   "apiVersion": "networking.k8s.io/v1",
+   "kind": "NetworkPolicy",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/managed-by": "kelt-network-policies"
+    },
+    "name": "allow-keycloak-ingress",
+    "namespace": "iam"
+   },
+   "spec": {
+    "ingress": [
+     {
+      "from": [
+       {
+        "namespaceSelector": {
+         "matchLabels": {
+          "kubernetes.io/metadata.name": "camara"
+         }
+        }
+       },
+       {
+        "namespaceSelector": {
+         "matchLabels": {
+          "kubernetes.io/metadata.name": "positioning"
+         }
+        }
+       },
+       {
+        "namespaceSelector": {
+         "matchLabels": {
+          "kubernetes.io/metadata.name": "frontdoor"
+         }
+        }
+       },
+       {
+        "namespaceSelector": {
+         "matchLabels": {
+          "kubernetes.io/metadata.name": "mec"
+         }
+        }
+       },
+       {
+        "namespaceSelector": {
+         "matchLabels": {
+          "kubernetes.io/metadata.name": "dashboard"
+         }
+        }
+       }
+      ]
+     }
+    ],
+    "podSelector": {
+     "matchLabels": {
+      "app": "keycloak"
+     }
+    },
+    "policyTypes": [
+     "Ingress"
+    ]
+   }
+  },
+  {
+   "apiVersion": "networking.k8s.io/v1",
+   "kind": "NetworkPolicy",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/managed-by": "kelt-network-policies"
+    },
+    "name": "default-deny-ingress",
+    "namespace": "iam"
+   },
+   "spec": {
+    "podSelector": {},
+    "policyTypes": [
+     "Ingress"
+    ]
+   }
+  },
+  {
+   "apiVersion": "networking.k8s.io/v1",
+   "kind": "NetworkPolicy",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/managed-by": "kelt-network-policies"
+    },
+    "name": "allow-all-ingress",
+    "namespace": "mec"
+   },
+   "spec": {
+    "ingress": [
+     {
+      "from": [
+       {
+        "namespaceSelector": {
+         "matchLabels": {
+          "kubernetes.io/metadata.name": "frontdoor"
+         }
+        }
+       }
+      ]
+     }
+    ],
+    "podSelector": {},
+    "policyTypes": [
+     "Ingress"
+    ]
+   }
+  },
+  {
+   "apiVersion": "networking.k8s.io/v1",
+   "kind": "NetworkPolicy",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/managed-by": "kelt-network-policies"
+    },
+    "name": "allow-common-ingress",
+    "namespace": "mec"
+   },
+   "spec": {
+    "ingress": [
+     {
+      "from": [
+       {
+        "podSelector": {}
+       },
+       {
+        "namespaceSelector": {
+         "matchLabels": {
+          "kubernetes.io/metadata.name": "monitoring"
+         }
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "192.168.56.0/24"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.0.0/32"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.0.1/32"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.1.0/32"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.1.1/32"
+        }
+       }
+      ]
+     }
+    ],
+    "podSelector": {},
+    "policyTypes": [
+     "Ingress"
+    ]
+   }
+  },
+  {
+   "apiVersion": "networking.k8s.io/v1",
+   "kind": "NetworkPolicy",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/managed-by": "kelt-network-policies"
+    },
+    "name": "allow-declared-egress",
+    "namespace": "mec"
+   },
+   "spec": {
+    "egress": [
+     {
+      "ports": [
+       {
+        "port": 53,
+        "protocol": "UDP"
+       },
+       {
+        "port": 53,
+        "protocol": "TCP"
+       }
+      ],
+      "to": [
+       {
+        "namespaceSelector": {
+         "matchLabels": {
+          "kubernetes.io/metadata.name": "kube-system"
+         }
+        }
+       }
+      ]
+     },
+     {
+      "to": [
+       {
+        "namespaceSelector": {
+         "matchLabels": {
+          "kubernetes.io/metadata.name": "camara"
+         }
+        },
+        "podSelector": {
+         "matchLabels": {
+          "app": "camara-gateway"
+         }
+        }
+       },
+       {
+        "namespaceSelector": {
+         "matchLabels": {
+          "kubernetes.io/metadata.name": "iam"
+         }
+        },
+        "podSelector": {
+         "matchLabels": {
+          "app": "keycloak"
+         }
+        }
+       }
+      ]
+     },
+     {
+      "to": [
+       {
+        "ipBlock": {
+         "cidr": "0.0.0.0/0",
+         "except": [
+          "10.0.0.0/8",
+          "172.16.0.0/12",
+          "192.168.0.0/16",
+          "100.64.0.0/10",
+          "169.254.0.0/16"
+         ]
+        }
+       }
+      ]
+     }
+    ],
+    "podSelector": {},
+    "policyTypes": [
+     "Egress"
+    ]
+   }
+  },
+  {
+   "apiVersion": "networking.k8s.io/v1",
+   "kind": "NetworkPolicy",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/managed-by": "kelt-network-policies"
+    },
+    "name": "default-deny-ingress",
+    "namespace": "mec"
+   },
+   "spec": {
+    "podSelector": {},
+    "policyTypes": [
+     "Ingress"
+    ]
+   }
+  },
+  {
+   "apiVersion": "networking.k8s.io/v1",
+   "kind": "NetworkPolicy",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/managed-by": "kelt-network-policies"
+    },
+    "name": "allow-common-ingress",
+    "namespace": "monitoring"
+   },
+   "spec": {
+    "ingress": [
+     {
+      "from": [
+       {
+        "podSelector": {}
+       },
+       {
+        "namespaceSelector": {
+         "matchLabels": {
+          "kubernetes.io/metadata.name": "monitoring"
+         }
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "192.168.56.0/24"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.0.0/32"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.0.1/32"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.1.0/32"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.1.1/32"
+        }
+       }
+      ]
+     }
+    ],
+    "podSelector": {},
+    "policyTypes": [
+     "Ingress"
+    ]
+   }
+  },
+  {
+   "apiVersion": "networking.k8s.io/v1",
+   "kind": "NetworkPolicy",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/managed-by": "kelt-network-policies"
+    },
+    "name": "default-deny-ingress",
+    "namespace": "monitoring"
+   },
+   "spec": {
+    "podSelector": {},
+    "policyTypes": [
+     "Ingress"
+    ]
+   }
+  },
+  {
+   "apiVersion": "networking.k8s.io/v1",
+   "kind": "NetworkPolicy",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/managed-by": "kelt-network-policies"
+    },
+    "name": "allow-all-ingress",
+    "namespace": "positioning"
+   },
+   "spec": {
+    "ingress": [
+     {
+      "from": [
+       {
+        "namespaceSelector": {
+         "matchLabels": {
+          "kubernetes.io/metadata.name": "camara"
+         }
+        }
+       }
+      ]
+     }
+    ],
+    "podSelector": {},
+    "policyTypes": [
+     "Ingress"
+    ]
+   }
+  },
+  {
+   "apiVersion": "networking.k8s.io/v1",
+   "kind": "NetworkPolicy",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/managed-by": "kelt-network-policies"
+    },
+    "name": "allow-common-ingress",
+    "namespace": "positioning"
+   },
+   "spec": {
+    "ingress": [
+     {
+      "from": [
+       {
+        "podSelector": {}
+       },
+       {
+        "namespaceSelector": {
+         "matchLabels": {
+          "kubernetes.io/metadata.name": "monitoring"
+         }
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "192.168.56.0/24"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.0.0/32"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.0.1/32"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.1.0/32"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.1.1/32"
+        }
+       }
+      ]
+     }
+    ],
+    "podSelector": {},
+    "policyTypes": [
+     "Ingress"
+    ]
+   }
+  },
+  {
+   "apiVersion": "networking.k8s.io/v1",
+   "kind": "NetworkPolicy",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/managed-by": "kelt-network-policies"
+    },
+    "name": "allow-oauth2-proxy-placement-ingress",
+    "namespace": "positioning"
+   },
+   "spec": {
+    "ingress": [
+     {
+      "from": [
+       {
+        "namespaceSelector": {
+         "matchLabels": {
+          "kubernetes.io/metadata.name": "frontdoor"
+         }
+        }
+       }
+      ]
+     }
+    ],
+    "podSelector": {
+     "matchLabels": {
+      "app": "oauth2-proxy-placement"
+     }
+    },
+    "policyTypes": [
+     "Ingress"
+    ]
+   }
+  },
+  {
+   "apiVersion": "networking.k8s.io/v1",
+   "kind": "NetworkPolicy",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/managed-by": "kelt-network-policies"
+    },
+    "name": "default-deny-ingress",
+    "namespace": "positioning"
+   },
+   "spec": {
+    "podSelector": {},
+    "policyTypes": [
+     "Ingress"
+    ]
+   }
+  },
+  {
+   "apiVersion": "networking.k8s.io/v1",
+   "kind": "NetworkPolicy",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/managed-by": "kelt-network-policies"
+    },
+    "name": "allow-common-ingress",
+    "namespace": "registry"
+   },
+   "spec": {
+    "ingress": [
+     {
+      "from": [
+       {
+        "podSelector": {}
+       },
+       {
+        "namespaceSelector": {
+         "matchLabels": {
+          "kubernetes.io/metadata.name": "monitoring"
+         }
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "192.168.56.0/24"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.0.0/32"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.0.1/32"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.1.0/32"
+        }
+       },
+       {
+        "ipBlock": {
+         "cidr": "10.42.1.1/32"
+        }
+       }
+      ]
+     }
+    ],
+    "podSelector": {},
+    "policyTypes": [
+     "Ingress"
+    ]
+   }
+  },
+  {
+   "apiVersion": "networking.k8s.io/v1",
+   "kind": "NetworkPolicy",
+   "metadata": {
+    "labels": {
+     "app.kubernetes.io/managed-by": "kelt-network-policies"
+    },
+    "name": "default-deny-ingress",
+    "namespace": "registry"
+   },
+   "spec": {
+    "podSelector": {},
+    "policyTypes": [
+     "Ingress"
+    ]
+   }
+  }
+ ]
+}

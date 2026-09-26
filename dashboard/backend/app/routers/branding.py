@@ -17,11 +17,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.models import BrandRequest
 from app.services.audit import write_audit
 from app.services.k8s_service import K8sService, get_k8s_service
+from app.services.network_plan import plan_value
 
 read_router = APIRouter(prefix="/api/v1/branding", tags=["branding"])
 write_router = APIRouter(prefix="/api/v1/branding", tags=["branding"])
 
-_NS = "frontdoor"
+_NS = plan_value("frontdoor_namespace")
 _CM = "frontdoor-brand"
 _DEPLOY = "frontdoor"
 _MAX_LOGO = 512 * 1024  # data-URI cap; the ConfigMap hard limit is ~1 MB

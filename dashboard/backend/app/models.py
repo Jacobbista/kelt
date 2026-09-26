@@ -1,6 +1,7 @@
 from typing import Any
 
 from pydantic import BaseModel, Field
+from app.services.network_plan import plan_value
 
 
 class PodSummary(BaseModel):
@@ -47,6 +48,7 @@ class NfInstance(BaseModel):
     nf_type: str
     category: str
     name: str
+    namespace: str
     phase: str
     restarts: int
     node: str | None = None
@@ -84,11 +86,11 @@ class TopologyResponse(BaseModel):
 
 
 class RestartRequest(BaseModel):
-    namespace: str = "5g"
+    namespace: str = Field(default_factory=lambda: plan_value("namespace_5g"))
 
 
 class ScaleControllerRequest(BaseModel):
-    namespace: str = "5g"
+    namespace: str = Field(default_factory=lambda: plan_value("namespace_5g"))
     kind: str
     name: str
     replicas: int = Field(ge=0)
@@ -149,7 +151,7 @@ class WorkloadDeployRequest(BaseModel):
     port: int = Field(default=8080, ge=1, le=65535)
     env: list[DeployEnvVar] = Field(default_factory=list)
     image_pull_secret: str | None = None
-    namespace: str = "mec"
+    namespace: str = Field(default_factory=lambda: plan_value("apps_namespace"))
 
 
 class AppDeployRequest(BaseModel):

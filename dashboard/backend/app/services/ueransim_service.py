@@ -5,17 +5,18 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from kubernetes import client
 from kubernetes.client.exceptions import ApiException
 
 from app.services.k8s_service import K8sService
+from app.services.network_plan import plan_value
+from app.services.mongo_service import MongoService
 
 log = logging.getLogger(__name__)
 
-NS = "5g"
+NS = plan_value("namespace_5g")
 STATE_CM = "ueransim-dashboard-state"
 TOPOLOGY_VARS = Path("/home/vagrant/ansible-ro/phases/06-ueransim-mec/vars/topology.yml")
-GNB_DEFAULTS_PATH = Path("/home/vagrant/ansible-ro/phases/06-ueransim-mec/roles/gnb_deployment/defaults/main.yml")
-K8S_API_SERVER = "192.168.56.10:6443"
 DISCOVERY_IMAGE = "nicolaka/netshoot:latest"
 GNB_BINARY = "/UERANSIM/build/nr-gnb"
 UE_BINARY = "/UERANSIM/build/nr-ue"
@@ -42,8 +43,6 @@ class UeransimService:
             "mcc": defaults.get("mcc", "001"),
             "mnc": defaults.get("mnc", "01"),
             "imsi_msin_base": defaults.get("imsi_msin_base", "1234567"),
-            "key": defaults.get("key_template", "8baf473f2f8fd09487cccbd7097c6862"),
-            "op": defaults.get("op", "11111111111111111111111111111111"),
             "node_defaults": defaults.get("node_defaults", {"gnb": "edge", "ue": "edge"}),
         }
 
@@ -55,12 +54,9 @@ class UeransimService:
             return ""
 
     def _read_k8s_api_server(self) -> str:
-        try:
-            with open(GNB_DEFAULTS_PATH) as f:
-                data = yaml.safe_load(f) or {}
-            return data.get("k8s_api_server", K8S_API_SERVER)
-        except FileNotFoundError:
-            return K8S_API_SERVER
+        """host:port of the API server, from the kubeconfig the backend already uses."""
+        host = client.Configuration.get_default_copy().host
+        return host.split("://", 1)[-1]
 
     # ── Smart defaults for the frontend ──────────────────────────
 
@@ -328,10 +324,19 @@ exit 1"""
         sst = int(payload.get("sst", 1))
         sd = int(payload.get("sd", 1))
         imsi_suffix = payload.get("imsi_start", "895")
-        key = defaults["key"]
-        op = defaults["op"]
         imsi_base = defaults["imsi_msin_base"]
-        supi = f"imsi-{mcc}{mnc}{imsi_base}{imsi_suffix}"
+        imsi = f"{mcc}{mnc}{imsi_base}{imsi_suffix}"
+        supi = f"imsi-{imsi}"
+        # The UE authenticates with its subscriber's keys, read from the core's
+        # subscriber database; SIM keys are never held anywhere else.
+        sub = MongoService().get_subscriber(imsi)
+        if not sub:
+            raise ValueError(f"No subscriber {imsi} in the 5G core: add it on the Subscribers page first")
+        sec = sub.get("security") or {}
+        key = sec.get("k")
+        op, op_type = (sec["opc"], "OPC") if sec.get("opc") else (sec.get("op"), "OP")
+        if not key or not op:
+            raise ValueError(f"Subscriber {imsi} has no K or OP/OPc")
 
         discovery_script = f"""set -e
 DEFAULT_GW=$(ip route | grep -E '^10\\.[0-9]+\\.[0-9]+\\.0/24 dev eth0' | sed 's|.*/24.*||;s|.*\\.||')
@@ -377,7 +382,7 @@ homeNetworkPublicKeyId: 1
 routingIndicator: "0000"
 key: "{key}"
 op: "{op}"
-opType: "OP"
+opType: "{op_type}"
 amf: "8000"
 imei: "356938035643803"
 imeiSv: "4370816125816151"

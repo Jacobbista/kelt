@@ -12,6 +12,7 @@ upsert_secret/delete_*) and the DNS-1123 name + image-reference validators from
 northbound_service. See docs/architecture/edge-apps.md.
 """
 
+import logging
 import io
 import ipaddress
 import json
@@ -27,6 +28,7 @@ import httpx
 
 from app.config import settings
 from app.services.k8s_service import K8sService
+from app.services.network_plan import load_plan, plan_value
 from app.services.northbound_service import _validate_image, _validate_name
 # Reuse the ansible runner coordinates the NF rollout already established.
 from app.services.nf_service import ANSIBLE_CFG, ANSIBLE_DIR, ANSIBLE_PLAYBOOK_BIN
@@ -70,8 +72,8 @@ Push over LAN/Tailscale (the registry is a NodePort, never the public tunnel).
 Services -> Edge apps -> Deploy:
 - `image` = the ref printed by `deploy.sh`
 - `expose` on for an HTTP UI
-- MEC video app: tick "attach to MEC network (n6m)", set a fixed IP (10.208.0.200-.207)
-  and the UDP ingest port (5005).
+- MEC video app: tick "attach to MEC network (n6m)", set a fixed IP from the
+  reserved band shown in the form, and the UDP ingest port (5005).
 
 The UE then streams to that n6m IP on 5005 over the 5G tunnel.
 
@@ -122,6 +124,8 @@ echo "Deploy it from the dashboard: Services -> Edge apps -> image = ${IMG}"
 """
 
 
+log = logging.getLogger(__name__)
+
 class AppDeployError(Exception):
     def __init__(self, status: int, detail: str) -> None:
         self.status = status
@@ -132,7 +136,7 @@ class AppDeployError(Exception):
 class AppsService:
     def __init__(self, k8s: K8sService) -> None:
         self.k8s = k8s
-        self.ns = settings.apps_namespace
+        self.ns = plan_value("apps_namespace")
 
     # ── Public URL ────────────────────────────────────────────────────────────
     def _public_url(self, name: str, exposed: bool) -> str | None:
@@ -161,20 +165,24 @@ class AppsService:
             "namespace": self.ns,
             "ready": ready,
             "registry_host": settings.apps_registry_host,
+            # Band for apps that need a fixed n6m address (UEs target a stable IP).
+            "n6m_static_band": load_plan()["n6m_static_band"],
             "apps": apps,
         }
 
     def public_apps(self) -> dict[str, Any]:
         """Names + public URLs of exposed apps, for the pre-auth front-door welcome
-        page. Only what the catalogue already shows for core services (name + link);
-        never fails the welcome page."""
+        page. Only what the catalogue already shows for core services (name + link).
+        Never fails the welcome page, but says when the list could not be read
+        (`unavailable`) instead of passing an error off as "no apps"."""
         out = []
         try:
             for a in self.list_apps():
                 if a.get("public_url"):
                     out.append({"name": a["name"], "url": a["public_url"], "ready": a["ready"]})
         except Exception:
-            return {"apps": []}
+            log.warning("public app list unavailable", exc_info=True)
+            return {"apps": [], "unavailable": True}
         return {"apps": out}
 
     def list_apps(self) -> list[dict[str, Any]]:
@@ -212,7 +220,7 @@ class AppsService:
             anns = (d.spec.template.metadata.annotations or {})
             try:
                 for n in json.loads(anns.get("k8s.v1.cni.cncf.io/networks", "[]")):
-                    if isinstance(n, dict) and n.get("name") == "n6m-net":
+                    if isinstance(n, dict) and n.get("name") in (settings.n6m_nad_name, settings.n6m_static_nad_name):
                         mec_attached = True
                         mec_ip = (n.get("ips") or [None])[0]
             except (ValueError, TypeError):
@@ -293,17 +301,24 @@ class AppsService:
             pod_spec["imagePullSecrets"] = [{"name": req.image_pull_secret}]
 
         # MEC attach: a Multus secondary interface on the n6m DN so UEs reach the
-        # app via the UPF. Same-namespace NAD reference; `ips` requests the fixed
-        # reserved address (whereabouts honors it, like the NF static IPs). Return
-        # routes to the UE pools are inherited from the n6m-net NAD itself.
+        # app via the UPF. A fixed reserved address goes on the static NAD (exactly
+        # that one address); otherwise the pool NAD assigns one. See
+        # docs/architecture/5g-interfaces.md (Fixed Endpoints).
         # Remember the tag the operator deployed from: the image field now carries a
         # digest, which is unreadable in the UI and tells update detection nothing
         # about WHICH tag to re-check.
         pod_meta: dict[str, Any] = {"labels": labels, "annotations": {"kelt.io/image-tag": req.image}}
         if req.attach_mec:
-            net: dict[str, Any] = {"name": "n6m-net", "namespace": self.ns, "interface": "n6m"}
+            net: dict[str, Any] = {"name": settings.n6m_nad_name, "namespace": self.ns, "interface": "n6m"}
             if req.mec_ip:
-                net["ips"] = [req.mec_ip if "/" in req.mec_ip else f"{req.mec_ip}/24"]
+                net["name"] = settings.n6m_static_nad_name
+                plan = load_plan()
+                ip = ipaddress.ip_address(req.mec_ip.split("/")[0])
+                band = ipaddress.ip_network(plan["n6m_static_band"])
+                # Outside the band the address can collide with the dynamic pool.
+                if ip not in band:
+                    raise ValueError(f"fixed n6m IP must be in the reserved band {band}")
+                net["ips"] = [f"{ip}/{ipaddress.ip_network(plan['n6m_subnet']).prefixlen}"]
             pod_meta["annotations"]["k8s.v1.cni.cncf.io/networks"] = json.dumps([net])
 
         self.k8s.upsert_deployment(self.ns, {

@@ -4,7 +4,7 @@ import logging
 import subprocess
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.auth import require_admin
 from app.config import settings
@@ -25,17 +25,14 @@ def watchdog_token(_=Depends(require_admin)) -> dict[str, str]:
 
 
 @router.post("/restart-backend")
-def restart_backend(
-    x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
-) -> dict[str, Any]:
+def restart_backend(_=Depends(require_admin)) -> dict[str, Any]:
     """
-    Restart the dashboard-backend systemd service.
+    Restart the dashboard-backend systemd service (admin role).
     Requires sudo (vagrant user needs NOPASSWD for systemctl restart).
     This process will be killed by systemd; the response may not be delivered.
-    Token optional in lab; set X-Admin-Token if DASHBOARD_ADMIN_TOKEN is configured.
+    When the backend itself is down, the watchdog (its own process, guarded by
+    DASHBOARD_ADMIN_TOKEN) restarts it instead.
     """
-    if settings.admin_token != "change-me" and x_admin_token != settings.admin_token:
-        raise HTTPException(status_code=403, detail="Invalid or missing admin token")
 
     svc = settings.backend_service_name
     log.warning("Restarting backend service: %s", svc)
@@ -60,7 +57,7 @@ def restart_backend(
 
 
 @router.get("/service-status")
-def service_status() -> dict[str, Any]:
+def service_status(_=Depends(require_admin)) -> dict[str, Any]:
     """Return systemd service status and recent journal lines for the backend."""
     svc = settings.backend_service_name
     result: dict[str, Any] = {"service": svc}

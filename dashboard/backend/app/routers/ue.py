@@ -86,7 +86,8 @@ class PingRequest(BaseModel):
 
 class IperfRequest(BaseModel):
     pod: str
-    server: str = "10.45.0.1"
+    # Default: the UPF's iperf3 server on the internet DNN (ue_internet_gateway).
+    server: str | None = None
     duration: int = 5
 
 
