@@ -1,12 +1,8 @@
 import asyncio
-import json
 import logging
-import queue
-import threading
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.services.k8s_service import K8sService, get_k8s_service
@@ -88,24 +84,6 @@ async def ran_status(ran: RanService = Depends(_get_ran)) -> dict[str, Any]:
         raise HTTPException(500, detail=str(exc)) from exc
 
 
-@router.post("/enable")
-def ran_enable(ran: RanService = Depends(_get_ran)) -> dict[str, Any]:
-    try:
-        return ran.enable()
-    except Exception as exc:
-        log.exception("Failed to enable physical RAN")
-        raise HTTPException(500, detail=str(exc)) from exc
-
-
-@router.post("/disable")
-def ran_disable(ran: RanService = Depends(_get_ran)) -> dict[str, Any]:
-    try:
-        return ran.disable()
-    except Exception as exc:
-        log.exception("Failed to disable physical RAN")
-        raise HTTPException(500, detail=str(exc)) from exc
-
-
 # ── Combined mode status ─────────────────────────────────────────
 
 @router.get("/modes/status")
@@ -123,104 +101,6 @@ def ran_modes_status(
     except Exception as exc:
         log.exception("Failed to fetch RAN modes status")
         raise HTTPException(500, detail=str(exc)) from exc
-
-
-@router.post("/modes/physical/enable")
-def enable_physical_mode(ran: RanService = Depends(_get_ran)) -> dict[str, Any]:
-    try:
-        return ran.enable()
-    except Exception as exc:
-        log.exception("Failed to enable physical RAN mode")
-        raise HTTPException(500, detail=str(exc)) from exc
-
-
-@router.post("/modes/physical/enable/stream")
-def enable_physical_mode_stream(ran: RanService = Depends(_get_ran)):
-    """Stream progress events as NDJSON, then final result."""
-    q: queue.Queue[dict[str, Any] | None] = queue.Queue()
-    sentinel = None
-
-    def on_progress(step: str, status: str, msg: str) -> None:
-        q.put({"step": step, "status": status, "message": msg})
-
-    def run() -> None:
-        try:
-            result = ran.enable(on_progress=on_progress)
-            q.put({"result": result})
-        except Exception as exc:
-            log.exception("Failed to enable physical RAN mode")
-            q.put({"error": str(exc)})
-        finally:
-            q.put(sentinel)
-
-    def gen() -> Any:
-        t = threading.Thread(target=run)
-        t.start()
-        while True:
-            item = q.get()
-            if item is sentinel:
-                break
-            yield json.dumps(item) + "\n"
-
-    return StreamingResponse(
-        gen(),
-        media_type="application/x-ndjson",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@router.post("/modes/physical/link-up")
-def physical_link_up(ran: RanService = Depends(_get_ran)) -> dict[str, Any]:
-    """Bring the worker's RAN link up by re-running the OVS setup that owns it."""
-    try:
-        return ran.bring_link_up()
-    except Exception as exc:
-        log.exception("Failed to bring the RAN link up")
-        raise HTTPException(500, detail=str(exc)) from exc
-
-
-@router.post("/modes/physical/disable")
-def disable_physical_mode(ran: RanService = Depends(_get_ran)) -> dict[str, Any]:
-    try:
-        return ran.disable()
-    except Exception as exc:
-        log.exception("Failed to disable physical RAN mode")
-        raise HTTPException(500, detail=str(exc)) from exc
-
-
-@router.post("/modes/physical/disable/stream")
-def disable_physical_mode_stream(ran: RanService = Depends(_get_ran)):
-    """Stream progress events as NDJSON, then final result."""
-    q: queue.Queue[dict[str, Any] | None] = queue.Queue()
-    sentinel = None
-
-    def on_progress(step: str, status: str, msg: str) -> None:
-        q.put({"step": step, "status": status, "message": msg})
-
-    def run() -> None:
-        try:
-            result = ran.disable(on_progress=on_progress)
-            q.put({"result": result})
-        except Exception as exc:
-            log.exception("Failed to disable physical RAN mode")
-            q.put({"error": str(exc)})
-        finally:
-            q.put(sentinel)
-
-    def gen() -> Any:
-        t = threading.Thread(target=run)
-        t.start()
-        while True:
-            item = q.get()
-            if item is sentinel:
-                break
-            yield json.dumps(item) + "\n"
-
-    return StreamingResponse(
-        gen(),
-        media_type="application/x-ndjson",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
 
 
 @router.post("/modes/ueransim/enable")

@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.config import settings
-from app.services.k8s_service import K8sService
+from app.services.k8s_service import K8sService, nf_api_get
 from app.services.network_plan import plan_value
 from app.services.prometheus_service import PrometheusService
 
@@ -772,52 +772,19 @@ class UEService:
     # mixing issues with kubernetes stream() and doesn't require curl in the image.
     # Proxy URL: /api/v1/namespaces/{ns}/pods/{name}:{port}/proxy/{path}
 
-    def _nf_api_get(self, app_label: str, port: int, path: str) -> dict[str, Any]:
-        """Call an NF management HTTP endpoint via K8s API server pod proxy.
+    def _nf_api_get(self, app_label: str, port: int | str, path: str) -> dict[str, Any]:
+        """Call an NF management HTTP endpoint via the K8s API server pod proxy.
 
-        Uses api_client.call_api() directly so query params are passed as a
-        separate list — connect_get_namespaced_pod_proxy_with_path URL-encodes
-        '?' and '&' inside the path parameter, breaking query strings.
-        """
-        try:
-            pods = self.k8s.core.list_namespaced_pod(
-                namespace=NS, label_selector=f"app={app_label}",
-            )
-            if not pods.items:
-                return {}
-            pod_name = pods.items[0].metadata.name
-
-            parts = path.split("?", 1)
-            api_path = f"/api/v1/namespaces/{NS}/pods/{pod_name}:{port}/proxy/{parts[0]}"
-            query_params: list[tuple[str, str]] = []
-            if len(parts) > 1:
-                for kv in parts[1].split("&"):
-                    if "=" in kv:
-                        k, v = kv.split("=", 1)
-                        query_params.append((k, v))
-
-            api_client = self.k8s.core.api_client
-            # _preload_content=False returns raw urllib3 HTTPResponse, bypassing
-            # the client's JSON→Python-repr deserialisation that corrupts the body.
-            resp = api_client.call_api(
-                api_path, "GET",
-                query_params=query_params,
-                header_params={"Accept": "application/json"},
-                auth_settings=[],
-                _preload_content=False,
-                _return_http_data_only=True,
-            )
-            return json.loads(resp.read().decode("utf-8"))
-        except Exception as exc:
-            log.warning("_nf_api_get %s/%s failed: %s", app_label, path, exc)
-            return {}
+        `port` is the name of the NF pod's port ("metrics") or a number; see
+        k8s_service.nf_api_get, which passes query params as a separate list."""
+        return nf_api_get(self.k8s.core, NS, app_label, port, path)
 
     def _get_amf_ues(self) -> list[dict[str, Any]]:
         """Fetch all registered UEs from AMF /ue-info with pagination."""
         items: list[dict[str, Any]] = []
         page, page_size = 0, 100
         while True:
-            data = self._nf_api_get("amf", 9090, f"ue-info?page={page}&page_size={page_size}")
+            data = self._nf_api_get("amf", "metrics", f"ue-info?page={page}&page_size={page_size}")
             batch = data.get("items", [])
             items.extend(batch)
             if len(items) >= data.get("pager", {}).get("count", 0) or not batch:
@@ -838,7 +805,7 @@ class UEService:
         items: list[dict[str, Any]] = []
         page, page_size = 0, 100
         while True:
-            data = self._nf_api_get("smf", 9090, f"pdu-info?page={page}&page_size={page_size}")
+            data = self._nf_api_get("smf", "metrics", f"pdu-info?page={page}&page_size={page_size}")
             batch = data.get("items", [])
             items.extend(batch)
             if len(items) >= data.get("pager", {}).get("count", 0) or not batch:
@@ -876,7 +843,7 @@ class UEService:
 
     def get_gnb_info(self) -> list[dict[str, Any]]:
         """Fetch connected gNBs from AMF /gnb-info via K8s pod proxy."""
-        data = self._nf_api_get("amf", 9090, "gnb-info")
+        data = self._nf_api_get("amf", "metrics", "gnb-info")
         items = data.get("items", [])
         if not isinstance(items, list):
             return []

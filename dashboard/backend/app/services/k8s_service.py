@@ -37,6 +37,74 @@ def thread_core() -> client.CoreV1Api:
     return _thread_local.core
 
 
+def _running_pods(core: client.CoreV1Api, namespace: str, app: str) -> list:
+    pods = core.list_namespaced_pod(namespace=namespace, label_selector=f"app={app}")
+    return [p for p in pods.items if p.status.phase == "Running" and not p.metadata.deletion_timestamp]
+
+
+def _named_port(pod, name: str) -> int | None:
+    for c in pod.spec.containers or []:
+        for cp in c.ports or []:
+            if cp.name == name:
+                return int(cp.container_port)
+    return None
+
+
+def pod_port(core: client.CoreV1Api, namespace: str, app: str, name: str) -> int | None:
+    """An NF's port by name ("ngap", "metrics", ...) from its running pod.
+
+    NF ports belong to the NF implementation and are declared once where the NF
+    is wired (nf_deployments), which names them on the pod; readers look them up
+    by name instead of repeating the number. None if no running pod has it."""
+    try:
+        running = _running_pods(core, namespace, app)
+    except Exception as exc:  # noqa: BLE001 - callers treat None as unknown
+        log.debug("pod_port %s/%s: %s", app, name, exc)
+        return None
+    return _named_port(running[0], name) if running else None
+
+
+# (connect, read) seconds for an NF's management API through the pod proxy: an
+# NF being replaced must not hang the pages that read it.
+NF_API_TIMEOUT = (3, 5)
+
+
+def nf_api_get(core: client.CoreV1Api, namespace: str, app: str, port: int | str, path: str) -> dict[str, Any]:
+    """GET an NF management endpoint through the API server's pod proxy; {} on any failure.
+
+    `port` is a number or the name of the pod's port (see pod_port)."""
+    try:
+        running = _running_pods(core, namespace, app)
+        if not running:
+            return {}
+        pod_name = running[0].metadata.name
+        if isinstance(port, str):
+            port = _named_port(running[0], port)
+            if port is None:
+                return {}
+        parts = path.split("?", 1)
+        api_path = f"/api/v1/namespaces/{namespace}/pods/{pod_name}:{port}/proxy/{parts[0]}"
+        query_params: list[tuple[str, str]] = []
+        if len(parts) > 1:
+            for kv in parts[1].split("&"):
+                if "=" in kv:
+                    k, v = kv.split("=", 1)
+                    query_params.append((k, v))
+        resp = core.api_client.call_api(
+            api_path, "GET",
+            query_params=query_params,
+            header_params={"Accept": "application/json"},
+            auth_settings=[],
+            _preload_content=False,
+            _return_http_data_only=True,
+            _request_timeout=NF_API_TIMEOUT,
+        )
+        return json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:  # noqa: BLE001 - callers treat {} as "unreachable"
+        log.debug("nf_api_get %s/%s: %s", app, path, exc)
+        return {}
+
+
 def _parse_cpu_millicores(qty: str) -> float:
     """Convert a Kubernetes CPU quantity string to millicores."""
     qty = qty.strip()

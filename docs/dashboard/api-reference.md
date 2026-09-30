@@ -91,25 +91,17 @@ for the full matrix. In the tables below, "—" means any logged-in role.
 
 ---
 
-## RAN Mode Control
+## RAN
+
+Admin only (reads included). Attach and detach are pieces: `POST /api/v1/pieces/ran_attach/run`
+and `POST /api/v1/pieces/ran_detach/run` (see [Pieces and operations](#pieces-and-operations)).
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/api/v1/ran/status` | — | Current RAN mode (physical / simulated / coexistence) and resource state |
-| POST | `/api/v1/ran/enable` | ✅ Admin | Enable a RAN mode. Body: `{mode: "physical" \| "simulated" \| "coexistence"}` |
-| POST | `/api/v1/ran/disable` | ✅ Admin | Disable a RAN mode. Body: `{mode: "physical" \| "simulated"}` |
-
-See [RAN Modes](../deployment/ran-modes-dashboard.md) for the full workflow.
-
----
-
-## Physical RAN Config
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `/api/v1/physical-ran/interfaces` | — | Available bridge interfaces on worker |
-| GET | `/api/v1/physical-ran/status` | — | OVS bridge state, AMF annotation state |
-| POST | `/api/v1/physical-ran/setup` | ✅ Admin | Trigger Ansible OVS setup + AMF annotation patch |
+| GET | `/api/v1/ran/status` | ✅ Admin | The physical RAN's state: the worker's RAN interface and its link, `br-ran` and its ports, the RAN network attachment, the AMF's RAN interface, the UPF's route back, the gNB (address, NG Setup, NGAP port), UE and PDU counts, and `chain`, the five links the RAN page shows (`serving`, `broken` with the first broken link and its fix, or `detached`) |
+| GET | `/api/v1/ran/modes/status` | ✅ Admin | The same for the physical RAN, plus the UERANSIM workloads, for the RAN page |
+| POST | `/api/v1/ran/modes/ueransim/enable`, `.../disable` | ✅ Admin | UERANSIM on or off. Not offered by the page: the phase that installs it is not maintained |
+| GET, POST, PATCH, DELETE | `/api/v1/ran/ueransim/...` | ✅ Admin | UERANSIM gNBs and UEs (status, defaults, forms, create, change, activate, delete) |
 
 ---
 
@@ -127,6 +119,23 @@ See [RAN Modes](../deployment/ran-modes-dashboard.md) for the full workflow.
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | `/api/v1/status/summary` | — | Overall state for the header: `state` (`ok`, `warn`, `error`) and `problems` (`area`, `text`, `severity`). Sources: nodes not Ready; 5G pods Failed, Pending, Running but not ready, or stuck (CrashLoopBackOff, image pull errors); the last network check run if younger than 10 min, with its age (never starts one); the AMF CNI alert. A source that cannot be read is a `warn` problem; an unreachable Kubernetes API is the single `error` problem |
+
+---
+
+## Pieces and operations
+
+Admin only. A piece is a named part of a phase playbook (`ansible/pieces.yml`),
+run by the runner on the ansible VM; see
+[contributing.md](../development/contributing.md#pieces).
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/api/v1/pieces` | ✅ Admin | The registry: per piece `title`, `tier` (`change` or `disrupt`), `changes`, `stops`, `takes_s` |
+| POST | `/api/v1/pieces/{name}/run` | ✅ Admin | Start a piece. Returns `{id, state}`; a piece already running returns the running one's id. 404 for an unknown piece |
+| GET | `/api/v1/operations` | ✅ Admin | The 50 newest runs' records, `?state=` to filter (`running`, `done`, `failed`, `interrupted`). Each has `reads_back` (its piece has a read-back); a stored failed read-back is returned as `failed` |
+| GET | `/api/v1/operations/retention` | ✅ Admin | The record's limits and what it holds: `max_age_days`, `max_mb`, `runs`, `bytes`, `oldest` |
+| PUT | `/api/v1/operations/retention` | ✅ Admin | Set the limits. Body `{max_age_days, max_mb}`, days 1 to 3650, MB 1 to 10240: 400 for a number outside them, 422 for a value that is not a whole number. Returns the same shape as GET. Audit-logged |
+| GET | `/api/v1/operations/{id}` | ✅ Admin | One run: steps, the tail of its log, and its read-back (`check`), made once within 600 s of the end; a failed read-back makes the state `failed`. 404 for an unknown id |
 
 ---
 
@@ -259,4 +268,3 @@ Streams real-time OVS bridge counter deltas every second.
 
 - [Dashboard Overview](overview.md): architecture and security model
 - [Dashboard Modules](modules.md): what each module does
-- [RAN Modes](../deployment/ran-modes-dashboard.md): RAN mode switching workflow

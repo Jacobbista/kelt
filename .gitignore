@@ -20,6 +20,7 @@ Thumbs.db
 .testbed.env
 .testbed.secrets
 .testbed.subscribers.json
+.testbed.*.prev
 *.vmdk
 *.vdi
 *.vbox

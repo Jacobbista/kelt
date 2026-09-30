@@ -174,7 +174,7 @@ DASHBOARD_ALLOW_CONFIGMAP_WRITE=false
 - `GET /api/v1/ue/pods` (UERANSIM UE pods)
 - `POST /api/v1/ue/test/ping` / `POST /api/v1/ue/test/iperf`
 - `GET /api/v1/metrics/nodes` / `GET /api/v1/metrics/nf`
-- `GET /api/v1/ran/status` / `POST /api/v1/ran/enable` / `POST /api/v1/ran/disable`
+- `GET /api/v1/ran/status` (attach and detach are pieces: `POST /api/v1/pieces/ran_attach/run`, `.../ran_detach/run`)
 - `GET /api/v1/network/health` (cached N-interface connectivity results)
 - `POST /api/v1/network/health/run` (trigger immediate health check)
 - `WS /api/v1/ws/traffic/intensity` (real-time OVS bridge counter deltas)

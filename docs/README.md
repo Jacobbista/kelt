@@ -50,6 +50,7 @@ documenting something, write it at its owner and link from elsewhere.
 | Dashboard architecture, access, security summary | [dashboard/overview.md](dashboard/overview.md) |
 | Dashboard modules | [dashboard/modules.md](dashboard/modules.md) |
 | Dashboard REST/WS endpoints | [dashboard/api-reference.md](dashboard/api-reference.md) |
+| How the dashboard behaves and looks (binding rules) | [development/dashboard-design.md](development/dashboard-design.md) |
 | IAM: roles, OIDC clients, per-route matrix | [security/iam.md](security/iam.md) |
 | Diagnostics and troubleshooting | [operations/troubleshooting.md](operations/troubleshooting.md), [runbooks/](runbooks/) |
 | Feature maturity | [status.md](status.md) |
@@ -91,7 +92,6 @@ Instructions for deploying and configuring the testbed in different environments
 | [Deployment Phases](deployment/phases.md) | What each phase does and how to run them individually |
 | [Server / NUC Deployment](deployment/server-setup.md) | Deploy on a headless server with optimized profiles and remote access |
 | [Physical RAN Integration](deployment/physical-ran.md) | Connect a real femtocell instead of, or alongside, UERANSIM |
-| [RAN Mode Switching](deployment/ran-modes-dashboard.md) | Switch between physical and simulated RAN using the dashboard |
 
 Each deployment phase also has an implementation-focused README in its Ansible source directory:
 
@@ -172,6 +172,7 @@ Host-side utilities that complement the testbed.
 |----------|-------------|
 | [Testing Guide](development/testing.md) | Run and write the automated test suites |
 | [Contributing](development/contributing.md) | Coding standards, workflow, and PR guidelines |
+| [Dashboard Design Rules](development/dashboard-design.md) | How dashboard pages behave and look; binding for UI changes |
 
 The test suite is documented separately: [tests/README.md](https://github.com/Jacobbista/kelt/blob/main/tests/README.md).
 

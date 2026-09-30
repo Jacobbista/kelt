@@ -1,7 +1,6 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   activateUeransimGnb,
-  bringRanLinkUp,
   activateUeransimUe,
   createUeransimGnbForm,
   createUeransimUeForm,
@@ -9,19 +8,14 @@ import {
   deactivateUeransimUe,
   deleteUeransimGnb,
   deleteUeransimUe,
-  clearGnbConsole,
-  disablePhysicalModeStream,
   disableUeransimMode,
-  enablePhysicalModeStream,
   enableUeransimMode,
-  getGnbConsole,
   getRanModesStatus,
   getUeransimDefaults,
-  setGnbConsole,
 } from "../api";
-import { useOperations } from "../context/OperationsContext";
 // Loader: reusable 5G-style loader. Usage: <Loader size="sm" label="…" elapsed={sec} />
 import Loader from "./Loader";
+import useResource from "../data/useResource";
 
 function Badge({ ok, children }) {
   return (
@@ -143,139 +137,11 @@ function AddCard({ onClick }) {
   );
 }
 
-// gNB management console: expose the physical gNB's own web UI (an IP on the RAN
-// management LAN, not browser-reachable) at gnb.<base> through the dynamic apps
-// route. The operator types the appliance IP:port; KELT assumes no management
-// subnet exists, so an empty value means no surface. Self-contained: fetches and
-// mutates its own state. Behind the same Cloudflare Access perimeter as the rest.
-function GnbConsoleCard() {
-  const [state, setState] = useState(null);
-  const [host, setHost] = useState("");
-  const [port, setPort] = useState("8400");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-
-  const load = useCallback(() => {
-    getGnbConsole()
-      .then((s) => {
-        setState(s);
-        if (s?.origin) {
-          const [h, p] = String(s.origin).split(":");
-          setHost(h || "");
-          setPort(p || "8400");
-        }
-      })
-      .catch(() => {});
-  }, []);
-  useEffect(() => { load(); }, [load]);
-
-  const save = async () => {
-    setBusy(true);
-    setErr("");
-    try {
-      setState(await setGnbConsole(host.trim(), parseInt(port, 10) || 0));
-    } catch (e) {
-      setErr(String(e?.message || e));
-    } finally {
-      setBusy(false);
-    }
-  };
-  const clear = async () => {
-    setBusy(true);
-    setErr("");
-    try {
-      setState(await clearGnbConsole());
-      setHost("");
-      setPort("8400");
-    } catch (e) {
-      setErr(String(e?.message || e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="rounded-xl border border-slate-700 bg-slate-900/60 p-4">
-      <div className="mb-1 flex items-center justify-between">
-        <h3 className="font-semibold text-slate-200">gNB Management Console</h3>
-        {state?.configured
-          ? (state?.reachable === false
-              ? <Badge ok={false}>exposed · unreachable</Badge>
-              : <Badge ok>exposed{state?.reachable ? " · reachable" : ""}</Badge>)
-          : <Badge ok={false}>not exposed</Badge>}
-      </div>
-      <p className="mb-3 text-xs text-slate-400">
-        Publish the gNB/femtocell web UI at its own subdomain through the front-door.
-        Enter the appliance management address reachable from the worker (its
-        management LAN IP, not the RAN one). Reached only behind the front-door
-        perimeter (Cloudflare Access) plus the appliance's own login.
-      </p>
-      <div className="flex flex-wrap items-end gap-3">
-        <Field label="Management IP">
-          <Input value={host} onChange={setHost} placeholder="192.168.5.100" className="w-40" />
-        </Field>
-        <Field label="Port">
-          <Input value={port} onChange={setPort} placeholder="8400" className="w-24" />
-        </Field>
-        <Btn onClick={save} disabled={busy || !host.trim()}>{busy ? "Checking…" : "Expose"}</Btn>
-        {state?.configured && (
-          <Btn onClick={clear} disabled={busy} variant="danger">Remove</Btn>
-        )}
-      </div>
-      {/* Persistent hint: stays visible while typing (unlike the field placeholder). */}
-      <p className="mt-2 text-[11px] text-slate-500">
-        Example <span className="font-mono text-slate-400">192.168.5.100:8400</span> — find it in the
-        femtocell's own admin (its management interface), not the <span className="font-mono">.6</span>
-        {" "}RAN address. KELT probes it on Expose to confirm it is reachable.
-      </p>
-      {state?.url && (
-        <p className="mt-3 text-xs text-slate-400">
-          {state?.reachable === false ? "Set, but NOT reachable from KELT (check the IP/port and that the worker can reach it). " : "Reachable at "}
-          <a href={state.url} target="_blank" rel="noreferrer" className="font-mono text-teal-300 hover:underline">
-            {state.url.replace(/^https?:\/\//, "")}
-          </a>{" "}
-          (requires the apps route enabled).
-        </p>
-      )}
-      {err && <div className="mt-3 rounded border border-rose-700/50 bg-rose-950/30 px-3 py-2 text-xs text-rose-300">{err}</div>}
-    </div>
-  );
-}
-
-// Read-only cheat-sheet: the values the operator must set on the physical gNB's RAN
-// interface so it attaches to this core. All derived from KELT's own RAN config (the
-// subnet + AMF IP the dashboard already shows), so there is nothing to guess and no
-// need to open all.yml. The RAN transport is L2 bridge + worker L3 routing (no NAT),
-// so the gNB points NGAP straight at the AMF's real address.
-function GnbSideConfigCard({ subnet, gateway, amfIp, n3Subnet }) {
-  const rows = [
-    ["RAN interface IP", `a free static address in ${subnet}`],
-    ["Default gateway", gateway],
-    ["AMF / NGAP (SCTP)", `${amfIp} : 38412`],
-    ["User-plane route", `${n3Subnet} via ${gateway}`],
-  ];
-  return (
-    <div className="rounded-xl border border-slate-700 bg-slate-900/60 p-4">
-      <h3 className="mb-1 font-semibold text-slate-200">Configure on your gNB</h3>
-      <p className="mb-3 text-xs text-slate-400">
-        Set these on the physical gNB/femtocell's RAN interface so it attaches to this
-        core. They come from KELT's own config; no need to edit any file.
-      </p>
-      <div className="space-y-1.5">
-        {rows.map(([k, v]) => (
-          <div key={k} className="flex justify-between gap-3 text-xs">
-            <span className="text-slate-500">{k}</span>
-            <span className="font-mono text-slate-200 text-right">{v}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-export default function RanConfig({ activeTab = "physical" }) {
-  const ops = useOperations();
-  const [modes, setModes] = useState(null);
+// UERANSIM management (gNBs and UEs), shown by the RAN page when workloads exist.
+export default function RanConfig() {
+  // The RAN status comes from the cache the RAN page polls: no second poller.
+  const modesRes = useResource("ran-modes", getRanModesStatus);
+  const modes = modesRes.data;
   const [defaults, setDefaults] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -284,78 +150,14 @@ export default function RanConfig({ activeTab = "physical" }) {
   const [showAddGnb, setShowAddGnb] = useState(false);
   const [showAddUe, setShowAddUe] = useState(false);
 
-  const [hostNic, setHostNic] = useState("");
-  const [hostNicBound, setHostNicBound] = useState(null); // worker NIC when hostNic was last confirmed
-  const [showHostNicEdit, setShowHostNicEdit] = useState(false);
-
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem("physical_ran_host_nic");
-      if (!raw) return;
-      const data = raw.startsWith("{") ? JSON.parse(raw) : { hostNic: raw, workerNicWhenSet: null };
-      setHostNic(data.hostNic || "");
-      setHostNicBound(data.workerNicWhenSet || null);
-    } catch (_) {}
-  }, []);
-
-  const lastAppliedRef = useRef(null);
-  useEffect(() => {
-    if (!modes?.physical) return;
-    const workerNic = modes.physical.ran_interface_detected || null;
-    const applied = (modes.physical.host_nic_applied || "").trim();
-    if (applied) {
-      if (applied !== lastAppliedRef.current) {
-        lastAppliedRef.current = applied;
-        setHostNic(applied);
-        setHostNicBound(workerNic);
-        localStorage.setItem("physical_ran_host_nic", JSON.stringify({ hostNic: applied, workerNicWhenSet: workerNic }));
-      }
-    } else {
-      lastAppliedRef.current = null;
-      if (hostNicBound !== null && workerNic !== hostNicBound) {
-        setHostNic("");
-        setHostNicBound(null);
-        localStorage.removeItem("physical_ran_host_nic");
-      } else if (workerNic && hostNic.trim() && hostNicBound === null) {
-        setHostNicBound(workerNic);
-        localStorage.setItem("physical_ran_host_nic", JSON.stringify({ hostNic: hostNic.trim(), workerNicWhenSet: workerNic }));
-      }
-    }
-  }, [modes?.physical?.ran_interface_detected, modes?.physical?.host_nic_applied, hostNic, hostNicBound]);
-  const [copyFeedback, setCopyFeedback] = useState(false);
-  const [teardownCopyFeedback, setTeardownCopyFeedback] = useState(false);
-  const [reloadCopyFeedback, setReloadCopyFeedback] = useState(false);
-
   const [gnbForm, setGnbForm] = useState({ cell_id: 1, tac: 1, slices: [{ sst: 1, sd: 1 }] });
 
-  function copyToClipboard(text, setFeedback = setCopyFeedback) {
-    const done = () => { setFeedback(true); setTimeout(() => setFeedback(false), 1500); };
-    const fallback = () => {
-      const ta = document.createElement("textarea");
-      ta.value = text;
-      ta.style.position = "fixed";
-      ta.style.left = "-9999px";
-      document.body.appendChild(ta);
-      ta.select();
-      try {
-        document.execCommand("copy");
-        done();
-      } catch (_) {}
-      document.body.removeChild(ta);
-    };
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(text).then(done).catch(fallback);
-    } else {
-      fallback();
-    }
-  }
   const [ueForm, setUeForm] = useState({ gnb_name: "", apn: "internet", sst: 1, sd: 1, imsi_start: "895" });
 
   const refresh = useCallback(async () => {
     try {
       setError("");
-      const [m, d] = await Promise.all([getRanModesStatus(), getUeransimDefaults()]);
-      setModes(m);
+      const [, d] = await Promise.all([modesRes.refresh({ after: true }), getUeransimDefaults()]);
       setDefaults(d);
       setUeForm((f) => ({ ...f, gnb_name: f.gnb_name || d.gnbs?.[0]?.name || "" }));
     } catch (err) {
@@ -363,15 +165,16 @@ export default function RanConfig({ activeTab = "physical" }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [modesRes.refresh]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
   useEffect(() => {
-    if (busy || ops.busy) return;
-    const iv = setInterval(refresh, 10_000);
+    if (busy) return;
+    // Only the UERANSIM defaults poll here; the status is the page's poll.
+    const iv = setInterval(() => getUeransimDefaults().then(setDefaults).catch(() => {}), 10_000);
     return () => clearInterval(iv);
-  }, [busy, ops.busy, refresh]);
+  }, [busy, refresh]);
 
   async function action(fn) {
     setBusy(true); setError("");
@@ -387,343 +190,10 @@ export default function RanConfig({ activeTab = "physical" }) {
 
   if (loading) return <div className="flex h-64 flex-col items-center justify-center gap-4"><Loader size="lg" label="Loading RAN state…" /></div>;
 
-  const phys = modes?.physical || {};
   const sim = modes?.ueransim || {};
-  const cfg = phys?.config || {};
-  // missing | down (link not brought up) | no_carrier (nothing on the wire) | up
-  const nicState = phys?.nic_state || (phys?.bridge_detected ? "up" : "missing");
-  const nicName = phys?.ran_interface_detected || cfg.physical_ran_interface;
   const warnings = modes?.warnings || [];
   const gnbList = defaults?.gnbs || sim?.gnbs || [];
   const ueList = defaults?.ues || sim?.ues || [];
-
-  const physicalPanel = (
-    <div className="space-y-5">
-      <div className="rounded-lg border border-slate-700 bg-slate-900 p-5">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-base font-semibold text-white">Physical RAN</h3>
-          <Badge ok={phys?.enabled}>{phys?.enabled ? "ACTIVE" : "INACTIVE"}</Badge>
-        </div>
-        <div className="grid grid-cols-2 gap-3 mb-4">
-          <Badge ok={nicState === "up"}>Worker VM NIC: {nicName || "not found"}{nicState === "down" ? " (link down)" : nicState === "no_carrier" ? " (no carrier)" : ""}</Badge>
-          <Badge ok={phys?.bridge_exists}>OVS br-ran</Badge>
-          <Badge ok={phys?.nad_exists}>NAD n2-physical</Badge>
-          <Badge ok={phys?.amf_has_physical_ran}>AMF annotation</Badge>
-          {phys?.amf_has_physical_ran && <Badge ok={phys?.amf_attached_to_bridge}>AMF ↔ br-ran (data path)</Badge>}
-          {phys?.amf_has_physical_ran && <Badge ok={phys?.upf_has_return_route}>UPF return route</Badge>}
-        </div>
-        <div className="rounded bg-slate-950 p-3 space-y-1.5 mb-4">
-          <div className="flex justify-between text-xs"><span className="text-slate-500">AMF Physical IP</span><span className="text-slate-200 font-mono">{cfg.amf_physical_ran_ip}</span></div>
-          <div className="flex justify-between text-xs"><span className="text-slate-500">RAN Subnet</span><span className="text-slate-200 font-mono">{cfg.physical_ran_subnet}</span></div>
-          <div className="flex justify-between text-xs"><span className="text-slate-500">Bridge Mode</span><span className="text-slate-200">{cfg.ran_bridge_mode}</span></div>
-          {phys?.ran_interface_detected && (
-            <>
-              <div className="flex justify-between text-xs pt-1 border-t border-slate-800 mt-1">
-                <span className="text-slate-500">Worker VM NIC</span>
-                <span className="text-slate-200 font-mono">{phys.ran_interface_detected}</span>
-              </div>
-              <div className="relative flex justify-between items-center text-xs">
-                <span className="text-slate-500">Host PC NIC</span>
-                <button
-                  type="button"
-                  onClick={() => setShowHostNicEdit(true)}
-                  className={`font-mono text-right hover:text-indigo-300 transition-colors ${(phys?.host_nic_applied || hostNic).trim() ? "text-slate-200" : "text-slate-500 italic"}`}
-                >
-                  {(phys?.host_nic_applied || hostNic).trim() || "Set host adapter…"}
-                  {phys?.host_nic_applied && (
-                    <span className="ml-1.5 text-[10px] font-normal text-emerald-500/90" title="Verified: applied by vagrant reload">✓</span>
-                  )}
-                </button>
-                {showHostNicEdit && (
-                  <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={() => setShowHostNicEdit(false)}>
-                    <div className="absolute inset-0 bg-black/40" aria-hidden />
-                    <div className="relative w-full max-w-sm rounded-xl border border-slate-600 bg-slate-900 p-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
-                      <h4 className="text-sm font-medium text-white mb-3">Host PC adapter name</h4>
-                      <Input
-                        value={hostNic}
-                        onChange={setHostNic}
-                        placeholder="enx00e04c6817b7"
-                        autoFocus
-                      />
-                      <p className="mt-2 text-[11px] text-slate-500">Run <span className="font-mono text-slate-400">ip link show</span> on your host to find the adapter connected to the gNB network.</p>
-                      <div className="mt-3 rounded border border-amber-700/40 bg-amber-950/30 px-3 py-2 text-[11px] text-amber-200/90">
-                        Changing this won&apos;t take effect until you run <span className="font-mono text-amber-100">vagrant reload worker</span> with the new <span className="font-mono">PHYSICAL_RAN_BRIDGE</span> value.
-                      </div>
-                      <div className="flex justify-end gap-2 mt-4">
-                        <Btn variant="ghost" onClick={() => setShowHostNicEdit(false)}>Cancel</Btn>
-                        <Btn onClick={() => {
-                          const nic = hostNic.trim();
-                          const workerNic = phys?.ran_interface_detected || null;
-                          setHostNicBound(workerNic);
-                          localStorage.setItem("physical_ran_host_nic", JSON.stringify({ hostNic: nic, workerNicWhenSet: workerNic }));
-                          setShowHostNicEdit(false);
-                        }}>Save</Btn>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-              {phys?.host_nic_applied && hostNic.trim() && hostNic.trim() !== phys.host_nic_applied && (
-                <div className="rounded border border-amber-700/50 bg-amber-950/30 px-3 py-2.5 space-y-2 text-[11px] text-amber-200/90">
-                  <p>Stored value differs from applied. Run this on your host to apply the new interface:</p>
-                  <div className="flex gap-2 items-stretch">
-                    <div className="flex-1 rounded bg-slate-950 border border-slate-700 px-3 py-2 font-mono text-xs text-emerald-300 select-text">
-                      <span className="text-slate-500">$</span> PHYSICAL_RAN_ENABLED=true PHYSICAL_RAN_BRIDGE={hostNic.trim()} vagrant reload worker
-                    </div>
-                    <Btn
-                      variant="ghost"
-                      className="!py-1.5 !px-3 shrink-0"
-                      onClick={() => copyToClipboard(`PHYSICAL_RAN_ENABLED=true PHYSICAL_RAN_BRIDGE=${hostNic.trim()} vagrant reload worker`, setReloadCopyFeedback)}
-                    >
-                      {reloadCopyFeedback ? "Copied!" : "Copy"}
-                    </Btn>
-                  </div>
-                </div>
-              )}
-              <div className="text-[10px] text-slate-600 leading-relaxed">
-                VirtualBox bridges your host adapter into the worker VM with a different name. The ✓ means the value was verified from the last <span className="font-mono">vagrant reload</span>. Enable/Disable controls OVS + K8s on top — the NIC itself is managed by Vagrant.
-              </div>
-            </>
-          )}
-        </div>
-
-        {/* === NIC present but not passing traffic === */}
-        {(nicState === "down" || nicState === "no_carrier") && (
-          <div className="rounded border border-rose-700/50 bg-rose-950/30 p-4 mb-4 space-y-3">
-            <div className="flex items-start gap-2">
-              <span className="text-rose-400 text-sm mt-0.5">!</span>
-              <div>
-                <h4 className="text-sm font-medium text-rose-200">
-                  {nicState === "down" ? "RAN link is down on the worker" : "No carrier on the RAN link"}
-                </h4>
-                <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                  {nicState === "down" ? (
-                    <>The worker has its RAN NIC (<span className="font-mono text-slate-300">{nicName}</span>) but the link was not brought up, so the gNB cannot reach the core. </>
-                  ) : (
-                    <>The worker&apos;s RAN NIC (<span className="font-mono text-slate-300">{nicName}</span>) is up but sees nothing on the wire. Check the cable and the switch between the host NIC{phys?.host_nic_applied ? <> (<span className="font-mono text-slate-300">{phys.host_nic_applied}</span>)</> : null} and the gNB.</>
-                  )}
-                </p>
-              </div>
-            </div>
-            {nicState === "down" && (
-              <div className="flex items-center gap-3">
-                <Btn
-                  variant="primary"
-                  disabled={busy || ops.busy}
-                  onClick={() => action(async () => {
-                    const r = await bringRanLinkUp();
-                    if (!r?.ok) throw new Error(`The link is still ${r?.nic_state === "no_carrier" ? "without carrier" : (r?.nic_state || "down")} after re-running the network setup.`);
-                  })}
-                >
-                  {busy ? "Bringing the link up…" : "Bring the link up"}
-                </Btn>
-                <span className="text-[11px] text-slate-500">Re-runs the worker&apos;s network setup (the OVS script that owns this NIC), about 30 s.</span>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* === STALE CONFIG: NIC missing but K8s config remains === */}
-        {nicState === "missing" && (phys?.bridge_exists || phys?.nad_exists || phys?.amf_has_physical_ran) && (
-          <div className="rounded border border-rose-700/50 bg-rose-950/30 p-4 mb-4 space-y-3">
-            <div className="flex items-start gap-2">
-              <span className="text-rose-400 text-sm mt-0.5">!</span>
-              <div>
-                <h4 className="text-sm font-medium text-rose-200">Worker VM has no RAN interface</h4>
-                <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                  The VM was started without <span className="font-mono text-slate-300">PHYSICAL_RAN_BRIDGE</span>, but K8s still has config from a previous session
-                  ({[
-                    phys?.bridge_exists && "br-ran",
-                    phys?.nad_exists && "NAD",
-                    phys?.amf_has_physical_ran && "AMF annotation",
-                  ].filter(Boolean).join(", ")}).
-                  This won&apos;t work — the bridge has no physical port.
-                </p>
-              </div>
-            </div>
-            <div className="rounded bg-slate-950/60 p-3 text-[11px] text-slate-400 space-y-2">
-              <p><strong className="text-slate-300">Option A</strong> — Re-add the NIC and keep the config:</p>
-              {(phys?.host_nic_applied || hostNic.trim()) ? (
-                <div className="flex gap-2 items-stretch">
-                  <div className="flex-1 rounded bg-slate-950 border border-slate-700 px-3 py-2 font-mono text-xs text-emerald-300 select-text">
-                    <span className="text-slate-500">$</span> PHYSICAL_RAN_ENABLED=true PHYSICAL_RAN_BRIDGE={phys?.host_nic_applied || hostNic.trim()} vagrant reload worker
-                  </div>
-                  <Btn
-                    variant="ghost"
-                    className="!py-1.5 !px-3 shrink-0"
-                    onClick={() => copyToClipboard(`PHYSICAL_RAN_ENABLED=true PHYSICAL_RAN_BRIDGE=${phys?.host_nic_applied || hostNic.trim()} vagrant reload worker`, setReloadCopyFeedback)}
-                  >
-                    {reloadCopyFeedback ? "Copied!" : "Copy"}
-                  </Btn>
-                </div>
-              ) : (
-                <p className="text-slate-500 italic">Set your Host PC NIC first (no saved value).</p>
-              )}
-              <p className="mt-2"><strong className="text-slate-300">Option B</strong> — Clean up the stale config: click <strong className="text-rose-300">Disable</strong> below.</p>
-            </div>
-          </div>
-        )}
-
-        {/* === SETUP: no NIC detected === */}
-        {nicState === "missing" && !phys?.bridge_exists && !phys?.nad_exists && !phys?.amf_has_physical_ran && (
-          <div className="rounded border border-amber-700/50 bg-amber-950/30 p-4 mb-4 space-y-3">
-            <div className="flex items-start gap-2">
-              <span className="text-amber-400 text-sm mt-0.5">⚠</span>
-              <div>
-                <h4 className="text-sm font-medium text-amber-200">Setup required: add RAN network to worker VM</h4>
-                <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                  Physical RAN requires a USB dongle or Ethernet adapter on your <strong className="text-slate-300">host PC</strong> connected to the gNB network.
-                  Vagrant bridges this host NIC into the worker VM, where it gets a different name.
-                </p>
-              </div>
-            </div>
-            <div className="rounded bg-slate-950/60 p-3 space-y-1.5 text-[11px]">
-              <div className="flex items-center gap-3">
-                <span className="w-24 text-right font-medium text-slate-400 shrink-0">Host PC NIC</span>
-                <span className="text-slate-500">e.g. <span className="font-mono text-slate-300">enx00e04c6817b7</span> — your physical adapter, used in the vagrant command</span>
-              </div>
-              <div className="ml-[6.5rem] text-slate-600 text-[10px]">↓ VirtualBox bridges it into the VM ↓</div>
-              <div className="flex items-center gap-3">
-                <span className="w-24 text-right font-medium text-slate-400 shrink-0">Worker VM NIC</span>
-                <span className="text-slate-500">e.g. <span className="font-mono text-slate-300">enp0s9</span> — auto-detected by OVS via subnet <span className="font-mono text-slate-300">{cfg.physical_ran_subnet}</span></span>
-              </div>
-            </div>
-            <div className="space-y-2">
-              <label className="block text-xs font-medium text-slate-400">
-                Host PC adapter name <span className="text-slate-600">(run <span className="font-mono">ip link show</span> on your host)</span>
-              </label>
-              <Input
-                value={hostNic}
-                onChange={(v) => { setHostNic(v); localStorage.setItem("physical_ran_host_nic", JSON.stringify({ hostNic: v, workerNicWhenSet: null })); }}
-                placeholder="enx00e04c6817b7"
-              />
-            </div>
-            {hostNic.trim() && (
-              <div className="space-y-1.5">
-                <label className="block text-xs font-medium text-slate-400">Run on your <strong className="text-slate-300">host PC</strong> terminal (not inside VM):</label>
-                <div className="flex gap-2 items-stretch">
-                  <div className="flex-1 rounded bg-slate-950 border border-slate-700 px-3 py-2 font-mono text-xs text-emerald-300 select-text">
-                    <span className="text-slate-500">$</span> PHYSICAL_RAN_ENABLED=true PHYSICAL_RAN_BRIDGE={hostNic.trim()} vagrant reload worker
-                  </div>
-                  <Btn
-                    variant="ghost"
-                    className="!py-1.5 !px-3 shrink-0"
-                    onClick={() => copyToClipboard(`PHYSICAL_RAN_ENABLED=true PHYSICAL_RAN_BRIDGE=${hostNic.trim()} vagrant reload worker`)}
-                  >
-                    {copyFeedback ? "Copied!" : "Copy"}
-                  </Btn>
-                </div>
-                <p className="text-[10px] text-slate-600">This restarts the worker VM with a bridged NIC. OVS will auto-detect it and create br-ran. This page auto-refreshes every 10s.</p>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* === TEARDOWN HINT: NIC present but disabled === */}
-        {nicState !== "missing" && !phys?.enabled && !phys?.bridge_exists && !phys?.nad_exists && !phys?.amf_has_physical_ran && (
-          <div className="rounded border border-slate-600/50 bg-slate-900/50 p-3 mb-4 text-xs text-slate-500 space-y-2">
-            <p>
-              <strong className="text-slate-400">Physical RAN is disabled</strong> but the worker VM still has the RAN NIC (<span className="font-mono text-slate-300">{phys.ran_interface_detected}</span>).
-              This is normal — Enable/Disable controls the OVS bridge and K8s config, not the VM hardware. The NIC is harmless when idle.
-            </p>
-            <p>
-              To fully remove it, run on your host:{" "}
-              <button
-                type="button"
-                onClick={() => copyToClipboard("vagrant reload worker", setTeardownCopyFeedback)}
-                title="Click to copy"
-                className={`font-mono px-2 py-0.5 rounded border transition-all duration-200 select-text ${
-                  teardownCopyFeedback
-                    ? "border-emerald-500/70 bg-emerald-500/20 text-emerald-300"
-                    : "border-slate-600 text-slate-300 hover:border-slate-500 hover:bg-slate-800/50 cursor-pointer"
-                }`}
-              >
-                {teardownCopyFeedback ? "Copied!" : "vagrant reload worker"}
-              </button>{" "}
-              (without PHYSICAL_RAN_ENABLED).
-            </p>
-          </div>
-        )}
-        <div className="flex gap-3">
-          <Btn
-            onClick={() => {
-              setError("");
-              ops.run("ran-enable", "Enabling Physical RAN", enablePhysicalModeStream, (result, err) => {
-                if (err) setError(err);
-                else if (result?.error) setError(result.error);
-                refresh();
-              });
-            }}
-            disabled={ops.busy || busy || nicState === "missing"}
-            title={nicState === "missing" ? "Worker VM NIC not found — re-add it with vagrant reload" : undefined}
-          >
-            {phys?.enabled ? "Reconfigure" : "Enable Physical"}
-          </Btn>
-          <Btn
-            variant="danger"
-            onClick={() => {
-              setError("");
-              ops.run("ran-disable", "Disabling Physical RAN", disablePhysicalModeStream, (result, err) => {
-                if (err) setError(err);
-                refresh();
-              });
-            }}
-            disabled={ops.busy || busy || !(phys?.enabled || phys?.amf_has_physical_ran || phys?.nad_exists)}
-          >
-            Disable
-          </Btn>
-        </div>
-        {ops.current && (ops.current.id === "ran-enable" || ops.current.id === "ran-disable") && (
-          <div className="mt-4 rounded border border-slate-600 bg-slate-950/50 p-3">
-            <div className="flex items-center justify-between mb-2">
-              <h4 className="text-xs font-medium text-slate-400">
-                {ops.current.id === "ran-disable" ? "Deactivation progress" : "Activation progress"}
-              </h4>
-              <button type="button" onClick={ops.dismiss} className="text-slate-500 hover:text-slate-300 text-xs disabled:opacity-50" disabled={ops.busy}>Dismiss</button>
-            </div>
-            {ops.busy && (
-              <div className="mb-3 flex items-center gap-4">
-                <Loader size="sm" label={ops.current.progress?.step === "starting" ? "Starting…" : undefined} elapsed={ops.elapsed} />
-                {ops.current.progress && ops.current.progress.step !== "starting" && (
-                  <div className="flex-1 rounded bg-indigo-950/40 border border-indigo-600/30 px-3 py-2 text-xs text-indigo-200">
-                    <span className="font-mono text-indigo-300">{ops.current.progress.step}</span>
-                    {ops.current.progress.message && <span className="ml-2 text-slate-300">— {ops.current.progress.message}</span>}
-                  </div>
-                )}
-              </div>
-            )}
-            {ops.current.error && (
-              <p className="mb-2 text-xs text-rose-400">{ops.current.error}</p>
-            )}
-            <ul className="space-y-1.5 text-xs">
-              {(ops.current.steps || []).map((s, i) => {
-                const ok = s.status?.startsWith("ok");
-                const warn = s.status === "warning" || s.status === "skipped";
-                return (
-                  <li key={i} className="flex flex-col gap-1">
-                    <div className="flex items-center gap-2">
-                      <span className={ok ? "text-emerald-500" : warn ? "text-amber-400" : "text-slate-500"}>
-                        {ok ? "✓" : warn ? "⚠" : "○"}
-                      </span>
-                      <span className="text-slate-300 font-mono">{s.step}</span>
-                      <span className="text-slate-500">({s.status})</span>
-                    </div>
-                    {s.hint && (
-                      <p className="ml-5 text-[11px] text-amber-400/90 leading-relaxed">{s.hint}</p>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        )}
-      </div>
-      <div className="grid gap-5 lg:grid-cols-2">
-        <GnbSideConfigCard subnet={cfg.physical_ran_subnet} gateway={cfg.physical_ran_gateway} amfIp={cfg.amf_physical_ran_ip} n3Subnet={cfg.n3_subnet} />
-        <GnbConsoleCard />
-      </div>
-    </div>
-  );
 
   const ueransimPanel = (
     <div className="flex gap-6">
@@ -875,7 +345,7 @@ export default function RanConfig({ activeTab = "physical" }) {
           Physical RAN and UERANSIM both active (coexistence).
         </div>
       )}
-      {activeTab === "physical" ? physicalPanel : ueransimPanel}
+      {ueransimPanel}
     </div>
   );
 }

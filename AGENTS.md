@@ -55,7 +55,10 @@ Inside a VM, Kubernetes is K3s: use `sudo k3s kubectl`, never plain `kubectl`.
 Breaking any of these breaks a deployment in a way that is slow to diagnose.
 
 - Never hardcode an IP, version, port, or image name in a role, template, or
-  source file. Declare it once in `ansible/group_vars/all.yml` and reference it.
+  source file. The testbed's plan (subnets, addresses, versions, images, the
+  ports the testbed exposes) is declared once in `ansible/group_vars/all.yml`.
+  An NF implementation's own ports are declared once where the NF is wired
+  (`nf_deployments`, named on the pod); code reads them by name.
 - Gate every edge-specific task on the edge toggle; the testbed must stay
   deployable with no edge node.
 - `automountServiceAccountToken: false` is required on edge pod specs, and the
@@ -74,7 +77,12 @@ Breaking any of these breaks a deployment in a way that is slow to diagnose.
 Coding standards, phase layout, template rules, documentation tone, and the
 commit and release workflow live in
 [docs/development/contributing.md](docs/development/contributing.md). Read it
-before editing Ansible, the dashboard, or the CLI.
+before editing Ansible, the dashboard, or the CLI. Anything the dashboard changes
+on the testbed is a piece of the playbooks run by `ansible/tools/kelt-piece`
+(contributing.md, "Pieces"); nothing new calls `ansible-playbook` directly.
+Before changing the dashboard UI, read
+[docs/development/dashboard-design.md](docs/development/dashboard-design.md);
+its rules are binding.
 
 Commits follow Conventional Commits with a one-line subject. Do not add
 co-author trailers.

@@ -1,0 +1,538 @@
+#!/usr/bin/env python3
+"""kelt-piece: run a named piece of the playbooks and record it.
+
+The only thing that runs a piece (ansible/pieces.yml), from the CLI (`kelt
+run-piece`) and from the dashboard alike: the same environment as `kelt
+run-phase`, one lock per piece, one record per run under ~/.kelt/operations.
+See docs/development/contributing.md "Pieces".
+"""
+import argparse
+import datetime as dt
+import fcntl
+import gzip
+import json
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import yaml
+
+HOME = Path.home()
+OPS = Path(os.environ.get("KELT_OPS_DIR", HOME / ".kelt" / "operations"))
+PIECES = Path(os.environ.get("KELT_PIECES_FILE", HOME / "ansible-ro" / "pieces.yml"))
+ENV_FILE = Path(os.environ.get("KELT_ENV_FILE", "/vagrant/.testbed.env"))
+SECRETS_FILE = Path(os.environ.get("KELT_SECRETS_FILE", "/vagrant/.testbed.secrets"))
+ANSIBLE_DIR = Path(os.environ.get("KELT_ANSIBLE_DIR", HOME / "ansible-ro"))
+PLAYBOOK_BIN = os.environ.get("KELT_ANSIBLE_PLAYBOOK", str(HOME / ".local" / "bin" / "ansible-playbook"))
+NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,40}$")
+ID_RE = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9]{6}-[a-z][a-z0-9_]{0,40}$")
+RUNNER = Path(__file__).resolve()
+TASK_RE = re.compile(r"^TASK \[(.+?)\]")
+WORD_RE = re.compile(r"^[a-z]{2,20}$")
+
+
+def now_iso():
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def validate(reg):
+    for name, p in reg.items():
+        if not NAME_RE.match(name):
+            raise ValueError(f"piece name {name!r} is not allowed")
+        runs = p.get("runs")
+        if not runs or not all(r.get("phase") and r.get("tags") for r in runs):
+            raise ValueError(f"{name}: runs needs phase and tags")
+        if not all(r.get("phase") and r.get("tags") for r in p.get("precheck") or []):
+            raise ValueError(f"{name}: precheck needs phase and tags")
+        if p.get("tier") not in ("change", "disrupt"):
+            raise ValueError(f"{name}: tier must be change or disrupt")
+        if p["tier"] == "disrupt" and not p.get("stops"):
+            raise ValueError(f"{name}: a disrupt piece must say what it stops")
+        for k in ("title", "changes"):
+            if not p.get(k):
+                raise ValueError(f"{name}: {k} is required")
+        if "lock" in p and not NAME_RE.match(str(p["lock"] or "")):
+            raise ValueError(f"{name}: lock must be a name like a piece's")
+        if "confirm_word" in p and not WORD_RE.match(str(p["confirm_word"] or "")):
+            raise ValueError(f"{name}: confirm_word must be one lowercase word")
+    return reg
+
+
+def lock_key(name, p):
+    """The lock a piece takes: its group's (`lock`, e.g. every RAN piece shares
+    `ran`, so two of them never run at once) or its own name."""
+    return p.get("lock") or name
+
+
+def lock_key_of(name):
+    """lock_key for a piece named in a record; the name itself when the
+    registry cannot be read or no longer has it."""
+    try:
+        return lock_key(name, registry().get(name) or {})
+    except (OSError, ValueError, yaml.YAMLError):
+        return name
+
+
+def registry():
+    return validate(yaml.safe_load(PIECES.read_text()) or {})
+
+
+def piece(name):
+    if not NAME_RE.match(name or ""):
+        sys.exit(f"kelt-piece: invalid piece name {name!r}")
+    reg = registry()
+    if name not in reg:
+        sys.exit(f"kelt-piece: unknown piece {name!r} (known: {', '.join(sorted(reg))})")
+    return reg[name]
+
+
+def read_env(path):
+    out = {}
+    if path.exists():
+        for ln in path.read_text().splitlines():
+            ln = ln.strip()
+            if ln.startswith("export "):
+                ln = ln[len("export "):].lstrip()
+            if ln and not ln.startswith("#") and "=" in ln:
+                k, v = ln.split("=", 1)
+                out[k.strip()] = v.strip().strip('"').strip("'")
+    return out
+
+
+def write_env_keys(path, keys):
+    """Set keys in .testbed.env: one writer at a time (every piece shares the
+    file), replaced atomically so a reader never sees half a file. The version
+    it replaces is kept as <file>.prev, like the CLI (kelt restore env)."""
+    ops_dir()
+    with open(OPS / ".env.lock", "w") as guard:
+        fcntl.flock(guard, fcntl.LOCK_EX)
+        lines = path.read_text().splitlines() if path.exists() else []
+        seen = set()
+        for i, ln in enumerate(lines):
+            k = ln.split("=", 1)[0].strip()
+            if k in keys:
+                lines[i] = f"{k}={keys[k]}"
+                seen.add(k)
+        lines += [f"{k}={v}" for k, v in keys.items() if k not in seen]
+        text = "\n".join(lines) + "\n"
+        if path.exists() and path.read_text() == text:
+            return
+        tmp = path.with_name(f".{path.name}.kelt-piece.tmp")
+        tmp.write_text(text)
+        if path.exists():
+            os.chmod(tmp, path.stat().st_mode & 0o777)
+            prev = path.with_name(f".{path.name}.prev.kelt-piece.tmp")
+            shutil.copy2(path, prev)
+            os.replace(prev, path.with_name(f"{path.name}.prev"))
+        os.replace(tmp, path)
+
+
+def ops_dir():
+    """The records directory, private to the user (logs are ansible output)."""
+    OPS.mkdir(parents=True, exist_ok=True)
+    os.chmod(OPS, 0o700)
+
+
+def lock(name, ops=None):
+    if ops is None:
+        ops_dir()
+    fd = os.open((ops or OPS) / f".{name}.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        return None
+    return fd
+
+
+def save(rec):
+    tmp = OPS / f".{rec['id']}.json.tmp"
+    tmp.write_text(json.dumps(rec, indent=1))
+    tmp.replace(OPS / f"{rec['id']}.json")
+
+
+def holds(name, rid, ops=None):
+    """True while the run `rid` holds its piece's lock: exact, unlike a pid,
+    which the system can hand to another process."""
+    if not NAME_RE.match(name or ""):
+        return False
+    fd = lock(name, ops)
+    if fd is not None:
+        os.close(fd)
+        return False
+    return running_id(name, ops) == rid
+
+
+def load_records():
+    out = []
+    for p in sorted(OPS.glob("*.json"), reverse=True):
+        try:
+            rec = json.loads(p.read_text())
+        except (OSError, ValueError):
+            continue
+        if rec.get("state") == "running" and not holds(lock_key_of(rec.get("piece", "")), rec.get("id")):
+            rec["state"] = "interrupted"
+        out.append(rec)
+    return out
+
+
+def running_id(name, ops=None):
+    """The id of the run holding the piece's lock: written into the lock file
+    as soon as the lock is taken, so it is known before the record exists."""
+    try:
+        return ((ops or OPS) / f".{name}.lock").read_text().strip() or None
+    except OSError:
+        return None
+
+
+def prune(ops_dir, max_age_days, max_mb, keep=None):
+    """Delete the oldest finished records until both limits hold; never a
+    running one, nor `keep` (the run that just ended)."""
+    groups = {}
+    for p in ops_dir.iterdir():
+        if p.name.startswith("."):
+            continue
+        rid = p.name.split(".")[0]
+        groups.setdefault(rid, []).append(p)
+    finished = []
+    for rid, files in groups.items():
+        js = ops_dir / f"{rid}.json"
+        try:
+            rec = json.loads(js.read_text())
+        except (OSError, ValueError):
+            rec = {}
+        if rid == keep or (rec.get("state") == "running" and holds(lock_key_of(rec.get("piece", "")), rid, ops_dir)):
+            continue
+        mtime = max(f.stat().st_mtime for f in files)
+        finished.append((mtime, rid, files))
+    finished.sort()
+    cutoff = time.time() - max_age_days * 86400
+    total = sum(f.stat().st_size for fs in groups.values() for f in fs)
+    for mtime, rid, files in finished:
+        if mtime >= cutoff and total <= max_mb * 1024 * 1024:
+            break
+        for f in files:
+            total -= f.stat().st_size
+            f.unlink(missing_ok=True)
+
+
+def run_all(runs, p, env, log, rec, source, lock_fd):
+    """Run each {phase, tags} in order; the first non-zero exit stops it."""
+    code = 0
+    for run in runs:
+        cmd = [PLAYBOOK_BIN, f"phases/{run['phase']}/playbook.yml",
+               "-e", f"dashboard_dev_enabled={env.get('DASHBOARD_DEV_ENABLED', 'false')}",
+               "--tags", ",".join(run["tags"])]
+        for k, v in (p.get("extra_vars") or {}).items():
+            cmd += ["-e", f"{k}={v}"]
+        log.write(f"$ {' '.join(shlex.quote(c) for c in cmd)}\n")
+        # ansible-playbook inherits the lock: if only the runner dies,
+        # the piece stays locked until the playbook ends too.
+        proc = subprocess.Popen(cmd, cwd=ANSIBLE_DIR, env=env, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, bufsize=1,
+                                pass_fds=(lock_fd,) if lock_fd is not None else ())
+        for line in proc.stdout:
+            log.write(line)
+            log.flush()
+            if source == "cli":
+                sys.stdout.write(line)
+            m = TASK_RE.match(line)
+            if m:
+                rec["steps"].append(m.group(1))
+                save(rec)
+        code = proc.wait()
+        if code != 0:
+            break
+    return code
+
+
+def execute(name, p, source, user, rid, lock_fd=None):
+    """Run the piece's playbooks; the caller holds the piece lock throughout.
+
+    Whatever happens, the run ends with a record that says how (done, failed
+    with the playbook's exit code, or failed with the runner's own error) and
+    with its log compressed."""
+    rec = {"id": rid, "piece": name, "title": p["title"], "source": source, "user": user,
+           "pid": os.getpid(), "started": now_iso(), "ended": None, "exit": None,
+           "state": "running", "steps": [], "runs": p["runs"]}
+    save(rec)
+    log_path = OPS / f"{rid}.log"
+    code = 1
+    try:
+        with open(log_path, "w") as log:
+            # precheck: read-only plays that can refuse the piece before
+            # anything changes, set_env included (e.g. no RAN adapter).
+            code = 0
+            for stage, runs in (("precheck", p.get("precheck") or []), ("runs", p["runs"])):
+                if stage == "runs" and p.get("set_env"):
+                    write_env_keys(ENV_FILE, {k: str(v) for k, v in p["set_env"].items()})
+                env = {**os.environ, **read_env(ENV_FILE), **read_env(SECRETS_FILE)}
+                code = run_all(runs, p, env, log, rec, source, lock_fd)
+                if code != 0:
+                    break
+        rec.update(exit=code, state="done" if code == 0 else "failed")
+    except Exception as exc:  # noqa: BLE001 - the record must say why the run stopped
+        rec.update(exit=None, state="failed", error=f"{type(exc).__name__}: {exc}")
+        code = 1
+    finally:
+        rec["ended"] = now_iso()
+        save(rec)
+        if log_path.exists():
+            with open(log_path, "rb") as src, gzip.open(OPS / f"{rid}.log.gz", "wb") as dst:
+                dst.write(src.read())
+            log_path.unlink()
+        else:
+            with gzip.open(OPS / f"{rid}.log.gz", "wb"):
+                pass
+        try:
+            limits = retention_values()
+            prune(OPS, limits["max_age_days"], limits["max_mb"], keep=rid)
+        except (OSError, ValueError):
+            pass
+    return code
+
+
+def new_id(name):
+    return f"{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d-%H%M%S-%f')}-{name}"
+
+
+def cmd_run(a):
+    p = piece(a.name)
+    why = unconfirmed(a.name, p, a.confirm)
+    if why:
+        print(f"kelt-piece: {why}", file=sys.stderr)
+        sys.exit(64)
+    rid = a.id or new_id(a.name)
+    if not ID_RE.match(rid):
+        sys.exit(f"kelt-piece: invalid operation id {rid!r}")
+    key = lock_key(a.name, p)
+    fd = lock(key)
+    if fd is None:
+        print(f"kelt-piece: {busy_text(a.name, running_id(key))}", file=sys.stderr)
+        sys.exit(75)
+    os.ftruncate(fd, 0)
+    os.write(fd, rid.encode())
+    code = execute(a.name, p, a.source, a.user, rid, lock_fd=fd)
+    os.close(fd)
+    sys.exit(code)
+
+
+def launch_command(name, rid, user, confirm=None):
+    """A run started by the dashboard, as a transient system unit of its own:
+    outside the backend's cgroup, so a backend restart does not kill it, with
+    a plain environment (the run loads .testbed.env and the secrets itself)."""
+    import pwd
+    me = pwd.getpwuid(os.getuid())
+    return ["sudo", "-n", "systemd-run", f"--unit=kelt-piece-{rid}", f"--uid={os.getuid()}",
+            f"--gid={os.getgid()}", "--collect", "--quiet",
+            f"--setenv=HOME={me.pw_dir}", f"--setenv=USER={me.pw_name}", "--setenv=LANG=C.UTF-8",
+            "--setenv=PATH=/usr/local/bin:/usr/bin:/bin",
+            "--", sys.executable, str(RUNNER), "run", name, "--source", "dashboard",
+            f"--user={user}", f"--id={rid}"] + ([f"--confirm={confirm}"] if confirm else [])
+
+
+def unconfirmed(name, p, given):
+    """Why a piece with a confirm_word cannot run without it (None when it may).
+    The runner checks it, so the dashboard, the API and the CLI cannot skip it."""
+    word = p.get("confirm_word")
+    if word and (given or "").strip().lower() != word:
+        return f"{name} cuts devices off: it runs only when confirmed with the word '{word}'"
+    return None
+
+
+def piece_of(rid):
+    """The piece named in an operation id (its last part)."""
+    return (rid or "").split("-", 3)[-1] if ID_RE.match(rid or "") else ""
+
+
+def busy_text(name, other):
+    holder = piece_of(other)
+    if holder in ("", name):
+        return f"{name} is already running ({other})"
+    try:
+        title = registry().get(holder, {}).get("title") or holder
+    except (OSError, ValueError, yaml.YAMLError):
+        title = holder
+    return f"{title} is running ({other}); {name} shares its lock and waits for it to end"
+
+
+def busy_answer(name, other):
+    """The same piece already running: its id, to follow it. Another piece of
+    the lock group: refused, naming it."""
+    if piece_of(other) in ("", name):
+        return {"id": other, "state": "running"}
+    return {"id": None, "state": "failed", "error": busy_text(name, other)}
+
+
+def cmd_start(a):
+    """Start a run for the dashboard and answer at once with its id, or with
+    the id of the run already holding the piece."""
+    p = piece(a.name)  # refuses an unknown or malformed name first
+    why = unconfirmed(a.name, p, a.confirm)
+    if why:
+        print(json.dumps({"id": None, "state": "failed", "error": why}))
+        return
+    key = lock_key(a.name, p)
+    fd = lock(key)
+    if fd is None:
+        print(json.dumps(busy_answer(a.name, running_id(key))))
+        return
+    os.close(fd)  # only a probe: the run takes the lock itself
+    rid = new_id(a.name)
+    mode = os.environ.get("KELT_LAUNCH", "systemd")
+    try:
+        if mode == "direct":  # tests: a plain detached process
+            subprocess.Popen([sys.executable, str(RUNNER), "run", a.name, "--source", a.source,
+                              f"--user={a.user}", f"--id={rid}"] + ([f"--confirm={a.confirm}"] if a.confirm else []),
+                             start_new_session=True,
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif mode == "systemd":
+            subprocess.run(launch_command(a.name, rid, a.user, a.confirm), check=True, capture_output=True, text=True)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        detail = getattr(exc, "stderr", "") or str(exc)
+        print(json.dumps({"id": rid, "state": "failed", "error": f"could not start: {detail.strip()}"}))
+        return
+    deadline = time.time() + float(os.environ.get("KELT_START_WAIT_S", "10"))
+    while time.time() < deadline:
+        if (OPS / f"{rid}.json").exists():
+            print(json.dumps({"id": rid, "state": "started"}))
+            return
+        held = lock(key)
+        if held is None:
+            other = running_id(key)
+            if other and other != rid:  # another start won the lock first
+                print(json.dumps(busy_answer(a.name, other)))
+                return
+        else:
+            os.close(held)
+        time.sleep(0.1)
+    print(json.dumps({"id": rid, "state": "failed", "error": "the runner did not start"}))
+
+
+def cmd_pieces(a):
+    reg = registry()
+    public = {n: {k: p.get(k) for k in ("title", "tier", "changes", "stops", "takes_s", "confirm_word")}
+              for n, p in reg.items()}
+    if a.json:
+        print(json.dumps(public))
+        return
+    for n, p in public.items():
+        print(f"{n:14} {p['tier']:8} {p['title']}")
+
+
+def cmd_list(a):
+    recs = load_records()
+    if a.state:
+        recs = [r for r in recs if r.get("state") == a.state]
+    if a.json:
+        print(json.dumps(recs[: a.limit]))
+        return
+    for r in recs[: a.limit]:
+        print(f"{r.get('started', '')}  {r.get('state', ''):11}  {r.get('piece', ''):14}  {r.get('source', '')}  {r['id']}")
+
+
+def cmd_show(a):
+    rec = next((r for r in load_records() if r["id"] == a.id), None)
+    if not rec:
+        sys.exit(f"kelt-piece: no operation {a.id!r}")
+    tail = ""
+    for path in (OPS / f"{a.id}.log", OPS / f"{a.id}.log.gz"):
+        if path.exists():
+            data = gzip.decompress(path.read_bytes()) if path.suffix == ".gz" else path.read_bytes()
+            tail = "\n".join(data.decode(errors="replace").splitlines()[-a.log_tail:])
+            break
+    print(json.dumps({**rec, "log_tail": tail}))
+
+
+LIMITS = {"max_age_days": ("KELT_OPS_MAX_AGE_DAYS", 30, 1, 3650), "max_mb": ("KELT_OPS_MAX_MB", 50, 1, 10240)}
+
+
+def retention_values():
+    """The record's two limits from the env file; the default when a value is
+    unset, not a number, or outside its bounds (a hand edit to 0 would prune
+    every record)."""
+    env = read_env(ENV_FILE)
+    out = {}
+    for key, (var, default, lo, hi) in LIMITS.items():
+        try:
+            value = int(env.get(var, default))
+        except ValueError:
+            value = default
+        out[key] = value if lo <= value <= hi else default
+    return out
+
+
+def cmd_retention(a):
+    changes = {}
+    for key, raw in (("max_age_days", a.max_age_days), ("max_mb", a.max_mb)):
+        if raw is None:
+            continue
+        var, _default, lo, hi = LIMITS[key]
+        try:
+            value = int(raw)
+        except ValueError:
+            print(f"kelt-piece: {key} must be a whole number, got {raw!r}", file=sys.stderr)
+            sys.exit(2)
+        if not lo <= value <= hi:
+            print(f"kelt-piece: {key} must be between {lo} and {hi}, got {value}", file=sys.stderr)
+            sys.exit(2)
+        changes[var] = str(value)
+    if changes:
+        write_env_keys(ENV_FILE, changes)
+    vals = retention_values()
+    print(json.dumps(vals) if a.json else f"max age {vals['max_age_days']} days, max size {vals['max_mb']} MB")
+
+
+def cmd_usage(a):
+    ops_dir()
+    files = [p for p in OPS.iterdir() if not p.name.startswith(".")]
+    records = [p for p in files if p.suffix == ".json"]
+    started = []
+    for p in records:
+        try:
+            started.append(json.loads(p.read_text()).get("started"))
+        except (OSError, ValueError):
+            pass
+    started = sorted(s for s in started if s)
+    out = {"runs": len(records), "bytes": sum(p.stat().st_size for p in files), "oldest": started[0] if started else None}
+    print(json.dumps(out) if a.json else f"{out['runs']} runs, {out['bytes']} bytes, oldest {out['oldest'] or '-'}")
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="kelt-piece")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    for c in ("run", "start"):
+        s = sub.add_parser(c)
+        s.add_argument("name")
+        s.add_argument("--source", default="cli", choices=["cli", "dashboard"])
+        s.add_argument("--user", default=os.environ.get("USER", ""))
+        s.add_argument("--confirm")
+        if c == "run":
+            s.add_argument("--id")
+    s = sub.add_parser("pieces")
+    s.add_argument("--json", action="store_true")
+    s = sub.add_parser("list")
+    s.add_argument("--state")
+    s.add_argument("--json", action="store_true")
+    s.add_argument("--limit", type=int, default=50)
+    s = sub.add_parser("show")
+    s.add_argument("id")
+    s.add_argument("--log-tail", type=int, default=40)
+    s = sub.add_parser("usage")
+    s.add_argument("--json", action="store_true")
+    s = sub.add_parser("retention")
+    s.add_argument("--max-age-days")
+    s.add_argument("--max-mb")
+    s.add_argument("--json", action="store_true")
+    a = ap.parse_args()
+    {"run": cmd_run, "start": cmd_start, "pieces": cmd_pieces, "list": cmd_list, "show": cmd_show,
+     "usage": cmd_usage, "retention": cmd_retention}[a.cmd](a)
+
+
+if __name__ == "__main__":
+    main()

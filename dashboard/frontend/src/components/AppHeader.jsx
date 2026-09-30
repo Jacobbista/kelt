@@ -8,6 +8,7 @@ import { env } from "../runtime-env";
 import TimeSyncPopover from "./TimeSyncPopover";
 import AccountMenu, { Avatar, roleBadge } from "./AccountMenu";
 import StatusPopover from "./StatusPopover";
+import OperationsIndicator from "./OperationsIndicator";
 import { IconRefresh } from "./icons";
 
 // Above every page: where you are (breadcrumb), then what holds for the whole
@@ -147,6 +148,8 @@ export default function AppHeader({ runtime, serverTime }) {
             onOpenHealth={() => { setShowStatus(false); navigate("/network/health"); }}
           />
         )}
+        {/* Admins only: the operations API is admin-only. */}
+        {authReady && isAdmin && <OperationsIndicator />}
         {/* Stays until the update is applied: a state, not a notification. */}
         {authReady && isAdmin && available.length > 0 && (
           <button

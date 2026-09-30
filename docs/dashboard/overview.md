@@ -171,5 +171,4 @@ See [Dashboard Modules](modules.md) for full details on each module.
 
 - [Dashboard Modules](modules.md): detailed feature description for each module
 - [API Reference](api-reference.md): full REST and WebSocket endpoint listing
-- [RAN Modes](../deployment/ran-modes-dashboard.md): how to switch between physical and simulated RAN
 - [Deployment Phases](../deployment/phases.md#phase-9-dashboard-control-plane): Phase 9 detail

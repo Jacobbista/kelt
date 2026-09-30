@@ -6,7 +6,6 @@ API (same approach as ``ue_service._exec_in_pod``).
 """
 
 import ipaddress
-import json
 import logging
 import re
 import subprocess
@@ -18,7 +17,7 @@ from typing import Any
 from kubernetes.stream import stream
 
 from app.config import settings
-from app.services.k8s_service import K8sService, thread_core
+from app.services.k8s_service import K8sService, nf_api_get, thread_core
 from app.services.network_plan import load_plan, plan_value
 
 log = logging.getLogger(__name__)
@@ -86,38 +85,9 @@ def _find_pod(core, app: str) -> tuple[str, str] | None:
     return None
 
 
-def _nf_api_get(core, app: str, port: int, path: str) -> dict[str, Any]:
+def _nf_api_get(core, app: str, port: int | str, path: str) -> dict[str, Any]:
     """Call NF management HTTP endpoint via K8s API server pod proxy."""
-    try:
-        pods = core.list_namespaced_pod(namespace=NS, label_selector=f"app={app}")
-        running = [p for p in pods.items if p.status.phase == "Running"
-                   and not p.metadata.deletion_timestamp]
-        if not running:
-            return {}
-        pod_name = running[0].metadata.name
-        parts = path.split("?", 1)
-        api_path = f"/api/v1/namespaces/{NS}/pods/{pod_name}:{port}/proxy/{parts[0]}"
-        query_params: list[tuple[str, str]] = []
-        if len(parts) > 1:
-            for kv in parts[1].split("&"):
-                if "=" in kv:
-                    k, v = kv.split("=", 1)
-                    query_params.append((k, v))
-        resp = core.api_client.call_api(
-            api_path, "GET",
-            query_params=query_params,
-            header_params={"Accept": "application/json"},
-            auth_settings=[],
-            _preload_content=False,
-            _return_http_data_only=True,
-        )
-        return json.loads(resp.read().decode("utf-8"))
-    except Exception as exc:
-        log.debug("_nf_api_get %s/%s: %s", app, path, exc)
-        return {}
-
-
-
+    return nf_api_get(core, NS, app, port, path)
 
 
 class NetworkHealthService:
@@ -320,7 +290,7 @@ class NetworkHealthService:
         result = {"interface": "N2", "bridge": "br-n2", "status": "unknown", "detail": "", "latency_ms": None}
         # N2 check via AMF gnb-info (K8s API proxy, thread-safe client).
         # A connected gNB with setup_success=true confirms N2/NGAP is operational.
-        data = _nf_api_get(thread_core(), "amf", 9090, "gnb-info")
+        data = _nf_api_get(thread_core(), "amf", "metrics", "gnb-info")
         gnbs = data.get("items", [])
         connected = [g for g in gnbs if g.get("ng", {}).get("setup_success")]
         if not data:
@@ -369,7 +339,7 @@ class NetworkHealthService:
         Active PDU sessions confirm PFCP is operational.
         N4 IP pool is fully allocated to NFs so ping is not viable."""
         result = {"interface": "N4", "bridge": "br-n4", "status": "unknown", "detail": "", "latency_ms": None}
-        data = _nf_api_get(thread_core(), "smf", 9090, "pdu-info?page=0&page_size=1")
+        data = _nf_api_get(thread_core(), "smf", "metrics", "pdu-info?page=0&page_size=1")
         if not data:
             result["status"] = "error"
             result["detail"] = "SMF pdu-info unreachable"

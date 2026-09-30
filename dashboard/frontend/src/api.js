@@ -170,99 +170,16 @@ export const clearGnbConsole = () => del("/api/v1/apps/gnb/console");
 
 // RAN
 export const getRanStatus = () => get("/api/v1/ran/status");
-export const enableRan = () => post("/api/v1/ran/enable", {});
-export const disableRan = () => post("/api/v1/ran/disable", {});
 export const getRanModesStatus = () => get("/api/v1/ran/modes/status");
-export const enablePhysicalMode = () => post("/api/v1/ran/modes/physical/enable", {});
-
-/**
- * Enable physical RAN with streaming progress. Calls onProgress for each event.
- * Resolves with the final result, rejects on error.
- */
-export async function enablePhysicalModeStream(onProgress) {
-  const res = await fetch(`/api/v1/ran/modes/physical/enable/stream`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ..._authHeader() },
-  });
-  if (!res.ok) throw new Error(`Enable failed: ${res.status}`);
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let result = null;
-  let errMsg = null;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const ev = JSON.parse(line);
-        if (ev.result) result = ev.result;
-        else if (ev.error) errMsg = ev.error;
-        else if (onProgress) onProgress(ev);
-      } catch (_) {}
-    }
-  }
-  if (buffer.trim()) {
-    try {
-      const ev = JSON.parse(buffer);
-      if (ev.result) result = ev.result;
-      else if (ev.error) errMsg = ev.error;
-      else if (onProgress) onProgress(ev);
-    } catch (_) {}
-  }
-  if (errMsg) throw new Error(errMsg);
-  return result;
-}
-
-/**
- * Disable physical RAN with streaming progress. Calls onProgress for each event.
- */
-export async function disablePhysicalModeStream(onProgress) {
-  const res = await fetch(`/api/v1/ran/modes/physical/disable/stream`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ..._authHeader() },
-  });
-  if (!res.ok) throw new Error(`Disable failed: ${res.status}`);
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let result = null;
-  let errMsg = null;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const ev = JSON.parse(line);
-        if (ev.result) result = ev.result;
-        else if (ev.error) errMsg = ev.error;
-        else if (onProgress) onProgress(ev);
-      } catch (_) {}
-    }
-  }
-  if (buffer.trim()) {
-    try {
-      const ev = JSON.parse(buffer);
-      if (ev.result) result = ev.result;
-      else if (ev.error) errMsg = ev.error;
-      else if (onProgress) onProgress(ev);
-    } catch (_) {}
-  }
-  if (errMsg) throw new Error(errMsg);
-  return result;
-}
-
-export const disablePhysicalMode = () => post("/api/v1/ran/modes/physical/disable", {});
-// Re-runs the OVS setup that owns the worker's RAN NIC and waits for the link.
-export const bringRanLinkUp = () => post("/api/v1/ran/modes/physical/link-up", {});
+// Pieces (ansible/pieces.yml) and their operations, run by the runner on the ansible VM.
+export const getPieces = () => get("/api/v1/pieces");
+// `confirm`: the word typed for a piece with a confirm_word (the runner checks it).
+export const runPiece = (name, confirm) => post(`/api/v1/pieces/${encodeURIComponent(name)}/run`, confirm ? { confirm } : {});
+export const getOperations = (state) => get(`/api/v1/operations${state ? `?state=${encodeURIComponent(state)}` : ""}`);
+export const getOperation = (id) => get(`/api/v1/operations/${encodeURIComponent(id)}`);
+// How long the operations record is kept, and what it holds now.
+export const getRetention = () => get("/api/v1/operations/retention");
+export const setRetention = (max_age_days, max_mb) => put("/api/v1/operations/retention", { max_age_days, max_mb });
 export const enableUeransimMode = () => post("/api/v1/ran/modes/ueransim/enable", {});
 export const disableUeransimMode = () => post("/api/v1/ran/modes/ueransim/disable", {});
 export const getUeransimStatus = () => get("/api/v1/ran/ueransim/status");

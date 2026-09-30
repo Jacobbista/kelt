@@ -160,7 +160,9 @@ body {
    works for a drawer whose content varies (Describe output, update log).
    Padding lives on -inner only: a 0fr track with padding on itself never
    fully closes. The chevron flips scaleY(-1) rather than morphing its `d:`
-   path, since path morphing is Chromium-only. */
+   path, since path morphing is Chromium-only. Child combinators, not
+   descendant: a drawer nested in an open one (a confirm inside a RAN link)
+   must not open with it. */
 :root {
   --acc-expand: 220ms;
   --acc-collapse: 220ms;
@@ -172,7 +174,7 @@ body {
   grid-template-rows: 0fr;
   transition: grid-template-rows var(--acc-collapse) var(--acc-ease);
 }
-.t-acc[data-open="true"] .t-acc-panel {
+.t-acc[data-open="true"] > .t-acc-panel {
   grid-template-rows: 1fr;
   transition: grid-template-rows var(--acc-expand) var(--acc-ease);
 }
@@ -184,7 +186,7 @@ body {
     opacity var(--acc-collapse) var(--acc-ease),
     filter var(--acc-collapse) var(--acc-ease);
 }
-.t-acc[data-open="true"] .t-acc-panel-inner {
+.t-acc[data-open="true"] > .t-acc-panel > .t-acc-panel-inner {
   opacity: 1;
   filter: blur(0);
   transition:
@@ -198,7 +200,7 @@ body {
   transition: transform var(--acc-chevron) var(--acc-ease);
 }
 .t-acc-chevron path { vector-effect: non-scaling-stroke; }
-.t-acc[data-open="true"] .t-acc-chevron {
+.t-acc[data-open="true"] > button .t-acc-chevron {
   transform: scaleY(-1);
 }
 
@@ -247,6 +249,35 @@ body {
   50% { opacity: 0.45; }
 }
 
+/* The one loader (Foundations): signal bars, 16 px, in a card header slot. */
+.bars { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; }
+.bars > i { width: 2.5px; border-radius: 1px; background: #6366f1; transform-origin: bottom; animation: loader-bar 0.8s ease-in-out infinite; }
+.bars > i:nth-child(1) { height: 4px; }
+.bars > i:nth-child(2) { height: 7px; animation-delay: .12s; }
+.bars > i:nth-child(3) { height: 10px; animation-delay: .24s; }
+.bars > i:nth-child(4) { height: 14px; animation-delay: .36s; }
+
+/* Numbers resolve in place (Num). */
+.num-scrambling { color: #818cf8; text-shadow: 0 0 6px rgba(99, 102, 241, .55); }
+.num-changed { animation: num-settle .9s ease-out; }
+@keyframes num-settle { from { color: #c7d2fe; } }
+
+/* transitions-dev 15: shimmer text, for a line being worked out. */
+.t-shimmer { position: relative; display: inline-block; color: #64748b; }
+.t-shimmer::before {
+  content: attr(data-text); position: absolute; inset: 0; pointer-events: none;
+  background-image: linear-gradient(90deg, transparent 0%, transparent 40%, #e2e8f0 50%, transparent 60%, transparent 100%);
+  background-size: 400% 100%; background-repeat: no-repeat;
+  -webkit-background-clip: text; background-clip: text; color: transparent; -webkit-text-fill-color: transparent;
+  animation: t-shimmer 2000ms linear infinite;
+}
+@keyframes t-shimmer { 0% { background-position: 100% 0; } 100% { background-position: 0% 0; } }
+
+/* transitions-dev 04: text states swap, for a verdict that changes. */
+.t-text-swap { display: inline-block; transition: transform 150ms ease-in-out, filter 150ms ease-in-out, opacity 150ms ease-in-out; }
+.t-text-swap.is-exit { transform: translateY(-4px); filter: blur(2px); opacity: 0; }
+.t-text-swap.is-enter-start { transform: translateY(4px); filter: blur(2px); opacity: 0; transition: none; }
+
 @media (prefers-reduced-motion: reduce) {
   .svc-fade,
   .tab-pane { animation: none; }
@@ -257,4 +288,6 @@ body {
   .t-acc-panel,
   .t-acc-panel-inner,
   .t-acc-chevron { transition: none; }
+  .bars > i, .num-changed, .t-shimmer::before { animation: none; }
+  .t-text-swap { transition: none; }
 }

@@ -24,6 +24,7 @@ from app.routers.metrics import router as metrics_router
 from app.routers.network import router as network_router
 from app.routers.pods import router as pods_router
 from app.routers.ran import router as ran_router
+from app.routers.pieces import router as pieces_router
 from app.routers.sniffer import router as sniffer_router
 from app.routers.status import router as status_router
 from app.routers.subscribers import router as subscribers_router
@@ -145,6 +146,7 @@ app.include_router(selfupdate_read_router, dependencies=_admin)
 app.include_router(subscribers_router, dependencies=_admin)
 app.include_router(nf_router,          dependencies=_admin)
 app.include_router(ran_router,         dependencies=_admin)
+app.include_router(pieces_router,      dependencies=_admin)
 app.include_router(sniffer_router,     dependencies=_admin)
 app.include_router(exec_ws_router,     dependencies=_admin)
 # Northbound console writes: adapter registry, deploy-from-image (also gated by

@@ -1,0 +1,68 @@
+# Named pieces of the playbooks: the only way the dashboard changes the
+# testbed, run by ansible/tools/kelt-piece exactly as `kelt run-piece` runs
+# them. Fields: title, runs (list of {phase, tags}), extra_vars (fixed, never
+# from a request), set_env (written to .testbed.env under the piece lock),
+# tier (change | disrupt), changes, stops (required for disrupt), takes_s,
+# check (a read-back the dashboard runs after exit 0), lock (a group: pieces
+# that share it never run at once; default the piece's own name), confirm_word
+# (a word the dashboard makes the admin type before it runs; for pieces that
+# cut devices off), precheck (read-only {phase, tags} run before set_env and
+# runs; a failure refuses the piece with nothing changed).
+# See docs/development/contributing.md "Pieces".
+ran_link:
+  title: Bring the RAN link up
+  runs:
+    - { phase: 04-overlay-network, tags: [ran_link] }
+  tier: disrupt
+  changes: >-
+    When the worker's RAN interface is disabled (what a worker restart leaves), restarts the
+    worker network setup that owns it and waits for the link. Does nothing when the interface
+    is enabled; stops with a message when it is enabled but nothing is on the wire.
+  stops: Every bridge on the worker while its setup restarts (not yet measured on a real outage).
+  takes_s: 60
+  check: ran_link_up
+  lock: ran
+
+ran_attach:
+  title: Attach the core to the RAN
+  precheck:
+    - { phase: 04-overlay-network, tags: [ran_nic_check] }
+  runs:
+    - { phase: 04-overlay-network, tags: [overlay] }
+    - { phase: 04-overlay-network, tags: [ran_bridge] }
+    - { phase: 04-overlay-network, tags: [nad] }
+    - { phase: 05-5g-core, tags: [nf_deployments] }
+    - { phase: 04-overlay-network, tags: [ran_amf] }
+  set_env: { PHYSICAL_RAN_ENABLED: "true" }
+  tier: disrupt
+  changes: >-
+    Builds br-ran with the worker's RAN adapter, adds the AMF's RAN interface and the UPF's
+    route back to the RAN, and waits for each. The gNB then sets up NGAP again by itself.
+    Changes nothing when the RAN is already attached.
+  stops: >-
+    The UPF restarts with its route to the RAN (every PDU session on every cell drops and is
+    set up again), and the AMF restarts with its RAN interface (UEs on any cell register again).
+  takes_s: 75
+  check: ran_attached
+  lock: ran
+
+ran_detach:
+  title: Detach the core from the RAN
+  runs:
+    - { phase: 05-5g-core, tags: [nf_deployments] }
+    - { phase: 04-overlay-network, tags: [nad] }
+    - { phase: 04-overlay-network, tags: [overlay] }
+    - { phase: 04-overlay-network, tags: [ran_bridge] }
+  set_env: { PHYSICAL_RAN_ENABLED: "false" }
+  tier: disrupt
+  changes: >-
+    Removes the AMF's RAN interface, the RAN network attachment and the UPF's route to the RAN,
+    then br-ran. The worker keeps its RAN adapter, so Attach can bring it back.
+  stops: >-
+    The physical gNB and every UE registered through it, until Attach runs. The AMF
+    restarts once and the UPF restarts without its route to the RAN (every PDU session on every
+    cell drops).
+  takes_s: 70
+  check: ran_detached
+  lock: ran
+  confirm_word: detach

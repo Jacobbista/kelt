@@ -2,7 +2,6 @@ import React, { useEffect, useState } from "react";
 import { Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import { getRuntimeInfo } from "./api";
 import { AuthProvider, useAuth } from "./auth/AuthContext";
-import { OperationsProvider } from "./context/OperationsContext";
 import { ToastProvider } from "./context/ToastContext";
 import { ConfirmProvider } from "./context/ConfirmContext";
 import { UpdateProvider } from "./context/UpdateContext";
@@ -34,10 +33,13 @@ import ServicesPage from "./pages/ServicesPage";
 import CustomWorkloadPage from "./pages/CustomWorkloadPage";
 import AppsPage from "./pages/AppsPage";
 import ManualPage from "./pages/ManualPage";
+import OperationsPage from "./pages/OperationsPage";
+import OperationsSettingsPage from "./pages/OperationsSettingsPage";
 import RanPage from "./pages/RanPage";
 import SubscribersPage from "./pages/SubscribersPage";
 import TopologyPage from "./pages/TopologyPage";
 import UEMonitoringPage from "./pages/UEMonitoringPage";
+import { autoLogin } from "./lib/authFlow";
 
 
 export default function App() {
@@ -62,6 +64,24 @@ function AdminOnly({ children }) {
         This page needs the <span className="font-mono text-slate-300">dashboard-admin</span> role.
         Your account is read-only.
       </p>
+    </div>
+  );
+}
+
+// The session ended while the page was open (lib/authFlow.js): the login page
+// opens on the click, fresh, and the user comes back to the same page.
+function SessionEnded({ onSignIn }) {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-slate-950 p-6 text-slate-300">
+      <div className="max-w-md rounded-lg border border-slate-700 bg-slate-900 p-6">
+        <h2 className="mb-2 text-lg font-semibold text-slate-100">Session ended</h2>
+        <p className="text-sm leading-relaxed text-slate-400">
+          The dashboard session expired while this page was open. Sign in again to go on where you were.
+        </p>
+        <button type="button" onClick={() => onSignIn()} className="mt-4 rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500">
+          Sign in
+        </button>
+      </div>
     </div>
   );
 }
@@ -100,23 +120,13 @@ function AppInner() {
   const { unreachable: backendUnreachable, sessionExpired, serverTime } = useBackendHealth();
 
   useEffect(() => {
-    // When auth is enabled but the user is not signed in, redirect to
-    // Keycloak immediately. The auth/callback route handles the return
-    // trip; the /logged-out landing renders a manual "sign in again"
-    // button so an explicit logout does not bounce straight back through
-    // the still-alive Keycloak SSO session.
-    const path = window.location.pathname;
-    if (
-      auth.enabled
-      && !auth.loading
-      && !auth.user
-      && !auth.loggingOut
-      && path !== "/auth/callback"
-      && path !== "/logged-out"
-    ) {
-      auth.login();
-    }
-  }, [auth.enabled, auth.loading, auth.user, auth.loggingOut, auth.login]);
+    // With no session, go to Keycloak on a first visit; a session that ended
+    // while the page was open waits for "Sign in" (lib/authFlow.js). The
+    // auth/callback route handles the return trip; /logged-out renders its own
+    // "sign in again" so an explicit logout does not bounce straight back
+    // through the still-alive Keycloak SSO session.
+    if (autoLogin({ ...auth, path: window.location.pathname })) auth.login();
+  }, [auth.enabled, auth.loading, auth.user, auth.loggingOut, auth.ended, auth.login]);
 
   useEffect(() => {
     // Avoid firing while the auth context is still resolving an existing
@@ -168,6 +178,7 @@ function AppInner() {
     && authPath !== "/logged-out"
     && (auth.loading || !auth.user)
   ) {
+    if (auth.ended && !auth.loading && !auth.loggingOut) return <SessionEnded onSignIn={auth.login} />;
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-400">
         {auth.loggingOut ? "Signing out…" : "Signing in…"}
@@ -180,7 +191,6 @@ function AppInner() {
     <ToastProvider>
     <ConfirmProvider>
     <UpdateProvider>
-    <OperationsProvider>
     <IsolationSummaryProvider>
     <StatusSummaryProvider>
     <Layout
@@ -208,6 +218,7 @@ function AppInner() {
         <Route path="/subscribers" element={<AdminOnly><SubscribersPage /></AdminOnly>} />
         <Route path="/ue-monitor" element={<UEMonitoringPage />} />
         <Route path="/metrics" element={<MetricsPage />} />
+        <Route path="/operations" element={<AdminOnly><OperationsPage /></AdminOnly>} />
         <Route path="/services" element={<ServicesPage />} />
         <Route path="/services/northbound" element={<NorthboundPage />} />
         <Route path="/services/northbound/assets" element={<AdminOnly><NorthboundAssetsPage /></AdminOnly>} />
@@ -218,6 +229,7 @@ function AppInner() {
         <Route path="/settings/iam" element={<AdminOnly><IamPage /></AdminOnly>} />
         <Route path="/settings/branding" element={<AdminOnly><BrandingPage /></AdminOnly>} />
         <Route path="/settings/storage" element={<AdminOnly><StoragePage /></AdminOnly>} />
+        <Route path="/settings/operations" element={<AdminOnly><OperationsSettingsPage /></AdminOnly>} />
         <Route path="/iam" element={<Navigate to="/settings/iam" replace />} />
         <Route path="/branding" element={<Navigate to="/settings/branding" replace />} />
         <Route path="/manual" element={<ManualPage />} />
@@ -250,7 +262,6 @@ function AppInner() {
     </Layout>
     </StatusSummaryProvider>
     </IsolationSummaryProvider>
-    </OperationsProvider>
     </UpdateProvider>
     </ConfirmProvider>
     </ToastProvider>

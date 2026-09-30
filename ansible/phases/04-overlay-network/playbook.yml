@@ -33,6 +33,322 @@
   roles:
     - roles/cell_network_setup
 
+# Piece ran_link (ansible/pieces.yml): bring the worker's RAN link up when it
+# is down, by re-running the network setup that owns it. Tagged `never`, so a
+# whole-phase run does not restart anything; only `--tags ran_link` runs it.
+# Does nothing when the link is already up.
+- name: "PHASE 4 | RAN link"
+  hosts: masters
+  become: true
+  gather_facts: false
+  tags: [ran_link, never]
+  tasks:
+    - name: Read the RAN link state on the worker
+      ansible.builtin.shell: |
+        set -o pipefail
+        for p in $(ovs-vsctl list-ports br-ran 2>/dev/null); do
+          [ -e "/sys/class/net/$p/device" ] && { ip -j link show "$p"; exit 0; }
+        done
+        echo "[]"
+      args: { executable: /bin/bash }
+      delegate_to: "{{ groups['workers'][0] }}"
+      register: ran_link_before
+      changed_when: false
+
+    - name: Decide
+      ansible.builtin.set_fact:
+        ran_link_iface: "{{ (ran_link_before.stdout | from_json | first | default({})).ifname | default('') }}"
+        # UP = the interface is enabled (what a worker restart leaves off);
+        # LOWER_UP = a signal on the wire (the cable, the switch, the gNB).
+        ran_link_admin_up: "{{ 'UP' in ((ran_link_before.stdout | from_json | first | default({})).flags | default([])) }}"
+        ran_link_carrier: "{{ 'LOWER_UP' in ((ran_link_before.stdout | from_json | first | default({})).flags | default([])) }}"
+
+    - name: No RAN interface on br-ran
+      ansible.builtin.fail:
+        msg: "br-ran has no physical port on the worker. Run `kelt ran <adapter>`, then `kelt provision`, on the host (it restarts the worker)."
+      when: ran_link_iface == ''
+
+    - name: The link is up but nothing is on the wire
+      ansible.builtin.fail:
+        msg: >-
+          {{ ran_link_iface }} is up with no carrier: check the cable from the host adapter to the
+          switch, the switch and gNB port lights, and the gNB's power. Nothing was restarted.
+      when: ran_link_admin_up and not ran_link_carrier
+
+    - name: Find the worker network setup pod
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: kube-system
+        label_selectors: ["app=ds-net-setup-worker"]
+        kubeconfig: /home/vagrant/kubeconfig
+      register: ran_link_pods
+      run_once: true
+      when: not ran_link_admin_up
+
+    # Deleting the pod makes the DaemonSet re-run the setup script, which
+    # brings the NIC up (ovs-setup.sh, bridge_ran_interface). br-ran and its
+    # ports stay: the script only adds what is missing (--may-exist).
+    - name: Restart the worker network setup
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Pod
+        namespace: kube-system
+        name: "{{ item.metadata.name }}"
+        kubeconfig: /home/vagrant/kubeconfig
+      loop: "{{ ran_link_pods.resources | default([]) }}"
+      loop_control: { label: "{{ item.metadata.name }}" }
+      run_once: true
+      when: not ran_link_admin_up
+
+    # A deleted pod keeps phase Running while it terminates: wait for a new one.
+    - name: Wait for the new worker network setup pod
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: kube-system
+        label_selectors: ["app=ds-net-setup-worker"]
+        kubeconfig: /home/vagrant/kubeconfig
+      register: ran_link_ds
+      until: >-
+        ran_link_ds.resources
+        | rejectattr('metadata.uid', 'in', ran_link_pods.resources | default([]) | map(attribute='metadata.uid') | list)
+        | selectattr('status.phase', 'equalto', 'Running')
+        | list | length >= 1
+      retries: 45
+      delay: 4
+      run_once: true
+      when: not ran_link_admin_up
+
+    - name: Wait for the RAN link
+      ansible.builtin.shell: ip -j link show {{ ran_link_iface | quote }}
+      delegate_to: "{{ groups['workers'][0] }}"
+      register: ran_link_after
+      until: "'LOWER_UP' in ((ran_link_after.stdout | from_json | first).flags)"
+      retries: 20
+      delay: 3
+      changed_when: false
+      run_once: true
+      when: not ran_link_admin_up
+
+# Pieces ran_attach / ran_detach (ansible/pieces.yml): make br-ran match
+# physical_ran_enabled (PHYSICAL_RAN_ENABLED in .testbed.env). The overlay play
+# has already rendered the DaemonSet for that mode; ovs-setup.sh builds br-ran
+# with the RAN NIC when enabled and tears it down when disabled, on each start
+# of the setup pod. This play waits for that, restarts the pod when the state
+# still does not match, and changes nothing when it already does.
+- name: "PHASE 4 | RAN bridge apply"
+  hosts: masters
+  become: true
+  gather_facts: false
+  # ran_nic_check selects only the read and the no-adapter check: the
+  # ran_attach piece runs it first, before anything changes (pieces.yml precheck).
+  tags: [never]
+  vars:
+    ran_want: "{{ physical_ran_enabled | bool }}"
+    # {"br": br-ran exists, "nic": the RAN NIC, "on": the NIC is a port of br-ran}.
+    # The NIC is br-ran's physical port, else physical_ran_interface, else the
+    # physical NIC holding an address in physical_ran_subnet (detached state).
+    ran_bridge_probe: |
+      set -o pipefail
+      br=false; nic=""; on=false
+      if ovs-vsctl br-exists br-ran 2>/dev/null; then
+        br=true
+        for p in $(ovs-vsctl list-ports br-ran); do
+          [ -e "/sys/class/net/$p/device" ] && { nic="$p"; on=true; break; }
+        done
+      fi
+      [ -z "$nic" ] && nic={{ physical_ran_interface | quote }}
+      if [ -z "$nic" ]; then
+        # Plain prefix match on the IPv4 address (no regex to escape).
+        for p in $(ip -o -4 addr show | awk -v pre={{ (physical_ran_subnet.split('/')[0].rsplit('.', 1)[0] ~ '.') | quote }} 'index($4, pre) == 1 {print $2}'); do
+          [ -e "/sys/class/net/$p/device" ] && { nic="$p"; break; }
+        done
+      fi
+      printf '{"br": %s, "nic": "%s", "on": %s}\n' "$br" "$nic" "$on"
+  tasks:
+    - name: Read br-ran and the RAN NIC on the worker
+      tags: [ran_bridge, ran_nic_check]
+      ansible.builtin.shell: "{{ ran_bridge_probe }}"
+      args: { executable: /bin/bash }
+      delegate_to: "{{ groups['workers'][0] }}"
+      register: ran_bridge_before
+      check_mode: false  # reads only
+      changed_when: false
+      run_once: true
+
+    - name: Decide
+      tags: [ran_bridge, ran_nic_check]
+      ansible.builtin.set_fact:
+        ran_bridge_nic: "{{ (ran_bridge_before.stdout | from_json).nic }}"
+        ran_bridge_matches: >-
+          {{ ((ran_bridge_before.stdout | from_json).br and (ran_bridge_before.stdout | from_json).on)
+             if ran_want else not (ran_bridge_before.stdout | from_json).br }}
+      run_once: true
+
+    - name: The worker has no RAN adapter
+      tags: [ran_bridge, ran_nic_check]
+      ansible.builtin.fail:
+        msg: >-
+          The worker VM has no RAN network adapter, so there is nothing to attach. Run
+          `kelt ran <host adapter>`, then `kelt provision`, on the host (it restarts the worker).
+      when: (ran_want or 'ran_nic_check' in ansible_run_tags) and ran_bridge_nic == ''
+      run_once: true
+
+    # The overlay play may have just changed the DaemonSet, which restarts the
+    # setup pod by itself: give that a minute before restarting it here.
+    - name: Wait for the setup pod the DaemonSet may be restarting
+      tags: [ran_bridge]
+      ansible.builtin.shell: "{{ ran_bridge_probe }}"
+      args: { executable: /bin/bash }
+      delegate_to: "{{ groups['workers'][0] }}"
+      register: ran_bridge_wait
+      check_mode: false  # reads only
+      until: >-
+        ((ran_bridge_wait.stdout | from_json).br and (ran_bridge_wait.stdout | from_json).on)
+        if ran_want else not (ran_bridge_wait.stdout | from_json).br
+      retries: 15
+      delay: 4
+      failed_when: false
+      changed_when: false
+      run_once: true
+      when: not ran_bridge_matches
+
+    - name: Still not matching
+      tags: [ran_bridge]
+      ansible.builtin.set_fact:
+        ran_bridge_restart: >-
+          {{ not ran_bridge_matches and not (
+               ((ran_bridge_wait.stdout | from_json).br and (ran_bridge_wait.stdout | from_json).on)
+               if ran_want else not (ran_bridge_wait.stdout | from_json).br) }}
+      run_once: true
+
+    - name: Find the worker network setup pod
+      tags: [ran_bridge]
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: kube-system
+        label_selectors: ["app=ds-net-setup-worker"]
+        kubeconfig: "{{ kubeconfig_path }}"
+      register: ran_bridge_pods
+      run_once: true
+      when: ran_bridge_restart
+
+    - name: Restart the worker network setup
+      tags: [ran_bridge]
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Pod
+        namespace: kube-system
+        name: "{{ item.metadata.name }}"
+        kubeconfig: "{{ kubeconfig_path }}"
+      loop: "{{ ran_bridge_pods.resources | default([]) }}"
+      loop_control: { label: "{{ item.metadata.name }}" }
+      run_once: true
+      when: ran_bridge_restart
+
+    - name: Wait for br-ran to match
+      tags: [ran_bridge]
+      ansible.builtin.shell: "{{ ran_bridge_probe }}"
+      args: { executable: /bin/bash }
+      delegate_to: "{{ groups['workers'][0] }}"
+      register: ran_bridge_after
+      until: >-
+        ((ran_bridge_after.stdout | from_json).br and (ran_bridge_after.stdout | from_json).on)
+        if ran_want else not (ran_bridge_after.stdout | from_json).br
+      retries: 30
+      delay: 4
+      changed_when: true
+      run_once: true
+      when: ran_bridge_restart and not ansible_check_mode
+
+# Pieces ran_attach: the AMF's n2phy port is added to br-ran by ovs-cni when
+# the pod starts. If br-ran was rebuilt under a running AMF, the port is gone
+# and only an AMF restart puts it back. Nothing when detached or already there.
+- name: "PHASE 4 | RAN AMF on br-ran"
+  hosts: masters
+  become: true
+  gather_facts: true
+  tags: [ran_amf, never]
+  tasks:
+    - name: Count the veths on br-ran (the AMF's n2phy port)
+      ansible.builtin.shell: |
+        set -o pipefail
+        n=0
+        for p in $(ovs-vsctl list-ports br-ran 2>/dev/null); do
+          case "$p" in patch-*) continue ;; esac
+          [ -e "/sys/class/net/$p/device" ] && continue
+          n=$((n + 1))
+        done
+        echo "$n"
+      args: { executable: /bin/bash }
+      delegate_to: "{{ groups['workers'][0] }}"
+      register: ran_amf_veths
+      check_mode: false  # reads only
+      changed_when: false
+      run_once: true
+      when: physical_ran_enabled | bool
+
+    - name: Restart the AMF so ovs-cni re-attaches it
+      kubernetes.core.k8s:
+        state: patched
+        kubeconfig: "{{ kubeconfig_path }}"
+        api_version: apps/v1
+        kind: Deployment
+        name: amf
+        namespace: "{{ namespace_5g }}"
+        definition:
+          spec:
+            template:
+              metadata:
+                annotations:
+                  kubectl.kubernetes.io/restartedAt: "{{ ansible_date_time.iso8601 }}"
+      run_once: true
+      when: physical_ran_enabled | bool and (ran_amf_veths.stdout | int) == 0
+
+    - name: Wait for the AMF on br-ran
+      ansible.builtin.shell: |
+        set -o pipefail
+        for p in $(ovs-vsctl list-ports br-ran 2>/dev/null); do
+          case "$p" in patch-*) continue ;; esac
+          [ -e "/sys/class/net/$p/device" ] && continue
+          echo "$p"; exit 0
+        done
+        exit 1
+      args: { executable: /bin/bash }
+      delegate_to: "{{ groups['workers'][0] }}"
+      register: ran_amf_after
+      until: ran_amf_after.rc == 0 and not ansible_check_mode
+      retries: 30
+      delay: 3
+      changed_when: false
+      run_once: true
+      when: physical_ran_enabled | bool and (ran_amf_veths.stdout | int) == 0 and not ansible_check_mode
+
+    # ovs-cni adds the port when the pod starts, before the AMF is ready: wait
+    # for the rollout too, so the read-back sees one ready AMF.
+    - name: Wait for the restarted AMF to be ready
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: amf
+        namespace: "{{ namespace_5g }}"
+        kubeconfig: "{{ kubeconfig_path }}"
+      register: ran_amf_rollout
+      until: >-
+        ran_amf_rollout.resources | length > 0 and
+        (ran_amf_rollout.resources[0].status.observedGeneration | default(0)) >= ran_amf_rollout.resources[0].metadata.generation and
+        (ran_amf_rollout.resources[0].status.updatedReplicas | default(0)) == (ran_amf_rollout.resources[0].spec.replicas | default(1)) and
+        (ran_amf_rollout.resources[0].status.availableReplicas | default(0)) == (ran_amf_rollout.resources[0].spec.replicas | default(1)) and
+        (ran_amf_rollout.resources[0].status.replicas | default(0)) == (ran_amf_rollout.resources[0].spec.replicas | default(1))
+      retries: 36
+      delay: 5
+      run_once: true
+      when: physical_ran_enabled | bool and (ran_amf_veths.stdout | int) == 0 and not ansible_check_mode
+
 - name: "PHASE 4 | Verify"
   hosts: masters
   become: true

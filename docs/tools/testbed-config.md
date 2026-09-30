@@ -108,6 +108,7 @@ Launches a TUI menu (with gum) or a numbered menu (without gum):
 | `dashboard-auth` | `enabled` \| `disabled` | Set `DASHBOARD_AUTH_ENABLED` persisted in `.testbed.env`. |
 | `iam-admin-password` | `[password]` \| `--clear` | Set or clear Keycloak admin bootstrap password stored in `.testbed.secrets`. With gum and no args, opens a guided chooser (`auto-generate`, `manual`, `clear`). |
 | `secrets` | `generate-missing` \| `manual` \| `rotate` \| `status` \| `clear` | Manage IAM/CAMARA secrets in `.testbed.secrets`. With gum and no args, opens a guided wizard. |
+| `restore` | `env` \| `secrets` [`--yes`] | Put back the version of `.testbed.env` or `.testbed.secrets` that the last write replaced (`.prev`); lists the changed keys, never values. See [below](#how-the-config-files-are-written-and-restore). |
 | `run-phase` | `[phase-dir] [tags] [key=value ...]` | Run a single phase playbook (`phases/<phase-dir>/playbook.yml`) via the ansible VM. Automatically loads `/vagrant/.testbed.env` and `/vagrant/.testbed.secrets` before execution. Extra positional arguments select tags and set extra vars. |
 | `up` | — | Run `vagrant up` with current configuration (confirms first) |
 | `provision` | — | Run `vagrant provision ansible` (confirms first) |
@@ -155,6 +156,25 @@ When `PHYSICAL_RAN_ENABLED=true` and `PHYSICAL_RAN_BRIDGE` differs from the NIC 
 - `APPS_REGISTRY_PASSWORD`
 
 In gum mode, `kelt secrets` opens a guided wizard (the manual wizard prompts for the human-facing values and fills the machine-only ones with random values). Missing keys are auto-generated with random values before `up`, `provision` and `run-phase`, so a deploy never falls back to a `changeme-*` default. Applying a rotated value to a running cluster is `kelt run-phase 08-iam`; see the "Secret rotation" section of [iam.md](../security/iam.md).
+
+### How the config files are written, and restore
+
+`.testbed.env` and `.testbed.secrets` are always replaced whole: the new content
+is written next to the file and renamed over it, so a crash or a reader never
+sees half a file. Every writer does this (the CLI, the pieces runner's
+`set_env`, the dashboard's secret rotation), and keeps the version it replaced
+as `.testbed.env.prev` or `.testbed.secrets.prev` (0600 for secrets). A write
+that changes nothing leaves the `.prev` alone. A save keeps the keys it does not
+own, and the secrets file is never deleted: an empty value is written as empty.
+
+`kelt restore env|secrets` puts the `.prev` version back. It lists the keys that
+change (never their values) and asks before writing; `--yes` skips the question.
+The version it replaces becomes the new `.prev`, so restoring again undoes it.
+The running testbed changes only when the phase that reads a changed key runs
+again.
+
+`.testbed.subscribers.json` is generated once, with random SIM keys, and never
+overwritten: it is written whole and linked into place only if no file exists.
 
 ### Auth/Network Non-Secret Settings
 

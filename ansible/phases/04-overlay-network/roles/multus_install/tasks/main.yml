@@ -956,7 +956,7 @@
 # Creates a dedicated interface on br-ran for AMF to receive NGAP/SCTP from physical gNB.
 # Uses the same OVS CNI type as other NADs — the physical interface is already
 # enslaved to br-ran by the OVS setup, so macvlan on it would fail.
-# Preflight matches dashboard RanService.enable(): require br-ran before NAD creation.
+# Preflight: require br-ran before NAD creation (the ran_attach piece builds br-ran first).
 # ==============================================================
 
 - name: Create Physical RAN NAD (n2-physical)
@@ -986,7 +986,7 @@
                       or (physical_ran_bridge_available | default(false) | bool))) }}
 
 # Resilience: on teardown, remove n2-physical from the AMF annotation BEFORE
-# deleting the NAD (same order as dashboard RanService.disable). Otherwise the AMF
+# deleting the NAD (the ran_detach piece re-renders the AMF first, so this is a safety net). Otherwise the AMF
 # keeps an annotation referencing a NAD that no longer exists, Multus returns
 # NoNetworkFound, and the AMF pod can never start (Init:0/2) — taking the core down.
 # Read always so the strip task can reference it safely. See docs/architecture/edge-apps.md.

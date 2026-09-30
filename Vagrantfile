@@ -5,7 +5,8 @@
 #   vagrant provision ansible --provision-with playbook  - Same, by name
 #   DEPLOY_MODE=full vagrant provision ansible  - Include UERANSIM (phase 6)
 # PHYSICAL RAN (optional, disabled by default):
-#   PHYSICAL_RAN_ENABLED=true PHYSICAL_RAN_BRIDGE=<host_nic> vagrant provision ansible
+#   PHYSICAL_RAN_BRIDGE=<host_nic> gives the worker its RAN adapter;
+#   PHYSICAL_RAN_ENABLED=true also attaches the core (normally: `kelt ran <host_nic>`)
 # TESTBED PROFILE (resource profiles for different hosts):
 #   TESTBED_PROFILE=server vagrant up           - NUC/server: 3 VMs, no edge
 #   TESTBED_PROFILE=server EDGE_ENABLED=true vagrant up  - NUC/server with edge VM
@@ -117,21 +118,24 @@ Vagrant.configure("2") do |config|
 
   puts "[Testbed] Profile: #{active_profile} | Edge: #{edge_enabled} | VMs: #{nodes.keys.join(', ')}"
 
-  # Secondary network for physical RAN connection (worker only)
-  # Disabled by default to avoid interactive bridge selection prompts.
+  # Secondary network for physical RAN connection (worker only).
+  # The adapter follows PHYSICAL_RAN_BRIDGE (`kelt ran <host_nic>`; `kelt ran
+  # disable` clears it), not PHYSICAL_RAN_ENABLED: that one says whether the core
+  # is attached (the ran_attach / ran_detach pieces), and a detached RAN must keep
+  # its adapter so Attach works without restarting the worker.
   # NOTE: worker gets physical_ran_gateway (bridge role), AMF gets amf_physical_ran_ip.
   ran_network = {}
-  if physical_ran_enabled
-    if physical_ran_bridge.nil? || physical_ran_bridge.empty?
+  if physical_ran_bridge.nil? || physical_ran_bridge.strip.empty?
+    if physical_ran_enabled
       puts "[WARN] PHYSICAL_RAN_ENABLED=true but PHYSICAL_RAN_BRIDGE is not set."
       puts "[WARN] Physical RAN bridge NIC will be skipped to avoid interactive prompts."
-    else
-      ran_network["worker"] = {
-        ip: plan.fetch("physical_ran_gateway"),
-        netmask: IPAddr.new("255.255.255.255").mask(plan.fetch("physical_ran_subnet").split("/").last.to_i).to_s,
-        bridge: physical_ran_bridge || "enx00e04c6817b7"
-      }
     end
+  else
+    ran_network["worker"] = {
+      ip: plan.fetch("physical_ran_gateway"),
+      netmask: IPAddr.new("255.255.255.255").mask(plan.fetch("physical_ran_subnet").split("/").last.to_i).to_s,
+      bridge: physical_ran_bridge.strip
+    }
   end
 
   nodes.each do |name, spec|

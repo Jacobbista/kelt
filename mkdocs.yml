@@ -58,7 +58,6 @@ nav:
       - Phases: deployment/phases.md
       - Server / NUC Setup: deployment/server-setup.md
       - Physical RAN: deployment/physical-ran.md
-      - RAN Modes (dashboard): deployment/ran-modes-dashboard.md
       - External Tunnel: deployment/external-tunnel.md
   - Dashboard:
       - Overview: dashboard/overview.md
@@ -82,6 +81,7 @@ nav:
       - testbed-config: tools/testbed-config.md
   - Development:
       - Contributing: development/contributing.md
+      - Dashboard Design Rules: development/dashboard-design.md
       - Testing: development/testing.md
   - Known Issues:
       - KubeEdge Edge Discovery: known-issues/kubeedge-edge-discovery.md

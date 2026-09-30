@@ -2,7 +2,7 @@
 
 The sidebar groups the modules by domain: Overview; 5G Network (Core, RAN,
 Subscribers, UE Monitor); Network (Topology, Isolation, Health, Capture); Platform
-(Kubernetes, Services, Metrics); then Settings and the Manual. The
+(Kubernetes, Services, Metrics, Operations); then Settings and the Manual. The
 [header](#header) shows where you are and what holds for the whole dashboard. This page describes
 what each module does, the data it shows, and the actions it provides. Role gating
 follows the two-tier model: read views are open to `dashboard-viewer`, write and
@@ -76,13 +76,29 @@ Read-only.
 
 **Area**: 5G
 
-RAN attachment control, with a tab per mode.
+Whether the physical gNB reaches the core, where the path breaks, and what fixes
+it. Admin only.
 
-- "Physical RAN" tab: detect host bridge interfaces, create `br-ran` and patch it into `br-n2`/`br-n3`, patch the AMF `n2phy` annotation, and show the resulting OVS and annotation state; generates the `PHYSICAL_RAN_BRIDGE=<nic> vagrant reload worker` command
-- gNB Management Console: expose the physical gNB/femtocell web UI at `kelt-gnb.<base>` by entering its management address (IP:port); KELT registers it as an external endpoint reached via the dynamic apps route, no deploy-time change. Behind the front-door perimeter plus the appliance login
-- "UERANSIM" tab: simulated RAN controls
+- **Path**: five links read by the backend, in order: cable (the worker's RAN
+  interface and its carrier), bridge (the interface on `br-ran`), core (the gNB's
+  NG Setup with the AMF), user plane, UEs. Each link is ok, broken, idle, or
+  blocked by an earlier broken link, and a broken link carries its fix: a piece
+  (for example `ran_link`, "Bring the RAN link up"), a CLI command, or a
+  checklist. The page follows a started fix until its read-back. Every action is
+  a piece and leaves a record on the Operations page.
+- **Attach and detach**: Detach (`ran_detach`) sits at the card's foot while the
+  RAN is attached, and asks for `detach` to be typed before it runs. Detached
+  (`PHYSICAL_RAN_ENABLED=false`), the page reads *Detached* and the bridge link
+  offers Attach (`ran_attach`). The worker keeps its RAN adapter either way.
+- **gNB**: address, NG Setup, the AMF address and NGAP port (read from the
+  running AMF), UE and PDU session counts, and the link to the gNB's own web
+  console, which is where the gNB itself is monitored and configured. Drawers
+  hold the console address (published at `kelt-gnb.<base>` as an external
+  endpoint behind the front-door perimeter plus the appliance login) and the
+  settings to enter on the gNB's RAN interface.
+- **Simulated RAN** (UERANSIM): not supported yet from this page.
 
-Admin actions: bridge setup and RAN configuration changes. See [Physical RAN Integration](../deployment/physical-ran.md) and [RAN Modes](../deployment/ran-modes-dashboard.md).
+The page polls every 10 s and has no manual refresh. See [Physical RAN Integration](../deployment/physical-ran.md).
 
 ---
 
@@ -173,6 +189,25 @@ Resource metrics from Prometheus, with a Nodes tab and an NFs tab.
 Read-only. "Open in Grafana" in the page's toolbar opens the full Grafana stack,
 for what these charts do not show: Explore, the Loki logs, long ranges. It is the
 only link to Grafana in the dashboard.
+
+---
+
+## Operations
+
+**Area**: Platform · admin only
+
+The 50 newest piece runs, from the dashboard and from `kelt run-piece`: when
+it started, what it was, who started it and from where, the piece, the result and
+how long it took. Filters: all, running, failed (a failed read-back counts as
+failed). A row opens the run's steps (without Ansible's fact gathering) and its
+read-back; the tail of the Ansible output is one click away, and open by itself
+when the run failed. `/operations#<id>` opens that run. The header's Operations button links here.
+
+Results: running; done (the read-back passed, or the piece has none); exited 0,
+not read back yet (the read-back runs when the run is opened); done, not read
+back (opened more than 10 minutes after the run ended); failed (including a
+failed read-back); interrupted (the runner stopped before the end).
+The record is kept as set in Settings → Operations record.
 
 ---
 
@@ -304,6 +339,16 @@ Reading is open to `dashboard-viewer`; every action requires `dashboard-admin`
 and an explicit confirmation. See [api-reference.md](api-reference.md) for the
 endpoints and [../security/iam.md](../security/iam.md) for the role matrix.
 
+## Operations record
+
+**Area**: Settings → Operations record · admin only
+
+What the record of piece runs holds (runs, size on disk, oldest run) and how long
+it is kept: a number of days (1 to 3650, default 30) and a total size in MB (1 to
+10240, default 50), whichever is reached first. A running operation is never
+deleted. The values are stored in `.testbed.env` (`KELT_OPS_MAX_AGE_DAYS`,
+`KELT_OPS_MAX_MB`) and apply at the next run.
+
 ## Header
 
 **Area**: Infrastructure visibility
@@ -319,6 +364,9 @@ links (Services / Northbound / Assets). Right, in order:
   (CrashLoopBackOff, image pull errors), the last network check run if younger
   than 10 minutes, with its age (the pill never starts one; Health does), the AMF
   CNI alert. Hidden, with the breadcrumb, until there is a session.
+- **Operations** (admin): how many pieces are running, with the loader while one
+  is. A click lists at most three running operations and the last result, and
+  links to the [Operations](#operations) page.
 - **Updates** (admin): shown only while a dashboard component has an update
   available; opens the update section of the Manual.
 - **Environment**: DEV or PROD, the frontend source in its tooltip.
@@ -370,5 +418,4 @@ The following endpoints are stubbed for future modules:
 
 - [Dashboard Overview](overview.md): architecture, access, security, deployment
 - [API Reference](api-reference.md): full endpoint listing
-- [RAN Modes](../deployment/ran-modes-dashboard.md): switching between physical and simulated RAN
 - [Physical RAN Integration](../deployment/physical-ran.md): full physical RAN setup guide

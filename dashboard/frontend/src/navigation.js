@@ -1,4 +1,4 @@
-import { IconDashboard, IconLayers, IconHexagon, IconNetwork, IconRadio, IconSim, IconPhone, IconStethoscope, IconBars, IconGrid, IconSliders, IconBook, IconShield, IconActivity } from "./components/icons";
+import { IconDashboard, IconLayers, IconHexagon, IconNetwork, IconRadio, IconSim, IconPhone, IconStethoscope, IconBars, IconGrid, IconSliders, IconBook, IconShield, IconActivity, IconRocket } from "./components/icons";
 
 // Every page is declared here once: the sidebar, the route ids used by
 // onNavigate and the header's breadcrumb all read this file.
@@ -28,6 +28,7 @@ export const NAV_GROUPS = [
     // Services hub (positioning/CAMARA, edge apps). Read-only for viewers.
     { id: "services",      label: "Services",    icon: IconGrid,        path: "/services" },
     { id: "metrics",       label: "Metrics",     icon: IconBars,        path: "/metrics" },
+    { id: "operations",    label: "Operations",  icon: IconRocket,      path: "/operations",  adminOnly: true },
   ] },
 ];
 
@@ -47,6 +48,7 @@ const SUBPAGES = [
   { path: "/settings/iam",               label: "Identity & Access", parent: "/settings" },
   { path: "/settings/branding",          label: "Branding",          parent: "/settings" },
   { path: "/settings/storage",           label: "Storage",           parent: "/settings" },
+  { path: "/settings/operations",        label: "Operations record", parent: "/settings" },
 ];
 
 const ALL_ITEMS = [...NAV_GROUPS.flatMap((g) => g.items.map((i) => ({ ...i, group: g.label }))), ...NAV_FOOTER];

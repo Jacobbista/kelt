@@ -49,7 +49,8 @@ class IamService:
     @staticmethod
     def _write_secret(env_key: str, value: str) -> None:
         """Replace (or append) one KEY=value line, leaving every other line
-        byte-for-byte intact, atomically and keeping 0600."""
+        byte-for-byte intact, atomically and keeping 0600. The version it
+        replaces is kept as .testbed.secrets.prev (kelt restore secrets)."""
         lines: list[str] = []
         if TESTBED_SECRETS.exists():
             lines = TESTBED_SECRETS.read_text().splitlines()
@@ -66,12 +67,20 @@ class IamService:
             with os.fdopen(fd, "w") as f:
                 f.write("\n".join(lines) + "\n")
             os.chmod(tmp, 0o600)
+            if TESTBED_SECRETS.exists():
+                prev = TESTBED_SECRETS.with_name(TESTBED_SECRETS.name + ".prev")
+                # Created 0600 from the start: never readable by others, even briefly.
+                pfd = os.open(tmp + ".prev", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(pfd, "wb") as f:
+                    f.write(TESTBED_SECRETS.read_bytes())
+                os.replace(tmp + ".prev", prev)
             os.replace(tmp, TESTBED_SECRETS)
         except BaseException:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
+            for leftover in (tmp, tmp + ".prev"):
+                try:
+                    os.unlink(leftover)
+                except OSError:
+                    pass
             raise
 
     # ── Keycloak admin API ─────────────────────────────────────────────────────

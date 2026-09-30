@@ -42,6 +42,9 @@ export function AuthProvider({ children }) {
   // user straight back to the dashboard via /auth/callback. This flag lets that
   // effect stand down while a logout is in flight.
   const [loggingOut, setLoggingOut] = useState(false);
+  // True when this tab had a session and it ended (expired, or not renewed):
+  // App.jsx then asks for a click instead of redirecting (lib/authFlow.js).
+  const [ended, setEnded] = useState(false);
 
   useEffect(() => {
     if (!AUTH_ENABLED || INSECURE_ORIGIN) return;
@@ -65,26 +68,37 @@ export function AuthProvider({ children }) {
         // already expired. Treating that as "logged in" let the first render
         // fire API calls with a dead token: a burst of 401s, then a reauth
         // redirect. An expired session is no session.
-        if (mounted) setUser(u && !u.expired ? u : null);
+        if (!mounted) return;
+        setUser(u && !u.expired ? u : null);
+        if (u?.expired) setEnded(true);
       })
       .catch(() => {})
       .finally(() => {
         if (mounted) setLoading(false);
       });
 
-    const onUserLoaded = (u) => mounted && setUser(u);
+    const onUserLoaded = (u) => {
+      if (!mounted) return;
+      setUser(u);
+      setEnded(false);
+    };
     const onUserUnloaded = () => mounted && setUser(null);
+    const onExpired = () => {
+      if (!mounted) return;
+      setUser(null);
+      setEnded(true);
+    };
 
     um.events.addUserLoaded(onUserLoaded);
     um.events.addUserUnloaded(onUserUnloaded);
-    um.events.addAccessTokenExpired(onUserUnloaded);
+    um.events.addAccessTokenExpired(onExpired);
     um.events.addSilentRenewError(() => {});
 
     return () => {
       mounted = false;
       um.events.removeUserLoaded(onUserLoaded);
       um.events.removeUserUnloaded(onUserUnloaded);
-      um.events.removeAccessTokenExpired(onUserUnloaded);
+      um.events.removeAccessTokenExpired(onExpired);
     };
   }, []);
 
@@ -125,6 +139,7 @@ export function AuthProvider({ children }) {
     insecureOrigin: INSECURE_ORIGIN,
     loading,
     loggingOut,
+    ended,
     user,
     accessToken: user?.access_token || null,
     username: user?.profile?.preferred_username || user?.profile?.email || null,

@@ -1,6 +1,6 @@
 /**
- * Global transient notifications (toasts). Complements OperationsContext
- * (which tracks one long-running streaming op); toasts are short success /
+ * Global transient notifications (toasts). Complements the header's
+ * Operations (piece runs, lib/operations.js); toasts are short success /
  * error / info messages that any page can raise without duplicating banner
  * state.
  *

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import ServiceCard from "../components/ServiceCard";
-import { IconShield, IconPalette, IconDisk } from "../components/icons";
-import { getBranding, getStorageUsage } from "../api";
+import { IconShield, IconPalette, IconDisk, IconRocket } from "../components/icons";
+import { getBranding, getRetention, getStorageUsage } from "../api";
 
 // Admin configuration hub, in the same idiom as the Services hub: a card per
 // surface, each linking to its own sub-page. It replaced a tab strip, which said
@@ -22,13 +22,15 @@ function fmtBytes(bytes) {
 export default function SettingsPage() {
   const [brand, setBrand] = useState(null);
   const [disk, setDisk] = useState(null);
+  const [record, setRecord] = useState(null);
 
   useEffect(() => {
     let alive = true;
-    // Both probes are best-effort: a card still renders (with em dashes) when its
+    // The probes are best-effort: a card still renders (with em dashes) when its
     // request fails, rather than blanking the hub.
     getBranding().then((b) => alive && setBrand(b || {})).catch(() => alive && setBrand({}));
     getStorageUsage().then((d) => alive && setDisk(d || {})).catch(() => alive && setDisk({}));
+    getRetention().then((r) => alive && setRecord(r || {})).catch(() => alive && setRecord({}));
     return () => { alive = false; };
   }, []);
 
@@ -39,7 +41,7 @@ export default function SettingsPage() {
     <div className="svc-fade flex flex-col gap-6 pb-8">
       <header>
         <p className="text-xs text-slate-500">
-          Deployment configuration: who can get in, how the front door looks, and what the nodes are storing.
+          Deployment configuration: who can get in, how the front door looks, what the nodes are storing, and how long the record of operations is kept.
         </p>
       </header>
 
@@ -83,6 +85,19 @@ export default function SettingsPage() {
           stats={[
             { label: "used", value: fs ? `${fs.used_pct}%` : "—" },
             { label: "free", value: fs ? fmtBytes(fs.free) : "—" },
+          ]}
+        />
+
+        <ServiceCard
+          icon={IconRocket}
+          title="Operations record"
+          subtitle="How long the record of piece runs is kept"
+          status=""
+          cta="open"
+          to="/settings/operations"
+          stats={[
+            { label: "runs", value: record?.runs ?? "—" },
+            { label: "size", value: record?.bytes != null ? fmtBytes(record.bytes) : "—" },
           ]}
         />
       </div>

@@ -216,6 +216,8 @@ configuration and secrets, which a raw playbook run does not.
 | `kelt up` | — | `vagrant up` with current profile |
 | `kelt provision` | — | Full Ansible playbook |
 | `kelt run-phase` | `<phase-dir>` | Single phase, e.g. `09-dashboard` |
+| `kelt run-piece` | `<piece> [--yes]` | One named piece of the playbooks (`ansible/pieces.yml`), recorded, e.g. `ran_link`, `ran_attach`, `ran_detach`; a piece that cuts devices off asks for its word (`--yes` for scripts) |
+| `kelt operations` | `[pieces \| show <id> \| <state>]` | Recorded piece runs from the CLI and the dashboard, one run with its log, or the list of pieces |
 | `kelt autostart` | `on \| off \| status` | systemd unit toggle |
 
 ### Configure

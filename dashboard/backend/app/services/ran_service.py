@@ -4,15 +4,14 @@ import logging
 import socket
 import struct
 import subprocess
-import time
 from pathlib import Path
-from collections.abc import Callable
 from typing import Any
 
 import yaml
 
 from app.config import settings
-from app.services.k8s_service import K8sService
+from app.services.k8s_service import K8sService, nf_api_get, pod_port, thread_core
+from app.services.ran_chain import build_chain
 from app.services.network_plan import plan_value
 
 log = logging.getLogger(__name__)
@@ -22,19 +21,14 @@ NAD_NAMESPACE = plan_value("namespace_5g")
 AMF_DEPLOYMENT = "amf"
 AMF_NAMESPACE = plan_value("namespace_5g")
 NETWORK_ANNOTATION = "k8s.v1.cni.cncf.io/networks"
-OVS_DS_LABEL = "app=ds-net-setup-worker"
 OVS_DS_NAME = "ds-net-setup-worker"
 OVS_DS_NS = "kube-system"
 
 ANSIBLE_DIR = "/home/vagrant/ansible-ro"
-ANSIBLE_CFG = f"{ANSIBLE_DIR}/ansible.cfg"
-ANSIBLE_PLAYBOOK_BIN = "/home/vagrant/.local/bin/ansible-playbook"
 GROUP_VARS = Path(ANSIBLE_DIR) / "group_vars" / "all.yml"
 TESTBED_ENV = Path("/vagrant/.testbed.env")
 # Persisted by Vagrantfile trigger when worker reloads with PHYSICAL_RAN_BRIDGE (synced to ansible /vagrant)
 HOST_NIC_APPLIED_PATH = Path("/vagrant/.physical_ran_bridge_applied")
-PHASE4_PLAYBOOK = f"{ANSIBLE_DIR}/phases/04-overlay-network/playbook.yml"
-PHASE5_PLAYBOOK = f"{ANSIBLE_DIR}/phases/05-5g-core/playbook.yml"
 
 
 def _read_host_nic_applied() -> str:
@@ -79,7 +73,7 @@ def _read_ansible_config() -> dict[str, Any]:
     except FileNotFoundError:
         data = {}
     # all.yml derives physical_ran_enabled from PHYSICAL_RAN_ENABLED in
-    # .testbed.env; read the flag at its source (the file _persist_physical_ran_state writes).
+    # .testbed.env; read the flag at its source (the file the ran_attach/ran_detach pieces write).
     physical_ran_enabled = _read_testbed_env().get("PHYSICAL_RAN_ENABLED", "false").lower() == "true"
     ran_bridge_mode_raw = data.get("ran_bridge_mode", "n2_n3")
     # Resolve Jinja template if present (e.g. "{{ 'n2_n3' if ... else 'disabled' }}")
@@ -125,31 +119,6 @@ class RanService:
 
     # ── Ansible runner ───────────────────────────────────────────
 
-    def _run_playbook(
-        self, playbook: str, tags: list[str],
-        extra_vars: dict[str, str], timeout: int = 120,
-    ) -> str:
-        cmd = [ANSIBLE_PLAYBOOK_BIN, playbook, "--tags", ",".join(tags)]
-        for k, v in extra_vars.items():
-            cmd.extend(["-e", f"{k}={v}"])
-
-        import os
-        env = {**os.environ, "ANSIBLE_CONFIG": ANSIBLE_CFG}
-
-        log.info("Running: %s", " ".join(cmd))
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True,
-            timeout=timeout, cwd=ANSIBLE_DIR, env=env, check=False,
-        )
-        output = (proc.stdout or "") + (proc.stderr or "")
-        if proc.returncode != 0:
-            log.error("Playbook failed (rc=%d):\n%s", proc.returncode, output[-2000:])
-            raise RuntimeError(
-                f"Ansible playbook failed (rc={proc.returncode}): {output[-1000:]}"
-            )
-        log.info("Playbook completed successfully")
-        return output
-
     # ── Read-only checks ─────────────────────────────────────────
 
     def _detect_ran_interface(self, subnet: str) -> str | None:
@@ -179,22 +148,6 @@ class RanService:
         cfg = cfg or _read_ansible_config()
         return cfg["physical_ran_interface"] or self._detect_ran_interface(cfg["physical_ran_subnet"]) or ""
 
-    def bring_link_up(self, retries: int = 20, delay: float = 3) -> dict[str, Any]:
-        """Re-run the OVS setup that owns the RAN NIC (phase 04 script in the
-        worker's network DaemonSet) and wait for the link. A missing NIC is a VM
-        matter (vagrant reload), not something the setup can fix."""
-        iface = self._ran_iface()
-        state = self._nic_state(iface)
-        if state == "missing":
-            return {"ok": False, "nic_state": state, "interface": iface or None}
-        self._restart_ovs_ds_pod()
-        for _ in range(retries):
-            time.sleep(delay)
-            state = self._nic_state(iface)
-            if state == "up":
-                break
-        return {"ok": state == "up", "nic_state": state, "interface": iface}
-
     def _nic_state(self, iface: str) -> str:
         """The worker's RAN NIC: "missing" (not in the VM), "down" (present, link
         not brought up), "no_carrier" (up, nothing on the wire) or "up"."""
@@ -212,12 +165,6 @@ class RanService:
         if "NO-CARRIER" in flags or links[0].get("operstate") != "UP":
             return "no_carrier"
         return "up"
-
-    def _interface_detected(self, iface: str, subnet: str = "") -> bool:
-        """Check if the bridged interface exists and is UP on the worker."""
-        if not iface and subnet:
-            iface = self._detect_ran_interface(subnet) or ""
-        return self._nic_state(iface) == "up"
 
     def _br_ran_exists(self) -> bool:
         out = self._ssh("sudo ovs-vsctl br-exists br-ran 2>/dev/null; echo $?").strip()
@@ -243,6 +190,37 @@ class RanService:
             return json.loads(raw)
         except json.JSONDecodeError:
             return []
+
+    def _amf_pods(self) -> list[dict[str, Any]]:
+        """The AMF's pods as they run: ready, going away, with n2phy (from the
+        pod's own network annotation, not the Deployment template)."""
+        pods = self.k8s.core.list_namespaced_pod(namespace=AMF_NAMESPACE, label_selector="app=amf").items
+        out = []
+        # An evicted or finished pod stays listed but never runs again.
+        for p in (p for p in pods if p.status.phase not in ("Succeeded", "Failed")):
+            try:
+                nets = json.loads((p.metadata.annotations or {}).get(NETWORK_ANNOTATION, "[]"))
+            except json.JSONDecodeError:
+                nets = []
+            out.append({
+                "ready": p.status.phase == "Running" and all(c.ready for c in (p.status.container_statuses or [])),
+                "deleting": p.metadata.deletion_timestamp is not None,
+                "phy": any(n.get("name") == NAD_NAME for n in nets),
+            })
+        return out
+
+    def attachment_facts(self) -> dict[str, Any]:
+        """What the ran_attach / ran_detach read-backs judge (ran_chain verdicts)."""
+        br = self._br_ran_exists()
+        ports = self._br_ran_ports() if br else []
+        iface = self._ran_iface()
+        return {
+            "br_exists": br,
+            "nic_on_bridge": bool(iface) and iface in ports,
+            "amf_veth": any(p and p != "br-ran" and p != iface and not p.startswith("patch-") for p in ports),
+            "nad_exists": self._nad_exists(),
+            "amf_pods": self._amf_pods(),
+        }
 
     # ── Composite status ─────────────────────────────────────────
 
@@ -298,6 +276,20 @@ class RanService:
 
         host_nic_applied = _read_host_nic_applied()
 
+        # NF ports are read by name from the running AMF (where the NF is wired).
+        gnb = self._physical_gnb(cfg["physical_ran_subnet"], pod_port(thread_core(), AMF_NAMESPACE, "amf", "ngap"))
+        counts = self._ue_counts(gnb["gnb_id"] if gnb["connected"] else None)
+        chain = build_chain({
+            "intent_attached": _read_testbed_env().get("PHYSICAL_RAN_ENABLED", "false").strip().lower() == "true",
+            "bridge_exists": br_exists,
+            "nic_state": nic_state, "iface": iface or "", "host_nic": host_nic_applied or None,
+            "nic_on_bridge": bool(iface) and iface in br_ports, "bridge_ports": br_ports,
+            "amf_attached": amf_attached, "amf_ip": cfg["amf_physical_ran_ip"],
+            "ngap_port": gnb["ngap_port"], "gnb_connected": gnb["connected"], "gnb_ip": gnb["ip"],
+            "upf_route": upf_has_return_route, "subnet": cfg["physical_ran_subnet"],
+            "n3_subnet": cfg["n3_subnet"], **counts,
+        })
+
         return {
             "config": cfg,
             "bridge_detected": bridge_detected,
@@ -313,69 +305,14 @@ class RanService:
             "amf_pod_ready": amf_pod_ready,
             "upf_has_return_route": upf_has_return_route,
             "host_nic_applied": host_nic_applied or None,
+            "chain": chain,
+            "gnb": gnb,
+            "counts": counts,
         }
 
     # ── OVS DaemonSet helpers ────────────────────────────────────
 
-    def _restart_ovs_ds_pod(self) -> None:
-        """Delete the worker OVS DaemonSet pod so the DS controller recreates
-        it and the setup script re-runs (creating/removing br-ran)."""
-        pods = self.k8s.core.list_namespaced_pod(
-            namespace=OVS_DS_NS, label_selector=OVS_DS_LABEL,
-        )
-        for pod in pods.items:
-            self.k8s.core.delete_namespaced_pod(
-                name=pod.metadata.name, namespace=OVS_DS_NS,
-            )
-            log.info("Deleted OVS DS pod %s to force re-execution", pod.metadata.name)
-
-    def _wait_for_bridge(
-        self,
-        bridge: str = "br-ran",
-        retries: int = 40,
-        delay: float = 4,
-        on_progress: Callable[[str, str, str], None] | None = None,
-    ) -> bool:
-        """Poll the worker until the OVS bridge exists."""
-        for i in range(retries):
-            if on_progress:
-                on_progress("ovs_bridge_created", "in_progress", f"Waiting for {bridge} ({i + 1}/{retries})…")
-            try:
-                out = self._ssh(
-                    f"sudo ovs-vsctl br-exists {bridge} 2>/dev/null; echo $?",
-                    timeout=8,
-                ).strip()
-                if out == "0":
-                    log.info("Bridge %s detected after %d checks", bridge, i + 1)
-                    return True
-            except Exception:
-                pass
-            time.sleep(delay)
-        log.warning("Bridge %s not found after %d retries", bridge, retries)
-        return False
-
     # ── AMF annotation helpers (K8s API – fast & reliable) ──────
-
-    def _patch_amf_networks(self, networks: list[dict[str, Any]]) -> None:
-        """Directly patch the AMF deployment's Multus network annotation."""
-        dep = self.k8s.apps.read_namespaced_deployment(
-            name=AMF_DEPLOYMENT, namespace=AMF_NAMESPACE,
-        )
-        ann = dep.spec.template.metadata.annotations or {}
-        ann[NETWORK_ANNOTATION] = json.dumps(networks) + "\n"
-        dep.spec.template.metadata.annotations = ann
-        self.k8s.apps.patch_namespaced_deployment(
-            name=AMF_DEPLOYMENT, namespace=AMF_NAMESPACE, body=dep,
-        )
-        log.info("Patched AMF networks annotation: %s", [n["name"] for n in networks])
-
-    def _amf_networks_without_physical(self) -> list[dict[str, Any]]:
-        return [n for n in self._get_amf_networks() if n.get("name") != NAD_NAME]
-
-    def _amf_networks_with_physical(self, ip: str) -> list[dict[str, Any]]:
-        nets = self._amf_networks_without_physical()
-        nets.append({"name": NAD_NAME, "interface": "n2phy", "ips": [f"{ip}/24"]})
-        return nets
 
     def _upf_return_route_active(self, subnet: str) -> bool:
         """True if the running UPF-Cloud routes `subnet` over N3.
@@ -407,294 +344,46 @@ class RanService:
                 return True
         return False
 
-    def _amf_veth_on_br_ran(self, iface: str) -> bool:
-        """True if br-ran carries the AMF's ovs-cni veth (a port that is not the
-        physical NIC, a patch, or the bridge itself). ovs-cni attaches n2phy at pod
-        sandbox creation, so if br-ran was rebuilt while the AMF was running the
-        port is orphaned and only an AMF restart re-attaches it."""
-        try:
-            out = self._ssh("sudo ovs-vsctl list-ports br-ran")
-        except RuntimeError:
-            return True  # cannot determine -> do not force a restart
-        for port in out.split():
-            p = port.strip()
-            if not p or p == "br-ran" or p == iface or p.startswith("patch-"):
-                continue
-            return True  # a veth -> AMF is attached
-        return False
+    def _physical_gnb(self, subnet: str, ngap_port: int | None) -> dict[str, Any]:
+        """The gNB the AMF knows whose SCTP peer is on the physical RAN subnet.
 
-    def _persist_physical_ran_state(self, enabled: bool) -> None:
-        """Persist PHYSICAL_RAN_ENABLED to .testbed.env so a CLI `run-phase 04` (or
-        provision) agrees with this dashboard-managed live state and does NOT reset
-        the OVS DaemonSet to RAN_BRIDGE_MODE=disabled (which tears down br-ran).
-        Best-effort: a missing or read-only file must never fail enable/disable."""
-        try:
-            path = TESTBED_ENV
-            lines = path.read_text().splitlines() if path.exists() else []
-            val = "true" if enabled else "false"
-            out, seen = [], False
-            for ln in lines:
-                if ln.startswith("PHYSICAL_RAN_ENABLED="):
-                    out.append(f"PHYSICAL_RAN_ENABLED={val}")
-                    seen = True
-                else:
-                    out.append(ln)
-            if not seen:
-                out.append(f"PHYSICAL_RAN_ENABLED={val}")
-            path.write_text("\n".join(out) + "\n")
-            log.info("Persisted PHYSICAL_RAN_ENABLED=%s to .testbed.env", val)
-        except Exception as exc:  # noqa: BLE001 - persistence is best-effort
-            log.warning("Could not persist PHYSICAL_RAN_ENABLED: %s", exc)
+        gnb-info also lists simulated gNBs (UERANSIM, on N2); only the one on
+        the RAN subnet is the physical one. {} from the AMF (restarting,
+        unreachable) reads as not connected."""
+        data = nf_api_get(thread_core(), AMF_NAMESPACE, "amf", "metrics", "gnb-info")
+        net = ipaddress.ip_network(subnet)
+        # A gNB can leave a stale association next to its live one: look at the
+        # ones with a completed NG Setup first.
+        items = sorted(data.get("items", []) or [], key=lambda g: not (g.get("ng") or {}).get("setup_success"))
+        for g in items:
+            ng = g.get("ng") or {}
+            peer = str((ng.get("sctp") or {}).get("peer", ""))
+            ip = peer.split("]")[0].lstrip("[") if peer.startswith("[") else peer.rsplit(":", 1)[0]
+            try:
+                on_ran = ipaddress.ip_address(ip) in net
+            except ValueError:
+                continue
+            if on_ran:
+                port = (g.get("network") or {}).get("ngap_port") or ngap_port
+                return {"connected": bool(ng.get("setup_success")), "ip": ip,
+                        "gnb_id": g.get("gnb_id"), "ngap_port": int(port) if port else None}
+        return {"connected": False, "ip": None, "gnb_id": None, "ngap_port": ngap_port}
+
+    def _ue_counts(self, gnb_id: int | None) -> dict[str, int]:
+        """UEs registered through this gNB and their PDU sessions (AMF ue-info)."""
+        if gnb_id is None:
+            return {"ues": 0, "pdu": 0}
+        items: list[dict[str, Any]] = []
+        page = 0
+        while True:
+            data = nf_api_get(thread_core(), AMF_NAMESPACE, "amf", "metrics", f"ue-info?page={page}&page_size=100")
+            batch = data.get("items", []) or []
+            items.extend(batch)
+            if not batch or len(items) >= (data.get("pager") or {}).get("count", 0):
+                break
+            page += 1
+        mine = [u for u in items if (u.get("gnb") or {}).get("gnb_id") == gnb_id]
+        return {"ues": len(mine), "pdu": sum(int(u.get("pdu_sessions_count") or 0) for u in mine)}
 
     # ── Enable / disable via Ansible + direct K8s patch ──────────
 
-    def enable(self, on_progress: Callable[[str, str, str], None] | None = None) -> dict[str, Any]:
-        cfg = _read_ansible_config()
-        steps: list[dict[str, Any]] = []
-
-        def prog(step: str, status: str, msg: str) -> None:
-            if on_progress:
-                on_progress(step, status, msg)
-
-        # Pre-flight: detect NIC on the worker
-        prog("nic_check", "in_progress", "Checking worker VM NIC…")
-        iface = self._ran_iface(cfg)
-        # Only a missing NIC blocks: the OVS setup this runs brings a down link up,
-        # and a missing carrier is on the cable/gNB side, not in the config.
-        nic_present = self._nic_state(iface or "") != "missing"
-        if not nic_present:
-            prog("nic_check", "error", "Worker VM NIC not found")
-            steps.append({
-                "step": "nic_check",
-                "status": "error",
-                "hint": (
-                    "No RAN interface detected on the worker VM. "
-                    "The VM was likely started without PHYSICAL_RAN_BRIDGE. "
-                    "Run: PHYSICAL_RAN_ENABLED=true PHYSICAL_RAN_BRIDGE=<host_nic> vagrant reload worker"
-                ),
-            })
-            return {
-                "enabled": False,
-                "steps": steps,
-                "error": "Worker VM has no RAN interface. Re-add it with vagrant reload worker.",
-            }
-        prog("nic_check", "ok", f"Found {iface}")
-        steps.append({"step": "nic_check", "status": "ok"})
-
-        br_exists = self._br_ran_exists()
-        nad_exists = self._nad_exists()
-        amf_has_phy = any(n.get("name") == NAD_NAME for n in self._get_amf_networks())
-        upf_has_route = self._upf_return_route_active(cfg["physical_ran_subnet"])
-        bridge_just_created = False
-
-        extra = {
-            "physical_ran_enabled": "true",
-            "physical_ran_interface": cfg["physical_ran_interface"] or "",
-            "ran_bridge_mode": "n2_n3",
-            "amf_physical_ran_ip": cfg["amf_physical_ran_ip"],
-        }
-        log.info(
-            "Enabling physical RAN (br=%s nad=%s amf=%s upf=%s)",
-            br_exists, nad_exists, amf_has_phy, upf_has_route,
-        )
-
-        # 1. OVS DaemonSet: only if br-ran not present (skip when already exists)
-        if not br_exists:
-            prog("ovs_daemonset_updated", "in_progress", "Running Ansible overlay playbook…")
-            self._run_playbook(PHASE4_PLAYBOOK, tags=["overlay"], extra_vars=extra)
-            steps.append({"step": "ovs_daemonset_updated", "status": "ok"})
-            prog("ovs_daemonset_updated", "ok", "Done")
-
-            prog("ovs_bridge_created", "in_progress", "Restarting OVS DaemonSet pod…")
-            self._restart_ovs_ds_pod()
-            found = self._wait_for_bridge("br-ran", retries=40, delay=4, on_progress=prog)
-            hint = None if found else (
-                "br-ran not detected on worker within ~2.5min. Check: "
-                "1) OVS DaemonSet pod (kube-system, app=ds-net-setup-worker) is Running; "
-                "2) SSH to worker works (backend uses worker_ssh_host); "
-                "3) physical_ran_interface in group_vars/all.yml matches the worker NIC."
-            )
-            prog("ovs_bridge_created", "ok" if found else "warning", "Done" if found else (hint or ""))
-            steps.append({
-                "step": "ovs_bridge_created",
-                "status": "ok" if found else "warning",
-                "hint": hint,
-            })
-            if not found:
-                return {
-                    "enabled": False,
-                    "steps": steps,
-                    "error": "br-ran not detected. Aborting to avoid stuck AMF pod.",
-                }
-            bridge_just_created = True
-        else:
-            prog("ovs_daemonset_updated", "ok", "Skipped (br-ran already exists)")
-            steps.append({"step": "ovs_daemonset_updated", "status": "ok (skipped)"})
-            prog("ovs_bridge_created", "ok", "Already existed")
-            steps.append({"step": "ovs_bridge_created", "status": "ok (already existed)"})
-
-        # Debounce: Ansible preflight on the worker races right after OVS creates br-ran.
-        if bridge_just_created:
-            time.sleep(4)
-            if not self._br_ran_exists():
-                return {
-                    "enabled": False,
-                    "steps": steps,
-                    "error": "br-ran disappeared on worker after setup. Check OVS DaemonSet logs.",
-                }
-
-        # 2. NAD: only if missing
-        # The multus play can take several minutes; 120s was too tight for dashboard enables.
-        # Ansible may also skip NAD creation if preflight still misses the bridge (exit 0) —
-        # we verify the object exists before continuing.
-        if not nad_exists:
-            prog("nad_creation", "in_progress", "Creating NAD via Ansible…")
-
-            def _run_nad_ansible() -> None:
-                self._run_playbook(
-                    PHASE4_PLAYBOOK, tags=["nad"], extra_vars=extra, timeout=420,
-                )
-
-            _run_nad_ansible()
-            if not self._nad_exists() and self._br_ran_exists():
-                prog("nad_creation", "in_progress", "NAD still missing; retrying after preflight delay…")
-                time.sleep(12)
-                _run_nad_ansible()
-            if not self._nad_exists():
-                prog("nad_creation", "error", "n2-physical not found in cluster after Ansible")
-                steps.append({
-                    "step": "nad_creation",
-                    "status": "error",
-                    "hint": (
-                        "Ansible finished but NAD was not created (often a preflight race or skipped task). "
-                        "On the worker run: sudo ovs-vsctl br-exists br-ran && echo OK. "
-                        "Then click Reconfigure or Enable again."
-                    ),
-                })
-                return {
-                    "enabled": False,
-                    "steps": steps,
-                    "error": (
-                        "NAD n2-physical was not created. "
-                        "Confirm br-ran on the worker, then Reconfigure."
-                    ),
-                }
-            steps.append({"step": "nad_creation", "status": "ok"})
-            prog("nad_creation", "ok", "Done")
-        else:
-            prog("nad_creation", "ok", "Already existed")
-            steps.append({"step": "nad_creation", "status": "ok (already existed)"})
-
-        # 3. AMF annotation: only if missing
-        if not amf_has_phy:
-            prog("amf_annotation_patched", "in_progress", "Patching AMF deployment…")
-            new_nets = self._amf_networks_with_physical(cfg["amf_physical_ran_ip"])
-            self._patch_amf_networks(new_nets)
-            steps.append({"step": "amf_annotation_patched", "status": "ok"})
-            prog("amf_annotation_patched", "ok", "Done")
-        else:
-            prog("amf_annotation_patched", "ok", "Already existed")
-            steps.append({"step": "amf_annotation_patched", "status": "ok (already existed)"})
-
-        # 3b. Re-attach the AMF to br-ran when its n2phy port is orphaned. ovs-cni
-        # attaches at pod creation, so if br-ran was (re)built under a running AMF
-        # (a CLI `run-phase 04` teardown, or this enable just recreated it), the
-        # annotation is present but the veth is gone from br-ran. Restart the AMF so
-        # ovs-cni re-attaches. Skipped above when the annotation was just added,
-        # because that patch already rolled the pod.
-        if amf_has_phy and (bridge_just_created or not self._amf_veth_on_br_ran(iface)):
-            prog("amf_reattach", "in_progress", "Re-attaching AMF to br-ran (restart)…")
-            self.k8s.restart_deployment(AMF_NAMESPACE, AMF_DEPLOYMENT)
-            # Wait until ovs-cni re-adds the AMF veth to br-ran, so the result this
-            # call reports (and the dashboard badge that reads it) reflects the real
-            # data path instead of the pre-restart state. Avoids the "red until manual
-            # reload" feedback gap during the ~15-40s AMF rollout.
-            attached = False
-            for i in range(20):  # ~60s
-                time.sleep(3)
-                if self._amf_veth_on_br_ran(iface):
-                    attached = True
-                    break
-                prog("amf_reattach", "in_progress", f"Waiting for AMF to re-attach to br-ran ({i + 1}/20)…")
-            steps.append({"step": "amf_reattach", "status": "ok" if attached else "warning"})
-            prog("amf_reattach", "ok" if attached else "warning",
-                 "AMF re-attached to br-ran" if attached else "AMF restart issued; re-attach not yet confirmed")
-
-        # 4. UPF return route: part of the UPF's N3 NAD (n3-upf-static), written by
-        # the phase 04 NAD play with physical_ran_enabled; a changed NAD rolls the
-        # UPF. Only if missing (step 2 may already have rewritten it).
-        if not upf_has_route and not self._upf_return_route_active(cfg["physical_ran_subnet"]):
-            prog("upf_return_route", "in_progress", "Adding the RAN route to the UPF N3 attachment via Ansible…")
-            self._run_playbook(PHASE4_PLAYBOOK, tags=["nad"], extra_vars=extra, timeout=420)
-            # Confirm on the running pod: success means the route is installed,
-            # not that the play finished.
-            active = False
-            for i in range(20):
-                time.sleep(3)
-                if self._upf_return_route_active(cfg["physical_ran_subnet"]):
-                    active = True
-                    break
-                prog("upf_return_route", "in_progress", f"Waiting for the UPF return route ({i + 1}/20)…")
-            steps.append({"step": "upf_return_route", "status": "ok" if active else "warning"})
-            prog("upf_return_route", "ok" if active else "warning",
-                 "Return route active on N3" if active else "UPF N3 attachment updated; return route not yet confirmed")
-        else:
-            prog("upf_return_route", "ok", "Already existed")
-            steps.append({"step": "upf_return_route", "status": "ok (already existed)"})
-
-        # Persist so a CLI run-phase 04 / provision keeps physical RAN up (no teardown).
-        self._persist_physical_ran_state(True)
-        return {"enabled": True, "steps": steps}
-
-    def disable(self, on_progress: Callable[[str, str, str], None] | None = None) -> dict[str, Any]:
-        log.info("Disabling physical RAN")
-        steps: list[dict[str, Any]] = []
-
-        def prog(step: str, status: str, msg: str) -> None:
-            if on_progress:
-                on_progress(step, status, msg)
-
-        # 1. Remove n2-physical from AMF annotation first (fast, prevents stuck pods)
-        prog("amf_annotation_patched", "in_progress", "Removing n2-physical from AMF…")
-        new_nets = self._amf_networks_without_physical()
-        self._patch_amf_networks(new_nets)
-        steps.append({"step": "amf_annotation_patched", "status": "ok"})
-        prog("amf_annotation_patched", "ok", "Done")
-
-        extra = {
-            "physical_ran_enabled": "false",
-            "ran_bridge_mode": "disabled",
-        }
-
-        # 2. Clean up NAD. The same play rewrites the UPF N3 NAD without the RAN
-        # route, which rolls the UPF (NAD hash), so the route goes with it.
-        prog("nad_cleanup", "in_progress", "Removing NAD via Ansible…")
-        self._run_playbook(PHASE4_PLAYBOOK, tags=["nad"], extra_vars=extra)
-        steps.append({"step": "nad_cleanup", "status": "ok"})
-        prog("nad_cleanup", "ok", "Done")
-
-        # 3. Remove OVS bridge via SSH
-        prog("ovs_bridge_removed", "in_progress", "Removing br-ran via SSH…")
-        try:
-            self._ssh(
-                "sudo ovs-vsctl --if-exists del-port br-n2 patch-n2-ran && "
-                "sudo ovs-vsctl --if-exists del-port br-n3 patch-n3-ran && "
-                "sudo ovs-vsctl --if-exists del-br br-ran",
-                timeout=15,
-            )
-            steps.append({"step": "ovs_bridge_removed", "status": "ok"})
-            prog("ovs_bridge_removed", "ok", "Done")
-        except RuntimeError as exc:
-            log.warning("OVS teardown failed: %s", exc)
-            steps.append({"step": "ovs_bridge_removed", "status": "skipped"})
-            prog("ovs_bridge_removed", "skipped", "Skipped")
-
-        # 4. Reset DaemonSet env to disabled (prevents br-ran re-creation on pod restart)
-        prog("ovs_daemonset_reset", "in_progress", "Resetting OVS DaemonSet…")
-        self._run_playbook(PHASE4_PLAYBOOK, tags=["overlay"], extra_vars=extra)
-        steps.append({"step": "ovs_daemonset_reset", "status": "ok"})
-        prog("ovs_daemonset_reset", "ok", "Done")
-
-        # Persist the disabled state so ansible runs agree (no surprise re-enable).
-        self._persist_physical_ran_state(False)
-        return {"enabled": False, "steps": steps}

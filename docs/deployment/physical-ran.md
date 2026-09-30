@@ -12,7 +12,7 @@ Connect a physical femtocell or small-cell gNB (e.g. nCELL-F2240) instead of, or
 
 **Flow**: Host NIC → (VirtualBox bridge) → Worker NIC (`enp0s9`) → (OVS) → `br-ran` → patch ports → `br-n2` / `br-n3` → AMF / UPF pods.
 
-**Verification**: When you run `vagrant reload worker` with `PHYSICAL_RAN_BRIDGE=<nic>`, Vagrant persists the applied value to `.physical_ran_bridge_applied`. The dashboard reads this and shows a ✓ next to the Host PC NIC when it matches, no trust required.
+**Verification**: every time the worker starts (`vagrant up` or `reload`), the Vagrantfile writes the host adapter it bridged to `.physical_ran_bridge_applied`. That is what the worker really has, next to what `PHYSICAL_RAN_BRIDGE` in `.testbed.env` asks for: `kelt provision` reloads the worker when the two differ, and the dashboard's RAN page shows the applied adapter in the *Cable and link* details.
 
 ## Architecture
 
@@ -126,7 +126,7 @@ requires the apps route to be enabled. See
 | Component                                 | Where                     | What it does                                                                                                                                                 |
 | ----------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **OVS DaemonSet** (`ds-net-setup-worker`) | Worker node (hostNetwork) | Runs `ovs-setup.sh` to create/remove `br-ran`, patch ports, gateway IPs. When `RAN_BRIDGE_MODE=disabled`, it tears down `br-ran`.                            |
-| **NAD n2-physical**                       | Kubernetes API (cluster)  | NetworkAttachmentDefinition that tells Multus how to attach pods to `br-ran`. It is a cluster resource, not "on" the worker. Disable deletes it via Ansible. |
+| **NAD n2-physical**                       | Kubernetes API (cluster)  | NetworkAttachmentDefinition that tells Multus how to attach pods to `br-ran`. It is a cluster resource, not "on" the worker. Detach deletes it (phase 4, `nad`). |
 | **Playbook guard**                        | Ansible (phase 4 & 5)     | When `physical_ran_enabled` is true, checks whether `br-ran` exists on the worker before creating `n2-physical` and before AMF attachment. If the bridge is missing, physical-RAN-specific resources are skipped for that run so the base system can still finish deploying. Bypass: `physical_ran_skip_bridge_check: true` in `group_vars` or `-e physical_ran_skip_bridge_check=true`. |
 
 ---
@@ -136,11 +136,14 @@ requires the apps route to be enabled. See
 ### Step 1: Select the Host NIC
 
 ```bash
-testbed ran <host_nic>     # e.g. enp88s0; `testbed ran disable` turns it off
+kelt ran <host_nic>     # e.g. enp88s0; `kelt ran disable` turns it off
 ```
 
 This writes `PHYSICAL_RAN_ENABLED=true` and `PHYSICAL_RAN_BRIDGE=<host_nic>` to
-`.testbed.env`. The subnet and the AMF address come from `ansible/group_vars/all.yml`
+`.testbed.env`. The two say different things: `PHYSICAL_RAN_BRIDGE` gives the
+worker VM its RAN adapter (the Vagrantfile adds it whenever the variable is set),
+and `PHYSICAL_RAN_ENABLED` says whether the core is attached to the RAN, which is
+what Attach and Detach change (below). The subnet and the AMF address come from `ansible/group_vars/all.yml`
 (`physical_ran_subnet`, `amf_physical_ran_ip`); `physical_ran_interface` is the
 **worker** NIC and is auto-detected when left empty (the interface holding an IP in
 `physical_ran_subnet`).
@@ -156,17 +159,36 @@ bridges `PHYSICAL_RAN_BRIDGE` into the worker with the gateway IP `192.168.6.1`.
 The playbook then creates `br-ran` and the patch ports (phase 04) and adds the
 `n2-physical` NAD to the AMF and `PHYSICAL_RAN_SUBNET` to the UPF (phase 05).
 
-### Re-applying Only the RAN Parts
+### Attach and Detach
 
-On a running testbed where the worker already carries the bridge:
+On a running testbed whose worker has the RAN adapter, the core is attached to
+or detached from the RAN by two pieces (see
+[contributing.md](../development/contributing.md#pieces)), from the dashboard's
+RAN page or from the CLI:
 
 ```bash
-# Re-deploy the OVS DaemonSet (creates br-ran, patch ports, gateway IPs)
-testbed run-phase 04-overlay-network overlay
-
-# Re-deploy 5G Core (adds n2-physical NAD to AMF, PHYSICAL_RAN_SUBNET to UPF)
-testbed run-phase 05-5g-core nfs
+kelt run-piece ran_attach   # PHYSICAL_RAN_ENABLED=true, then:
+                            # phase 04 overlay → br-ran (setup pod) → nad → phase 05 nf_deployments → AMF on br-ran
+kelt run-piece ran_detach   # PHYSICAL_RAN_ENABLED=false, then:
+                            # phase 05 nf_deployments → phase 04 nad → overlay → br-ran removed
 ```
+
+- **Attach** builds `br-ran` with the adapter, creates `n2-physical`, gives the
+  UPF its route back to the RAN and the AMF its RAN interface, and restarts the
+  AMF again only if its port is missing from `br-ran`. The UPF and the AMF
+  restart: every PDU session on every cell drops and is set up again. The gNB
+  then sets up NGAP by itself.
+- **Detach** removes the AMF's RAN interface, `n2-physical` and the UPF's route,
+  then `br-ran`; the AMF and the UPF restart once. Every device on the gNB loses
+  its link until Attach runs; the dashboard asks for `detach` to be typed first.
+  The worker keeps its RAN adapter, so a worker restart does not stand in the
+  way of Attach.
+- Both restart the worker's network setup pod when `br-ran` has to change; that
+  pod installs its tools from the Alpine package mirror at start, so the worker
+  needs internet access for Attach and Detach to finish.
+- Both change nothing when the RAN is already in that state, share one lock
+  with `ran_link` (one RAN piece at a time), and are done only when the
+  dashboard has read the state back from the running pods.
 
 ---
 
@@ -312,19 +334,11 @@ Expected:
 
 ---
 
-## 5. Switch Back to UERANSIM
+## 5. Simulated RAN (UERANSIM)
 
-```yaml
-# ansible/group_vars/all.yml
-physical_ran_enabled: false
-ran_bridge_mode: disabled
-```
-
-```bash
-testbed run-phase 04-overlay-network overlay
-testbed run-phase 05-5g-core nfs
-testbed run-phase 06-ueransim-mec
-```
+Detaching the physical RAN (above) leaves the core without a RAN. The phase that
+installs UERANSIM (`06-ueransim-mec`) is not maintained at the moment, and the
+dashboard does not offer it.
 
 ---
 
@@ -334,12 +348,12 @@ testbed run-phase 06-ueransim-mec
 | --------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ping 192.168.6.1` fails                | br-ran has no IP                              | Re-run overlay playbook; check `RAN_SUBNET` env var                                                                                                                                             |
 | `ping 10.203.0.101` fails from gNB      | Missing route on gNB                          | **Commercial femtocell:** set Default gateway = 192.168.6.1 in web UI. Software gNB: `ip route add 10.203.0.0/16 via 192.168.6.1`                                                               |
-| UPF can't reach gNB (no GTP-U downlink) | Missing return route in UPF                   | Check `PHYSICAL_RAN_SUBNET` env var in UPF deployment                                                                                                                                           |
+| UPF can't reach gNB (no GTP-U downlink) | Missing return route in UPF                   | The route is part of the UPF's N3 attachment (`n3-upf-static`); the RAN page's *User plane* link reads it from the running UPF. `kelt run-piece ran_attach` puts it back |
 | AMF doesn't see gNB                     | PLMN mismatch or SCTP issue                   | Check MCC/MNC/TAC; `sudo modprobe sctp` on worker                                                                                                                                               |
 | `failed to find bridge br-ran`          | NAD / AMF reference `br-ran` but OVS never created it | Worker needs RAN NIC + overlay applied; restart `ds-net-setup-worker` on worker. Same root cause as a skipped physical-RAN configuration (table *OVS DaemonSet vs NAD*).                            |
-| Physical RAN is skipped during deploy   | `physical_ran_enabled` true, `br-ran` missing on worker | Apply `PHYSICAL_RAN_BRIDGE` to the worker VM (`testbed-config provision` now reloads the worker automatically when needed, or run `vagrant reload worker`), then re-run overlay/core or enable later from the dashboard. |
-| br-ran persists after Disable           | DS pod restarted before teardown; old script  | Fixed: ovs-setup.sh now tears down br-ran when RAN_BRIDGE_MODE=disabled. Re-run Disable or `testbed run-phase 04-overlay-network overlay ran_bridge_mode=disabled` |
-| NAD n2-physical persists after Disable  | Playbook only skipped creation, never deleted | Fixed: multus_install now deletes the NAD when physical_ran_enabled=false. Re-run `testbed run-phase 04-overlay-network nad physical_ran_enabled=false`            |
+| Physical RAN is skipped during deploy   | `physical_ran_enabled` true, `br-ran` missing on worker | Apply `PHYSICAL_RAN_BRIDGE` to the worker VM (`kelt provision` reloads the worker when needed, or `vagrant reload worker`), then run `kelt run-piece ran_attach` or Attach on the dashboard's RAN page. |
+| br-ran persists after Disable           | DS pod restarted before teardown; old script  | Fixed: ovs-setup.sh tears down br-ran when RAN_BRIDGE_MODE=disabled. Run `kelt run-piece ran_detach` again: it restarts the setup pod when br-ran is still there |
+| NAD n2-physical persists after Disable  | Playbook only skipped creation, never deleted | Fixed: multus_install deletes the NAD when physical_ran_enabled=false. Run `kelt run-piece ran_detach` again            |
 | `macvlan: device or resource busy`      | n2-physical NAD misconfigured                 | Ensure NAD uses `type: ovs, bridge: br-ran`                                                                                                                                                     |
 | UE authenticated but no data            | PDU session fails at PFCP                     | Check SMF→UPF N4 connectivity; check UPF logs                                                                                                                                                   |
 

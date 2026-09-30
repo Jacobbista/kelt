@@ -43,6 +43,16 @@ validated it is). A Core phase may still ship Experimental features.
 All shared variables belong in `ansible/group_vars/all.yml`. Do not hardcode
 IPs, versions, or image names in roles.
 
+`all.yml` holds the testbed's plan: subnets, addresses, versions, images, and
+the ports the testbed exposes. The ports an NF implementation listens on (SBI,
+NGAP, its management API) are a property of that implementation, not of the
+plan: they are declared once where the NF is wired, in
+`ansible/phases/05-5g-core/roles/nf_deployments/defaults/main.yml`, which names
+them on the pod (`sbi`, `ngap`, `metrics`). Code that needs one reads it by
+name from the running pod (`k8s_service.pod_port`, or a port name passed to
+`nf_api_get`), so wiring another core changes only that file. NGAP's 38412 is
+the standard port (3GPP TS 38.412) and is read the same way.
+
 ### Component image versions
 
 Every container image tag is defined once in `all.yml` and referenced from
@@ -127,6 +137,48 @@ When `command` or `shell` is unavoidable, guard it with `creates:`,
 `when:` precondition. Never use `shell` to write files, install packages, or
 manage services when a dedicated module exists.
 
+### Pieces
+
+A piece is one named, idempotent part of a phase: a phase playbook plus the tags
+that select it. Pieces are how the dashboard changes the testbed, and the CLI runs
+the same ones, so an action behaves the same from both sides.
+
+- **Registry**: `ansible/pieces.yml`. Each piece has a `title`, `runs` (a list of
+  `{phase, tags}` run in order), optional fixed `extra_vars` (never taken from a
+  request), optional `set_env` (keys written to `.testbed.env` before the run),
+  a `tier` (`change`: brings the testbed to the state it should already be in;
+  `disrupt`: interrupts traffic or removes something, and must say what it
+  `stops`), `changes`, `takes_s`, an optional `check`, a read-back the
+  dashboard runs after the playbooks exit 0, an optional `lock` (a group: pieces
+  that share it never run at once, e.g. the RAN pieces share `ran`), and an
+  optional `confirm_word` (a word the dashboard makes the admin type before a
+  piece that cuts devices off, e.g. `detach`).
+- **Runner**: `ansible/tools/kelt-piece`, on the ansible VM. It loads
+  `.testbed.env` and `.testbed.secrets` the way `kelt run-phase` does, holds one
+  lock per piece or lock group (a second start of the same piece gets the
+  running one's id, another piece of the group is refused with the running
+  one's name; the lock also tells whether a run is still alive), and writes a record
+  per run to `~/.kelt/operations/` (private to the user: `<id>.json`, and the playbook output as
+  `<id>.log.gz`). Records older than `KELT_OPS_MAX_AGE_DAYS` (30) or beyond
+  `KELT_OPS_MAX_MB` (50 MB in total) are pruned after each run; a running one
+  never is. Tests: `python3 -m unittest test_kelt_piece` in `ansible/tools/`.
+- **CLI**: `kelt run-piece <piece>`, `kelt operations [pieces|show <id>|<state>]`.
+  A run started from the dashboard runs as its own transient system unit
+  (`kelt-piece-<id>`), so restarting the dashboard backend does not stop it.
+- **Dashboard**: `GET /api/v1/pieces`, `POST /api/v1/pieces/<name>/run`,
+  `GET /api/v1/operations[/<id>]`, `GET`/`PUT /api/v1/operations/retention`
+  (admin). "Done" means the piece's check passed, not only that the playbooks
+  exited 0. In the UI, `PieceButton` shows the confirmation from the registry;
+  the header's Operations button and the Operations page show the runs; the
+  limits are editable in Settings → Operations record. `kelt-piece usage` and
+  `kelt-piece retention [--max-age-days N] [--max-mb M]` report and set them.
+
+To add a piece: put its tasks in a play of the phase with the tags
+`[<piece>, never]` (`never` keeps a whole-phase run from executing it), make
+every task safe to run again, add the entry to `pieces.yml`, and, if the
+dashboard should confirm the result, a check in
+`dashboard/backend/app/routers/pieces.py`.
+
 ### Templates
 
 Jinja2 templates are named `<component>-<resource-type>.yaml.j2` and live in
@@ -154,12 +206,19 @@ The frontend lives in `dashboard/frontend/` (Vite + React, Tailwind,
 `oidc-client-ts` for PKCE). Two deploy targets coexist: a cluster pod at the
 worker NodePort, and an opt-in Vite dev server on the ansible VM.
 
+How pages behave and look (tiers and colours, confirmations, the loader, data,
+operations) is set by [dashboard-design.md](dashboard-design.md); its rules are
+binding for any page that is added or redesigned.
+
 Adding a page requires four touch points:
 
 1. A component file under `src/pages/`.
-2. A route entry in `src/App.jsx` (both the routes dict and the `<Route>` line).
-3. A sidebar entry in `src/components/Sidebar.jsx`. Set `adminOnly: true` to
-   gate the nav button; the render-time filter already enforces it.
+2. A `<Route>` line in `src/App.jsx`, wrapped in `AdminOnly` when its backend
+   routes are admin-only.
+3. An entry in `src/navigation.js`: in a sidebar group, or in `SUBPAGES` with
+   its parent for a page reached from another. Set `adminOnly: true` to hide
+   the sidebar entry from viewers. The sidebar, the route ids and the header's
+   breadcrumb all read this file.
 4. A backend router, if the page needs new endpoints, included in
    `dashboard/backend/app/main.py` with the viewer or admin dependency.
 
@@ -396,7 +455,7 @@ Each image has its own release lifecycle, decoupled from the others:
 
 ### Review checklist
 
-- [ ] No hardcoded values; variables come from `all.yml`
+- [ ] No hardcoded values: plan values from `all.yml`, NF ports by name from the NF wiring
 - [ ] Ansible tasks are idempotent, workarounds carry a doc backlink
 - [ ] Edge-specific code is gated
 - [ ] Facts written at their owner document, linked elsewhere
