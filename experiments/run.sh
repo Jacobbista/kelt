@@ -4,18 +4,24 @@
 # runs/<campaign>/<utc>/ (provenance.json, window.json, raw/, summary.*).
 # Names follow the thesis sections:
 #
-#   run.sh resource-use idle|from <run-dir>...   CPU/memory per pod (4.10.2, 5.11.3)
+#   run.sh resource-use idle                     CPU/memory of the testbed at rest (4.10.2, 5.11.3)
 #   run.sh verification                          one exchange per profile behaviour (5.11.1)
 #   run.sh response-time                         where a location request's time goes (5.11.2)
+#   run.sh throughput                            TCP goodput UE <-> measurement server (4.10.1.1)
+#   run.sh rtt                                   RTT UE <-> measurement server, core/access split (4.10.1.2)
+#   run.sh resume [run-dir]                      continue a network run that did not finish
+#   run.sh stop                                  end a network job on the UE, keep what it measured
 #   run.sh report                                every run, one line each
 #
-# throughput and rtt (4.10.1) come with part B (the Pi). KELT_PILOT=1 marks a
+# The network campaigns measure from the UE named by KELT_UE_SSH (network/campaign.sh). KELT_PILOT=1 marks a
 # trial run: recorded, never in the tables (tables.py). Other knobs are listed
 # at the top of each campaign function. Owner: experiments/README.md.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
+# shellcheck source=network/campaign.sh
+source "$EXP_ROOT/network/campaign.sh"
 
-WHAT="${1:?usage: run.sh <resource-use|verification|response-time|report>}"
+WHAT="${1:?usage: run.sh <resource-use|verification|response-time|throughput|rtt|resume|stop|report>}"
 
 # ── shared helpers ────────────────────────────────────────────────────────────
 
@@ -59,35 +65,17 @@ PY
 #   run.sh resource-use idle                 5 min at rest, its own window
 #   run.sh resource-use from <run-dir>...    the windows other campaigns recorded
 run_resource_use() {
-  local mode="${1:?usage: run.sh resource-use idle | from <run-dir>...}"; shift || true
-  local prom run_dir d label start end
-  local args=()
-  prom="${KELT_PROM_URL:-http://$(node_ip):$(svc_nodeport "$MONITORING_NS" "${KELT_PROM_SVC:-prometheus}")}"
-  curl -fsS --max-time 10 "$prom/-/ready" >/dev/null || die "Prometheus not reachable at $prom (set KELT_PROM_URL)"
-  run_dir="$(begin_run resource-use "$mode")"
-  if [ "$mode" = idle ]; then
-    log "resource-use idle: nothing else must run for ${KELT_RESOURCE_S:-300} s"
-    window open "$run_dir" idle; sleep "${KELT_RESOURCE_S:-300}"; window close "$run_dir" idle
-    set -- "$run_dir"
-  fi
-  for d in "$@"; do
-    [ -d "$d" ] || die "not a run directory: $d"
-    d="$(cd "$d" && pwd)"   # the reader below runs from $EXP_ROOT
-    while IFS=$'\t' read -r label start end; do
-      if [ "$end" = None ]; then log "resource-use: skipping unclosed window '$label' in $d"; continue; fi
-      # label = run stamp + window; a response-time condition dir is named like its window
-      local who; who="$(basename "$d")"; [ "$who" = "$label" ] && who="$(basename "$(dirname "$d")")"
-      args+=(--window "$who-$label" "$start" "$end")
-    done < <(cd "$EXP_ROOT" && python3 -c 'import sys
-from lib.runmeta import windows
-for w in windows(sys.argv[1]):
-    print(w["label"], w["start_utc"], w["end_utc"], sep="\t")' "$d")
-  done
-  [ "${#args[@]}" -gt 0 ] || die "no closed windows to read"
-  python3 "$EXP_ROOT/resource-use/resource_use.py" --prom "$prom" --run-dir "$run_dir" "${args[@]}" \
-    --core "$CORE_NS" --exposure "$EXPOSURE_NS_RE" --identity "$IAM_NS" --apps "$APPS_NS" \
-    --probe "${KELT_PROBE_DEPLOY:-netshoot}"
-  log "resource-use -> $run_dir/summary.md"
+  local mode="${1:?usage: run.sh resource-use idle}" run_dir secs="${KELT_RESOURCE_S:-300}" start end
+  [ "$mode" = idle ] || die "run.sh resource-use idle: the load conditions are recorded by the campaigns that load the testbed"
+  run_dir="$(begin_run resource-use idle)"
+  log "resource-use idle: nothing else must run for $secs s"
+  footprint_start idle "$((secs + 60))" "$run_dir/raw/footprint/1"
+  window open "$run_dir" idle; start="$(date +%s.%N)"
+  sleep "$secs"
+  end="$(date +%s.%N)"; window close "$run_dir" idle
+  footprint_stop idle "$run_dir/raw/footprint/1"
+  footprint_summarise "$run_dir" --window idle "$start" "$end"
+  log "resource-use -> $run_dir/footprint.md"
 }
 
 # ── verification: one recorded exchange per behaviour of the profile ──────────
@@ -152,6 +140,10 @@ case "$WHAT" in
   resource-use) shift; run_resource_use "$@" ;;
   verification) run_verification ;;
   response-time) run_response_time ;;
+  throughput) run_throughput ;;
+  rtt) run_rtt ;;
+  resume) run_resume "${2:-}" ;;
+  stop) run_stop ;;
   report) exec "$EXP_ROOT/report.sh" "${2:-}" ;;
-  *) die "unknown: $WHAT (resource-use | verification | response-time | report)" ;;
+  *) die "unknown: $WHAT (resource-use | verification | response-time | throughput | rtt | resume | stop | report)" ;;
 esac

@@ -25,9 +25,9 @@ for d in sorted(glob.glob(os.path.join(runs_dir, "*", "2*"))):
         prov = {}
     tag = " [pilot]" if prov.get("pilot") else ""
     line = "raw only"
-    if campaign == "resource-use" and os.path.exists(os.path.join(d, "resource_use.json")):
-        ws = json.load(open(os.path.join(d, "resource_use.json")))["windows"]
-        line = "; ".join(f"{w['label']}: {len(w['pods'])} pods" for w in ws)
+    if campaign == "resource-use" and os.path.exists(os.path.join(d, "footprint.json")):
+        fp = json.load(open(os.path.join(d, "footprint.json")))
+        line = "; ".join(f"{cond}: {len(c['pods'])} pods, {len(c['nodes'])} machines" for cond, c in fp.items())
     elif campaign == "verification" and os.path.exists(os.path.join(d, "summary.json")):
         c = json.load(open(os.path.join(d, "summary.json")))["counts"]
         line = ", ".join(f"{k} {v}" for k, v in sorted(c.items()))

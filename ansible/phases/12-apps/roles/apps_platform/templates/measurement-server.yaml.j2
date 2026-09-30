@@ -35,7 +35,7 @@ spec:
         - name: iperf3
           image: {{ network_setup_image }}
           imagePullPolicy: IfNotPresent
-          command: ["iperf3", "-s", "-p", "5201"]
+          command: ["iperf3", "-s", "-p", "5201", "-i", "0.1"]
           readinessProbe:
             exec:
               command: ["true"]

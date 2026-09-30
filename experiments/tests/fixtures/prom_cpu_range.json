@@ -1,7 +1,0 @@
-{"status":"success","data":{"resultType":"matrix","result":[
- {"metric":{"namespace":"5g","pod":"upf-cloud-abc"},"values":[[1,"100"],[16,"300"]]},
- {"metric":{"namespace":"positioning","pod":"wittra-xyz"},"values":[[1,"5"],[16,"7"]]},
- {"metric":{"namespace":"iam","pod":"keycloak-0"},"values":[[1,"20"]]},
- {"metric":{"namespace":"mec","pod":"measurement-server-1"},"values":[[1,"2"]]},
- {"metric":{"namespace":"5g","pod":"amf-restarted"},"values":[]}
-]}}

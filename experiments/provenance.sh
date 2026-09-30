@@ -75,7 +75,7 @@ northbound_revision() {
   if [ -n "${KELT_KUBECTL:-}" ]; then
     raw="$(sudo k3s crictl inspecti "$img" 2>/dev/null)"
   else
-    raw="$(vagrant ssh "$node" -c "sudo k3s crictl inspecti '$img'" 2>/dev/null | sed '/^\[Testbed\]/d')"
+    raw="$(vagrant ssh "$node" -c "sudo k3s crictl inspecti '$img'" 2>/dev/null < /dev/null | sed '/^\[Testbed\]/d')"
   fi
   printf '%s' "$raw" | python3 -c "
 import json,sys
@@ -105,7 +105,7 @@ cat > "$OUT" <<JSON
     "physical_ran": "$PHYS_RAN",
     "northbound": "$NORTHBOUND"
   },
-  "upf_target": "$UPF_TARGET",
+  "net_target": "$NET_TARGET",
   "gateway_url": "$(gateway_url 2>/dev/null || echo unknown)",
   "images": $(images_json)
 }

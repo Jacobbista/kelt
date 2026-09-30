@@ -234,7 +234,7 @@
         <div class="panel" id="panel-namespaces">
             <div class="panel-title">Active Namespaces</div>
             <div class="panel-sub">Namespaces currently active on the host. Reset to move interfaces back and destroy the namespace.
-            <br><span style="font-size:.78em;color:var(--txt3);"><strong>HTTPS tunnel certificate:</strong> the dongle/router presents a cert for its LAN IP (e.g. <code>192.168.2.1</code>), but the link uses <code>127.0.0.1</code>, so Chrome/Brave show “Not secure” — expected in the lab. Use <strong>Advanced → Continue</strong> (Brave remembers per host/port). Avoid global flags like <code>--ignore-certificate-errors</code> outside testing. To remove warnings entirely you’d need a local terminating proxy + trusted CA (e.g. <a href="https://github.com/FiloSottile/mkcert" target="_blank" rel="noopener noreferrer">mkcert</a>), which we don’t automate here.</span></div>
+            <br><span style="font-size:.78em;color:var(--txt3);"><strong>HTTPS tunnel certificate:</strong> the dongle/router presents a cert for its LAN IP (e.g. <code>192.168.1.1</code>), but the link uses <code>127.0.0.1</code>, so Chrome/Brave show “Not secure” — expected in the lab. Use <strong>Advanced → Continue</strong> (Brave remembers per host/port). Avoid global flags like <code>--ignore-certificate-errors</code> outside testing. To remove warnings entirely you’d need a local terminating proxy + trusted CA (e.g. <a href="https://github.com/FiloSottile/mkcert" target="_blank" rel="noopener noreferrer">mkcert</a>), which we don’t automate here.</span></div>
             <div class="card_">
                 <div id="nsTable"><div class="ns-empty">No active namespaces.</div></div>
             </div>

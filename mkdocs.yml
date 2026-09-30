@@ -88,7 +88,7 @@ nav:
       - KubeEdge Multus Env Injection: known-issues/kubeedge-multus-env-injection.md
       - KubeEdge ServiceAccount Tokens: known-issues/kubeedge-serviceaccount-token.md
       - UPF-Edge CNI Route Conflict: known-issues/upf-edge-cni-route-conflict.md
-      - TCP Performance over 5G DRX: known-issues/tcp-performance-5g-drx.md
+      - Throughput on the radio path: known-issues/radio-path-throughput.md
   - Project:
       - Requirements: requirements.md
       - Getting Started: getting-started.md

@@ -243,9 +243,9 @@ n6m_interface_regex: "^(n6m|net[0-9]+)$"
 n6m_push_adapters:
   wifi-adapter: "10.208.0.201/24"
 
-# Measurement server for the thesis experiments: iperf3 + ICMP on n6m, reached by
-# a UE on DNN mec through the UPF, the path the edge application uses. IP from
-# n6m_static_band.
+# Measurement server for the thesis experiments: iperf3 + ICMP on n6m, reached
+# from a UE through the UPF (either DNN), the path the edge application uses.
+# IP from n6m_static_band.
 apps_measurement_server_enabled: true
 apps_measurement_server_n6m_ip: "10.208.0.202/24"
 

@@ -758,7 +758,7 @@ def auto_detect_mgmt_web(
 ) -> Tuple[int, bool]:
     """Pick management TCP port and whether the browser should use https:// on the localhost tunnel.
 
-    Prefer :443 + TLS when an HTTPS GET succeeds — many routers (e.g. Teltonika) still accept TCP
+    Prefer :443 + TLS when an HTTPS GET succeeds — many routers still accept TCP
     on :80 with a tiny non-HTTP payload, which previously fooled cleartext-only detection.
     """
     open80 = _tcp_probe_via_netns(ns, host, 80)

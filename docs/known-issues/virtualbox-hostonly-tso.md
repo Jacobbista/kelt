@@ -66,5 +66,5 @@ is why `experiments/run.sh response-time` reports the per-component times from t
 treats the client-side number as informative only.
 
 Related: [../architecture/network-topology.md](../architecture/network-topology.md)
-(MTU sizing), [tcp-performance-5g-drx.md](tcp-performance-5g-drx.md)
+(MTU sizing), [radio-path-throughput.md](radio-path-throughput.md)
 (the other TCP-on-the-testbed effect, on the radio path).
