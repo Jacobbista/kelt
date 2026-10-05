@@ -81,7 +81,7 @@ PIVOT_LEGEND = [
     "- host: everything running on the host machine, the testbed and anything else.",
     "- VM processes: the VirtualBox processes on the host. Their memory is what each VM has touched since it "
     "started: VirtualBox does not give pages back to the host, so it grows towards the RAM assigned to the VM "
-    "when the guest fills its cache (in session 1, with the captures written on the worker).",
+    "when the guest fills its cache (the captures written on the worker do).",
     "- VMs, from inside: CPU busy and memory in use (total minus available) inside the master and worker VMs, "
     "the k3s control plane included; the guest's cache is not counted.",
 ]
