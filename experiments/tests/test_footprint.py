@@ -87,6 +87,24 @@ V 102.0 worker-5g-k8s-testbed 1200 100 10485760
         self.assertEqual((vm["cpu_mcores"]["mean"], vm["cpu_mcores"]["max"]), (1000.0, 1500.0))
         self.assertEqual(vm["mem_mib"]["max"], 10240.0)
 
+    def test_the_vm_processes_summed_second_by_second(self):
+        # two VMs whose peaks fall in different seconds: the total's peak is
+        # the busiest second (1500 + 500), not the sum of the two peaks (2500)
+        host = """N 100.0 8 1000 1000 8000000 6000000
+V 100.0 master 0 100 1048576
+V 100.0 worker 0 100 2097152
+N 101.0 8 1800 1600 8000000 6000000
+V 101.0 master 150 100 1048576
+V 101.0 worker 50 100 2097152
+N 102.0 8 2600 2200 8000000 6000000
+V 102.0 master 200 100 1048576
+V 102.0 worker 150 100 2097152
+"""
+        s = footprint.summarize(run({"host": host}), {"all": [(100.0, 102.0)]}, GROUPS)["all"]
+        total = s["nodes"]["vm-process total"]
+        self.assertEqual((total["cpu_mcores"]["mean"], total["cpu_mcores"]["max"]), (1750.0, 2000.0))
+        self.assertEqual(total["mem_mib"]["max"], 3072.0)
+
     def test_a_group_is_the_sum_of_its_pods_second_by_second(self):
         s = footprint.summarize(run(), {"all": [(99.0, 103.0)]}, GROUPS)["all"]
         self.assertEqual(s["groups"]["core"]["cpu_mcores"]["max"], 305.0)

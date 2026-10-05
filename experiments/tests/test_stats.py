@@ -21,7 +21,7 @@ class PercentileTest(unittest.TestCase):
 class SummaryTest(unittest.TestCase):
     def test_keys_and_values(self):
         s = summary([10.0, 20.0, 30.0, 40.0])
-        self.assertEqual(s, {"n": 4, "median": 30.0, "p90": 40.0, "p99": 40.0, "max": 40.0})
+        self.assertEqual(s, {"n": 4, "min": 10.0, "mean": 25.0, "median": 30.0, "p90": 40.0, "p99": 40.0, "max": 40.0})
 
     def test_empty_has_no_numbers(self):
-        self.assertEqual(summary([]), {"n": 0, "median": None, "p90": None, "p99": None, "max": None})
+        self.assertEqual(summary([]), {"n": 0, "min": None, "mean": None, "median": None, "p90": None, "p99": None, "max": None})

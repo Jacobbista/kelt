@@ -68,8 +68,14 @@ def main() -> int:
         m = read_meta(meta)
         windows[run] = (m["start"], m["end"])
         with open(meta[:-5] + ".json") as fh:
-            end = json.load(fh).get("end", {})
-        counts[run] = (end.get("sum_sent", {}).get("bytes"), end.get("sum_received", {}).get("bytes"))
+            js = json.load(fh)
+        end = js.get("end", {})
+        # A run that ended with an iperf3 error has no end totals; its receiver
+        # (the UE, downlink) still reported every interval.
+        received = end.get("sum_received", {}).get("bytes")
+        if received is None and js.get("intervals"):
+            received = sum(iv["sum"]["bytes"] for iv in js["intervals"])
+        counts[run] = (end.get("sum_sent", {}).get("bytes"), received)
     ranges = sequence_ranges(run_dir, target, windows)
     fails = 0
     for run in sorted(ranges, key=lambda r: int(r.split("-")[0])):

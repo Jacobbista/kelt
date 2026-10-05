@@ -18,6 +18,7 @@ import sys
 EXP = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, EXP)
 from lib.runmeta import discarded  # noqa: E402
+from lib.stats import summary  # noqa: E402
 
 
 def select_runs(runs_dir: str, slug: str, listed: set[str] | None) -> list[str]:
@@ -72,6 +73,33 @@ def footprint_rows(runs: list[str]) -> list[dict]:
     return rows
 
 
+# The thesis footprint table: these rows, the conditions as columns.
+PIVOT_ROWS = [("group", "core", "core"), ("group", "exposure", "exposure"), ("group", "identity", "identity"),
+              ("group", "mec-server", "measurement server"), ("machine", "host", "host"),
+              ("machine", "vm-process total", "VM processes")]
+PIVOT_COLS = [("resource-use", "idle", "rest"), ("throughput", "dl1", "dl1"), ("throughput", "dl4", "dl4"),
+              ("throughput", "ul1", "ul1"), ("throughput", "ul4", "ul4"), ("rtt", "idle", "RTT rest"),
+              ("rtt", "load", "RTT load")]
+
+
+def footprint_pivot(rows: list[dict]) -> list[str]:
+    """CPU (millicores) and memory (MiB) as "mean / peak" per row and condition.
+    Several sessions: the mean of their means, the highest of their peaks."""
+    md = []
+    for what, mean_k, peak_k in (("CPU, millicores", "cpu_mean_m", "cpu_peak_m"),
+                                 ("Memory, MiB", "mem_mean_mib", "mem_peak_mib")):
+        md += ["", f"{what}: mean / 1 s peak", "", "| what | " + " | ".join(c[2] for c in PIVOT_COLS) + " |",
+               "|" + "---|" * (len(PIVOT_COLS) + 1)]
+        for level, name, label in PIVOT_ROWS:
+            cells = []
+            for campaign, cond, _ in PIVOT_COLS:
+                hit = [r for r in rows if (r["campaign"], r["condition"], r["level"], r["name"]) == (campaign, cond, level, name)
+                       and r[mean_k] is not None]
+                cells.append(f"{sum(r[mean_k] for r in hit) / len(hit):.0f} / {max(r[peak_k] for r in hit):.0f}" if hit else "—")
+            md.append(f"| {label} | " + " | ".join(cells) + " |")
+    return md
+
+
 def verification_rows(runs: list[str]) -> list[dict]:
     rows = []
     for d in runs:
@@ -109,17 +137,43 @@ def _ue(d: str) -> dict:
         return {}
 
 
+LEVEL_COLS = [f"windows_{k}" for k in ("low", "transition", "high")] + [f"runs_{k}" for k in ("low", "both", "high")]
+
+
+def _levels(lv: dict | None) -> dict:
+    return {f"{kind}_{k}": (lv or {}).get(kind, {}).get(k) if lv else None
+            for kind, ks in (("windows", ("low", "transition", "high")), ("runs", ("low", "both", "high"))) for k in ks}
+
+
 def throughput_rows(runs: list[str]) -> list[dict]:
-    rows = []
+    """One row per session (run directory) and combination; with several
+    sessions, one "all" row per combination from their 1 s windows together."""
+    rows, pool = [], {}
     for d in runs:
         ue = _ue(d)
         for name, c in _load(os.path.join(d, "summary.json"))["combinations"].items():
             sp = c.get("spread") or [None, None]
             rows.append({"run": os.path.basename(d), "target": ue.get("target"), "combination": name,
                          "mode": ue.get("mode"), "runs": c["n_runs"],
-                         "failed": len(c["failed"]), "median_mbit_s": c["samples"]["median"],
-                         "p90_mbit_s": c["samples"]["p90"], "run_mean_min": sp[0], "run_mean_max": sp[1],
-                         "sender_tcp_cc": c.get("sender_tcp_cc")})
+                         "failed": len(c["failed"]), "mean_mbit_s": c["samples"].get("mean"),
+                         "median_mbit_s": c["samples"].get("median"),
+                         "p90_mbit_s": c["samples"].get("p90"), "run_mean_min": sp[0], "run_mean_max": sp[1],
+                         "sender_tcp_cc": c.get("sender_tcp_cc"), **_levels(c.get("levels"))})
+            p = pool.setdefault(name, {"row": rows[-1], "windows": [], "means": [], "runs": 0, "failed": 0, "levels": []})
+            p["windows"] += c.get("windows", [])
+            p["means"] += c.get("run_means", [])
+            p["runs"] += c["n_runs"]
+            p["failed"] += len(c["failed"])
+            p["levels"].append(rows[-1])
+    if len(runs) > 1:
+        for name, p in pool.items():
+            st = summary(p["windows"])
+            lv = {k: sum(r[k] for r in p["levels"]) if all(r[k] is not None for r in p["levels"]) else None
+                  for k in LEVEL_COLS}
+            rows.append({**p["row"], "run": "all", "runs": p["runs"], "failed": p["failed"],
+                         "mean_mbit_s": st["mean"], "median_mbit_s": st["median"], "p90_mbit_s": st["p90"],
+                         "run_mean_min": min(p["means"]) if p["means"] else None,
+                         "run_mean_max": max(p["means"]) if p["means"] else None, **lv})
     return rows
 
 
@@ -133,12 +187,23 @@ def _idle_runs(d: str) -> list[dict]:
     return _load(os.path.join(d, "summary.json"))["conditions"].get("idle", {}).get("runs", [])
 
 
+def _rtt_row(run: str, target, cond: str, part: str, x: dict, losses: list, packets: list, rate: list) -> dict:
+    return {"run": run, "target": target, "condition": cond,
+            "part": part, "n": x["n"], "min_ms": x.get("min"), "mean_ms": x.get("mean"),
+            "median_ms": x["median"], "p90_ms": x["p90"], "p99_ms": x["p99"], "max_ms": x["max"],
+            "max_loss": max(losses) if losses else None,
+            # the capture covers the idle runs only: the load rows have no figure
+            "max_foreign_packets_in_run": max(packets) if packets and cond == "idle" else None,
+            "max_foreign_bytes_per_s": max(rate) if rate and cond == "idle" else None}
+
+
 def rtt_rows(runs: list[str]) -> list[dict]:
+    """One row per session (run directory), condition and part; with several
+    sessions, "all" rows from their samples together (rtt-samples.csv)."""
     rows = []
+    pool: dict = {}
     for d in runs:
         s = _load(os.path.join(d, "summary.json"))
-        # Foreign traffic inside the measured windows: the capture covers the
-        # idle runs only, so the load rows have no figure.
         idle = _idle_runs(d)
         packets = [r["foreign_packets"] for r in idle if r.get("foreign_packets") is not None]
         rate = [r["foreign_bytes_per_s"] for r in idle if r.get("foreign_bytes_per_s") is not None]
@@ -147,13 +212,34 @@ def rtt_rows(runs: list[str]) -> list[dict]:
             parts = [(p, c[p]) for p in ("total", "core", "access") if p in c] + \
                     [(f"core: {name}", x) for name, x in c.get("segments", {}).items()]
             for part, x in parts:
-                rows.append({"run": os.path.basename(d), "target": _ue(d).get("target"), "condition": cond,
-                             "part": part, "n": x["n"],
-                             "median_ms": x["median"], "p90_ms": x["p90"], "p99_ms": x["p99"], "max_ms": x["max"],
-                             "max_loss": max(losses) if losses else None,
-                             "max_foreign_packets_in_run": max(packets) if packets and cond == "idle" else None,
-                             "max_foreign_bytes_per_s": max(rate) if rate and cond == "idle" else None})
+                rows.append(_rtt_row(os.path.basename(d), _ue(d).get("target"), cond, part, x, losses, packets, rate))
+            p = pool.setdefault(cond, {"losses": [], "packets": [], "rate": [], "values": {}})
+            p["losses"] += losses
+            p["packets"] += packets
+            p["rate"] += rate
+        try:
+            with open(os.path.join(d, "rtt-samples.csv")) as fh:
+                for r in csv.DictReader(fh):
+                    vals = pool.setdefault(r["condition"], {"losses": [], "packets": [], "rate": [], "values": {}})["values"]
+                    for col, part in RTT_SAMPLE_PARTS:
+                        if r.get(col):
+                            vals.setdefault(part, []).append(float(r[col]))
+        except OSError:
+            pass
+    if len(runs) > 1:
+        target = _ue(runs[0]).get("target")
+        for cond, p in pool.items():
+            for col, part in RTT_SAMPLE_PARTS:
+                if p["values"].get(part):
+                    digits = 3 if part in ("total", "access") else 4
+                    rows.append(_rtt_row("all", target, cond, part, summary(p["values"][part], digits),
+                                         p["losses"], p["packets"], p["rate"]))
     return rows
+
+
+# rtt-samples.csv column -> table part, in table order
+RTT_SAMPLE_PARTS = [("total_ms", "total"), ("core_ms", "core"), ("access_ms", "access")] + \
+    [(n, f"core: {n}") for n in ("worker", "ovs_n3", "upf", "ovs_n6m", "server")]
 
 
 def rtt_notes(runs: list[str]) -> list[str]:
@@ -161,6 +247,20 @@ def rtt_notes(runs: list[str]) -> list[str]:
             for d in runs for r in _idle_runs(d) if (r.get("foreign_bytes_per_s") or 0) > FOREIGN_LIMIT_B_S]
     return [f"Idle runs over the foreign traffic limit ({FOREIGN_LIMIT_B_S} B/s): "
             + ("; ".join(over) if over else "none") + "."]
+
+
+def check_note(runs: list[str]) -> str:
+    """The runs whose checks (validation/check_run.py, checks.txt) did not all
+    pass, or were never run: they stay in the table, named here."""
+    flagged = []
+    for d in runs:
+        try:
+            with open(os.path.join(d, "checks.txt")) as fh:
+                bad = [ln[5:].strip() for ln in fh if ln.startswith("FAIL")]
+        except OSError:
+            bad = ["not checked"]
+        flagged += [f"{os.path.basename(d)} ({'; '.join(bad)})"] if bad else []
+    return "Runs with a failed check: " + ("; ".join(flagged) if flagged else "none") + "."
 
 
 NOTES = {"rtt": rtt_notes}
@@ -195,6 +295,9 @@ def main() -> int:
     md = [f"# {slug}", "", f"Runs: {len(runs)} ({', '.join(os.path.basename(d) for d in runs)}).",
           f"Discarded and repeated: {len(gone)}" + (": " + "; ".join(gone) if gone else ".")]
     md += NOTES[slug](runs) if slug in NOTES else []
+    md += [check_note(runs)]
+    if slug == "resource-use":
+        md += footprint_pivot(rows) + ["", "Every level and pod:"]
     md += ["", "| " + " | ".join(cols) + " |", "|" + "---|" * len(cols)]
     md += ["| " + " | ".join(str(r[c]) for c in cols) + " |" for r in rows]
     with open(os.path.join(out, f"{slug}.md"), "w") as fh:

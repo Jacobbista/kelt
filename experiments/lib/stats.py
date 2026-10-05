@@ -13,13 +13,14 @@ def percentile(xs: list[float], q: float) -> float:
 
 
 def summary(xs: list[float], digits: int = 3) -> dict:
-    """n, median, p90, p99 and max, rounded to `digits` (4 for the parts of the
-    core, a few microseconds in ms)."""
+    """n, min, mean, median, p90, p99 and max, rounded to `digits` (4 for the
+    parts of the core, a few microseconds in ms). Min and mean are what most
+    related work reports for the round-trip time."""
     if not xs:
-        return {"n": 0, "median": None, "p90": None, "p99": None, "max": None}
+        return {"n": 0, "min": None, "mean": None, "median": None, "p90": None, "p99": None, "max": None}
 
     def r(v: float) -> float:
         return round(float(v), digits)
 
-    return {"n": len(xs), "median": r(percentile(xs, 0.5)), "p90": r(percentile(xs, 0.9)),
+    return {"n": len(xs), "min": r(min(xs)), "mean": r(sum(xs) / len(xs)), "median": r(percentile(xs, 0.5)), "p90": r(percentile(xs, 0.9)),
             "p99": r(percentile(xs, 0.99)), "max": r(max(xs))}

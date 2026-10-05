@@ -75,6 +75,7 @@ run_resource_use() {
   end="$(date +%s.%N)"; window close "$run_dir" idle
   footprint_stop idle "$run_dir/raw/footprint/1"
   footprint_summarise "$run_dir" --window idle "$start" "$end"
+  check_run "$run_dir"
   log "resource-use -> $run_dir/footprint.md"
 }
 

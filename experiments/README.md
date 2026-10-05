@@ -14,6 +14,18 @@ named after the section of the thesis that reports it, and answers one question.
 | `verification` | 5.11.1 | Does the running stack behave as the private-asset profile specifies? |
 | `response-time` | 5.11.2 | How long does a location request take, and how does the time divide between components and the vendor? |
 
+## What is measured, with what
+
+| Quantity | Unit | Tool | Where | Checked against |
+|---|---|---|---|---|
+| goodput | Mbit/s over 1 s windows | iperf3, 0.1 s reports | the receiver | the TCP sequence range seen on `br-ran` (`validation/throughput_bytes.py`) |
+| retransmissions, per direction | segments | tcpdump on `br-ran`, headers only | worker | |
+| round-trip time | ms | ping, 10 per second | UE | |
+| core and its parts | ms, to 0.1 µs | tcpdump at five points | worker, one clock | every echo found at every point; the parts add up to core |
+| access | ms | round-trip time minus core | | |
+| CPU and memory of pods, VMs, host | millicores, MiB | `lib/footprint-sampler.sh`, every second | each VM, host | cAdvisor (`validation/footprint_cadvisor.py`); pods ≤ VM ≤ host |
+| UE CPU | ‰ busy | the UE's `/proc/stat`, every second | UE | |
+
 ## Network campaigns
 
 Both measure between the UE and the measurement server, a pod in the apps
@@ -46,16 +58,26 @@ Recorded for each run:
 - iperf3's report every 0.1 s at the receiver: the UE for downlink, the
   server for uplink (the sender only knows what it wrote to its socket);
 - the UE's link counters before and after, and the UE's CPU every second;
-- the worker's RAN NIC counters every second;
 - a capture on `br-ran` on the worker (headers only), from which the summary
   counts, per direction, the TCP segments, their payload and the retransmitted
   segments seen from the core.
 
-Reported per combination: median and p90 of the goodput over 1 s windows, the
-mean of each run and the spread of the run means, and the 0.1 s series of the
-run closest to the median, for a figure. The first 10 s of every run are left
+Reported per combination: mean, median and p90 of the goodput over 1 s
+windows, the mean of each run and the spread of the run means, and the 0.1 s
+series of the run closest to the median, for a figure. The downlink runs at one
+of two levels, about 20-30 and about 130 Mbit/s, and a run can switch: each
+downlink combination counts its 1 s windows per level (low below 50 Mbit/s,
+high from 100, a transition between) and its runs (high with no low window, low
+with no high window, both otherwise). The first 10 s of every run are left
 out: the uplink climbs to its level over 8-10 s in every run
 ([known issue](../docs/known-issues/radio-path-throughput.md)).
+
+A run that failed is listed with its reason and left out of the statistics. A
+downlink run whose windows are all there counts even when iperf3 ends with an
+error: the UE receives and reports every interval itself, and the error comes
+afterwards, when the two ends exchange results; the error is listed with the
+run. An uplink run with that error has failed: its receiver's report is the
+server's, carried by that exchange.
 
 ### rtt
 
@@ -101,10 +123,11 @@ The `idle` runs also have a full capture on `br-ran`, for the other traffic
 The captures are in nanoseconds (the switching steps are a few microseconds)
 and each keeps tcpdump's own report next to it (`<capture>.log`: packets
 captured, dropped by the kernel). ping reports three significant digits, so the
-total and access resolve 0.1 ms; the parts of the core resolve 0.1 us.
+total and access resolve 0.1 ms between 10 and 100 ms and 1 ms above 100 ms
+(the `load` runs); the parts of the core resolve 0.1 us.
 
-Reported per condition: median, p90, p99 and maximum of the total delay, of
-core and access, and of each part of the core; loss per run; every sample with
+Reported per condition: minimum, mean, median, p90, p99 and maximum of the
+total delay, of core and access, and of each part of the core; loss per run; every sample with
 its parts, for a distribution plot.
 
 ### How a network run executes
@@ -134,20 +157,46 @@ redone whole. `run.sh stop` ends a job on the UE and keeps what it measured.
 The UE needs an SSH key login, passwordless sudo (systemd-run, pausing units),
 iperf3 and ping. Nothing is installed on it.
 
-## Exposure and resource campaigns
+## Footprint
 
-- `resource-use`: the footprint of the testbed at rest, 300 s with nothing
-  running (`KELT_RESOURCE_S`). The footprint under load is recorded by the
-  campaigns that load the testbed, per condition (`dl1` to `ul4`, `idle`,
-  `load`), from the same samplers: `lib/footprint-sampler.sh` once a second on
-  both VMs (every pod's cgroup, and the VM) and on the host (the machine). CPU
-  is the usage between two samples over their time apart, so its maximum is the
-  1 s peak; memory is the working set (memory in use for a machine). Levels:
-  the host, each VM, each pod, and pod groups: core (`5g`), exposure
-  (`positioning`, `camara`), identity (`iam`), the mec measurement server,
-  diagnostic probes (`netshoot`), other. A group is the sum of its pods on one
-  1 s grid (the samplers of different machines are not aligned). The sampler
-  itself takes about 20 millicores on the worker.
+The CPU and memory the testbed takes: at rest (`resource-use`, 300 s with
+nothing running, `KELT_RESOURCE_S`), and during every network condition
+(`dl1` to `ul4`, `idle`, `load`), recorded by the campaign that produces it.
+
+`lib/footprint-sampler.sh` runs once a second on both VMs and on the host, for
+the whole campaign, and writes the raw counters; `resource-use/footprint.py`
+turns them into rates per condition.
+
+| Level | What is read | CPU | Memory |
+|---|---|---|---|
+| pod | its cgroup (`kubepods.slice/.../pod<uid>.slice`) | `cpu.stat` `usage_usec` | working set: `memory.current` minus `inactive_file` |
+| VM, from inside | `/proc/stat`, `/proc/meminfo` | time not idle, all CPUs | `MemTotal` minus `MemAvailable` |
+| VM process, on the host | each `VBoxHeadless` process's `/proc/<pid>` | `utime` + `stime` | resident set (`VmRSS`) |
+| host | `/proc/stat`, `/proc/meminfo` | as a VM | as a VM |
+
+CPU is in millicores: thousandths of one CPU core, so 1000 m is one core busy
+for the whole interval. It is the usage between two consecutive samples over
+their time apart (about 1 s), so the maximum of a condition is its 1 s peak.
+Memory is in MiB.
+
+The levels nest. The host counts everything running on it, the testbed and
+anything else. The VM process is what one VM takes from the host. The VM, read
+from inside, also counts what runs outside pods: on the master, the k3s
+control plane, a system service. A pod is one pod. Pods are summed into
+groups: core (`5g`), exposure (`positioning`, `camara`), identity (`iam`), the
+mec measurement server, diagnostic probes (`netshoot`), other. The samplers of
+different machines are not aligned, so a group is summed on one 1 s grid: at
+each point, each pod's CPU over the interval holding it and its last memory
+sample.
+
+The pod counters are the ones the kubelet's cAdvisor reads. cAdvisor refreshes
+them every 10-20 s, and that is what Prometheus (phase 07, 15 s scrape) and
+`kubectl top` show; the sampler reads them every second.
+`validation/footprint_cadvisor.py` compares the two between two cAdvisor
+refreshes. The sampler takes about 20 millicores on the worker.
+
+## Exposure campaigns
+
 - `verification`: one recorded exchange per case, compared with the contract
   the gateway itself serves (`GET /contracts/<name>`): identifiers and
   authorisation, data carried from the adapter, faults (vendor unreachable,
@@ -183,6 +232,29 @@ python3 experiments/tables.py <campaign>                          # the thesis t
 The exposure and resource campaigns list their variables at the top of each
 campaign function in `run.sh`.
 
+A short trial, a few minutes per campaign, marked as a pilot:
+
+```bash
+KELT_PILOT=1 KELT_NET_REPEATS=1 KELT_UE_SSH=<user>@<host> experiments/run.sh throughput     # dl1 dl4 ul1 ul4 once, ~6 min
+KELT_PILOT=1 KELT_RTT_REPEATS=1 KELT_RTT_S=60 KELT_UE_SSH=<user>@<host> experiments/run.sh rtt  # one idle, one load run, ~5 min
+KELT_PILOT=1 KELT_RESOURCE_S=60 experiments/run.sh resource-use idle
+```
+
+The numbers are in the run directory's `summary.md` and `footprint.md` (below);
+`python3 experiments/validation/throughput_bytes.py <run-dir>` checks a
+throughput run's bytes against the capture.
+
+The same tools by hand, from a shell on the UE, with `<server>` the address in
+`apps_measurement_server_n6m_ip`. The SSH session shares the link while they
+run.
+
+```bash
+ping -i 0.1 -c 100 <server>                 # round-trip time, 10 per second
+iperf3 -c <server> -t 30 -i 1               # uplink, one stream
+iperf3 -c <server> -t 30 -i 1 -R            # downlink (the server sends)
+iperf3 -c <server> -t 30 -i 1 -R -P 4       # downlink, four streams
+```
+
 ## A run directory
 
 `runs/<campaign>/<utc>/`, never overwritten, not committed:
@@ -196,13 +268,29 @@ campaign function in `run.sh`.
 | `ue.json` | network campaigns: the UE, its link and mode, the TCP congestion control of both senders, PDU sessions and gNB UEs at the start and end of each attempt |
 | `schedule.txt`, `job/<attempt>/` | network campaigns: the full list of runs, and what each attempt ran |
 | `raw/ue/<attempt>/` | per run the tool output and a `.meta` line (start, end, exit code, link counters); the UE's CPU; the job's status and manifest |
-| `raw/worker/<attempt>/` | the RAN NIC counters (`ran-nic.csv`), the full `br-ran` capture (`br-ran.pcap.gz`), and for rtt the echoes at the five points (`points/<point>.pcap.gz`) |
+| `raw/worker/<attempt>/` | the full `br-ran` capture (`br-ran.pcap.gz`), and for rtt the echoes at the five points (`points/<point>.pcap.gz`) |
 | `raw/footprint/<attempt>/` | the 1 s samples of each machine (`master`, `worker`, `host`, `.txt.gz`) and the pod map (`pods.tsv`) |
 | `footprint.json`, `footprint.md` | CPU and memory per condition: machines, groups, pods |
+| `checks.txt` | the checks of `validation/check_run.py`, one line each, ok or FAIL |
 | `series-<combination>.csv`, `rtt-samples.csv` | the series and samples for figures |
+
+Every campaign ends with `validation/check_run.py`: every planned run has a
+result or a failure reason; every counted throughput run has its 1 s windows
+to the end; iperf3's bytes against the capture; every paired echo has all its
+parts and a non-negative access; the other UEs' traffic on the cell inside
+each run, from the full `br-ran` capture, at most 1000 B/s (other devices stay
+attached: a cell carries some background; it is measured, not removed); one
+footprint sample per second from every machine and pod, every pod named. A failed check flags the run, which stays;
+the tables name it.
 
 `runs/_tables/` holds what `tables.py` builds: every non-pilot run of a
 campaign, or only the runs listed in `thesis-runs.txt` when that file exists.
+Each run directory is one session: throughput and rtt give one row per session,
+and with several sessions an `all` row computed from their windows or samples
+together. `tables.py resource-use` also gives the thesis footprint table: the
+groups, the host and all VM processes together (summed second by second), with
+the conditions as columns, mean and 1 s peak; several sessions give the mean of
+their means and the highest of their peaks.
 
 ## Reading the numbers
 
@@ -263,9 +351,8 @@ network/campaign.sh    the runner side of the network campaigns (run.sh sources 
 network/throughput.py  throughput summary
 network/rtt.py         rtt summary and the core/access split
 network/pcap.py        reading the worker's captures (GTP-U and plain)
-network/segments.md    how the round trip divides into segments
-network/latency-segments.sh  the intra-cluster legs of the round trip, from a probe pod
 resource-use/          footprint.py: CPU and memory per condition from the 1 s samples
+validation/            check_run.py (every run), throughput_bytes.py, footprint_cadvisor.py
 lib/footprint-sampler.sh  the 1 s sampler (VMs and host)
 exposure/              verification cases, fault injections, response-time driver and aggregation
 tests/                 unit tests: python3 -m unittest discover -s experiments/tests -t experiments

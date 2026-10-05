@@ -4,15 +4,14 @@
   throughput.py <run-dir>
 
 Reads what the UE job left in <run-dir>/raw/ue/<attempt>/ (iperf3 -J results
-and their .meta lines), the worker's RAN NIC counters and br-ran capture
-(raw/worker/<attempt>/) and ue.json, and writes summary.json, summary.md and
+and their .meta lines), the worker's br-ran capture (raw/worker/<attempt>/)
+and ue.json, and writes summary.json, summary.md and
 series-<combination>.csv (the 0.1 s series of the run closest to the median,
 for a figure). Median and p90 are over 1 s windows (see windows()). Owner: experiments/README.md.
 """
 from __future__ import annotations
 
 import bisect
-import csv
 import glob
 import json
 import os
@@ -27,7 +26,6 @@ from lib.stats import summary  # noqa: E402
 from network.pcap import addr, captures, gtpu_inner, read_pcap  # noqa: E402
 
 RUN_RE = re.compile(r"^(\d+)-(.+)\.json$")
-COUNTERS = ("rx_bytes", "tx_bytes", "rx_packets", "tx_packets")
 
 
 SERVER_LINE_RE = re.compile(r"^\[\s*(SUM|\d+)\]\s+([\d.]+)-([\d.]+)\s+sec\s+\S+\s+\S+\s+([\d.]+)\s+([KMG]?)bits/sec\s*$")
@@ -75,18 +73,21 @@ def samples(iperf_json: dict, discard_s: float = 5.0) -> list[float]:
 def windows(iperf_json: dict, width: float = 1.0, discard_s: float = 5.0) -> list[float]:
     """Mbit/s over consecutive windows of `width` seconds after the discard,
     each the time-weighted mean of the intervals it covers; a window not fully
-    covered (the end of the run) is left out. The statistics use these: a TCP
+    covered because the run ended is left out; inside the run, the sub-ms gaps
+    iperf3 leaves when its interval timer fires late are not missing data,
+    so a window is the mean over the time its intervals cover. The statistics use these: a TCP
     flow delivers in bursts and stalls longer than 0.1 s (a retransmission
     timeout is at least 200 ms on Linux), so a 0.1 s sample says how bursty the
     flow is, a 1 s window what rate the application got."""
     ivs = [(max(a, discard_s), b, v) for a, b, v in intervals(iperf_json) if b > discard_s + 1e-9]
+    last = max((b for _, b, _ in ivs), default=0.0)
     out, k = [], 0
     while True:
         lo, hi = discard_s + k * width, discard_s + (k + 1) * width
+        if hi > last + 1e-6:
+            return out
         parts = [(min(b, hi) - max(a, lo), v) for a, b, v in ivs if b > lo + 1e-9 and a < hi - 1e-9]
         covered = sum(t for t, _ in parts)
-        if covered < width - 1e-6:
-            return out
         out.append(round(sum(t * v for t, v in parts) / covered, 6))
         k += 1
 
@@ -97,39 +98,6 @@ def read_meta(path: str) -> dict:
     out = {"start": float(fields["start"]), "end": float(fields["end"]), "rc": int(fields["rc"])}
     for k in ("if_before", "if_after"):
         out[k] = [int(x) for x in fields[k].split(",")]
-    return out
-
-
-def worker_rows(run_dir: str) -> list[dict]:
-    """The worker's RAN NIC counters of every attempt of the run."""
-    rows = []
-    for p in sorted(glob.glob(os.path.join(run_dir, "raw", "worker", "*", "ran-nic.csv"))):
-        with open(p) as fh:
-            rows += [{k: float(v) for k, v in row.items()} for row in csv.DictReader(fh)]
-    return sorted(rows, key=lambda r: r["epoch"])
-
-
-def _at(rows: list[dict], t: float, k: str) -> float | None:
-    """Counter k at time t, linear between the two samples around it."""
-    for a, b in zip(rows, rows[1:]):
-        if a["epoch"] <= t <= b["epoch"]:
-            if b["epoch"] == a["epoch"]:
-                return a[k]
-            return a[k] + (b[k] - a[k]) * (t - a["epoch"]) / (b["epoch"] - a["epoch"])
-    return None
-
-
-def ran_nic(rows: list[dict], start: float, end: float) -> dict | None:
-    """Counter deltas of the worker's RAN NIC over [start, end], each end
-    interpolated between the 1 s samples around it (the samples inside the run
-    alone would leave out up to 2 s)."""
-    rows = sorted(rows, key=lambda r: r["epoch"])
-    out = {}
-    for k in COUNTERS:
-        a, b = _at(rows, start, k), _at(rows, end, k)
-        if a is None or b is None:
-            return None
-        out[k] = int(round(b - a))
     return out
 
 
@@ -196,10 +164,51 @@ def br_ran(run_dir: str, target: str, windows_: list[tuple[int, float, float]]) 
 DISCARD_S = 10.0
 
 
+# The downlink runs at one of two levels, about 20-30 and about 130 Mbit/s
+# (2026-09-28 to 10-04), and a run can switch. Fixed before the thesis sessions:
+# a 1 s window is low below 50 Mbit/s, high from 100, a transition between.
+LOW_BELOW, HIGH_FROM = 50.0, 100.0
+
+
+def level(mbit_s: float) -> str:
+    return "low" if mbit_s < LOW_BELOW else "high" if mbit_s >= HIGH_FROM else "transition"
+
+
+def levels(runs: list[list[float]]) -> dict:
+    """Windows per level, and runs: high with no low window, low with no high
+    window, both otherwise (transitions do not decide)."""
+    out = {"windows": {"low": 0, "transition": 0, "high": 0}, "runs": {"low": 0, "both": 0, "high": 0}}
+    for ws in runs:
+        seen = {level(w) for w in ws}
+        for w in ws:
+            out["windows"][level(w)] += 1
+        if ws:
+            out["runs"]["both" if {"low", "high"} <= seen else "high" if "high" in seen else "low"] += 1
+    return out
+
+
+def failure(js: dict, rc: int, discard_s: float) -> str | None:
+    """Why a run has no usable result, or None. A downlink run (-R) whose every
+    window is there counts even with an iperf3 error: the UE is the receiver and
+    reports each interval itself, and the error comes after, when the two ends
+    exchange results (the error is kept with the run). Uplink: the receiver's
+    report is the server's, carried by that exchange, so an error there leaves
+    no data."""
+    error = js.get("error")
+    if rc != 0:
+        return f"exit code {rc}" + (f": {error}" if error else "")
+    if not error:
+        return None
+    test = js.get("start", {}).get("test_start", {})
+    whole = test.get("duration", 0) - discard_s - 1
+    if test.get("reverse") and len(windows(js, 1.0, discard_s)) >= whole > 0:
+        return None
+    return error
+
+
 def summarize(run_dir: str, discard_s: float = DISCARD_S) -> dict:
     with open(os.path.join(run_dir, "ue.json")) as fh:
         ue = json.load(fh)
-    rows = worker_rows(run_dir)
     # Every attempt of the run (raw/ue/<attempt>/runs); a run cut before it
     # wrote its .meta did not finish and is left out (redone by a later attempt
     # when the run was resumed).
@@ -217,20 +226,22 @@ def summarize(run_dir: str, discard_s: float = DISCARD_S) -> dict:
         name = RUN_RE.match(os.path.basename(path)).group(2)
         js = _load(path)
         c = combos.setdefault(name, {"runs": [], "failed": [], "windows": []})
-        if meta["rc"] != 0 or "error" in js:
-            c["failed"].append(idx)
+        reason = failure(js, meta["rc"], discard_s)
+        if reason:
+            c["failed"].append({"index": idx, "reason": reason})
             continue
         ws = windows(js, 1.0, discard_s)
         before, after = meta["if_before"], meta["if_after"]
         c["windows"] += ws
+        c.setdefault("per_run", []).append(ws)
         c["runs"].append({
             "index": idx,
             "mean": round(statistics.fmean(ws), 3) if ws else None,
             "retransmits": js.get("end", {}).get("sum_sent", {}).get("retransmits"),
             "tool_bytes": js.get("end", {}).get("sum_received", {}).get("bytes"),
             "link_bytes": counter_delta(before[0], after[0]) + counter_delta(before[1], after[1]),
-            "ran_nic": ran_nic(rows, meta["start"], meta["end"]),
             "br_ran": seen.get(idx),
+            "tool_error": js.get("error"),
             "series": samples(js, discard_s),
         })
     out = {"discard_s": discard_s, "window_s": 1.0, "combinations": {}}
@@ -248,7 +259,10 @@ def summarize(run_dir: str, discard_s: float = DISCARD_S) -> dict:
             "representative": rep,
             "sender_tcp_cc": ue.get("server_tcp_cc") if name.startswith("dl") else ue.get("ue_tcp_cc"),
             "runs": c["runs"],
+            "windows": c["windows"],
         }
+        if name.startswith("dl"):
+            out["combinations"][name]["levels"] = levels(c.get("per_run", []))
     return out
 
 
@@ -268,6 +282,17 @@ def write(run_dir: str, s: dict) -> None:
         if rep:
             with open(os.path.join(run_dir, f"series-{name}.csv"), "w") as fh:
                 fh.write("interval,mbit_s\n" + "".join(f"{i},{v:.3f}\n" for i, v in enumerate(rep["series"])))
+    lv = [(name, c["levels"]) for name, c in s["combinations"].items() if "levels" in c]
+    if lv:
+        md += ["", f"Downlink levels (1 s windows: low < {LOW_BELOW:g}, high >= {HIGH_FROM:g} Mbit/s, between: transition):", "",
+               "| combination | windows low | transition | high | runs low | both | high |", "|---|---|---|---|---|---|---|"]
+        md += [f"| {name} | {x['windows']['low']} | {x['windows']['transition']} | {x['windows']['high']} "
+               f"| {x['runs']['low']} | {x['runs']['both']} | {x['runs']['high']} |" for name, x in lv]
+    notes = [f"- {name} run {f['index']} failed: {f['reason']}" for name, c in s["combinations"].items() for f in c["failed"]]
+    notes += [f"- {name} run {r['index']} counted, iperf3 reported after measuring: {r['tool_error']}"
+              for name, c in s["combinations"].items() for r in c["runs"] if r.get("tool_error")]
+    if notes:
+        md += [""] + notes
     with open(os.path.join(run_dir, "summary.md"), "w") as fh:
         fh.write("\n".join(md) + "\n")
 

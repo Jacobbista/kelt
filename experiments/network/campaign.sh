@@ -2,8 +2,8 @@
 #
 # The runner never measures over SSH: it copies a job (ue-run.sh, job.env,
 # schedule.txt) to /tmp/kelt-run-<slug>-<stamp>/ on the UE, starts it
-# detached and disconnects. While the job runs, the worker samples its RAN NIC
-# counters and, for the rtt idle runs, captures GTP-U on br-ran. After the
+# detached and disconnects. While the job runs, the worker captures GTP-U on
+# br-ran and samples the footprint. After the
 # expected end the runner fetches the job's files, checks them against their
 # manifest, and only then removes the job directory from the UE.
 #
@@ -178,14 +178,6 @@ ran_nic() { worker_sh "sudo ovs-vsctl list-ports br-ran | grep -v '^patch-\|^vet
 
 # Worker files of one attempt: /tmp/kelt-<what>-<stamp>-<attempt>.<ext>, each
 # with the PID of its writer next to it, for worker_fetch to stop it.
-worker_sampler_start() {
-  local out="$1" secs="$2" nic="$3"
-  worker_sh "setsid nohup timeout $secs bash -c 'd=/sys/class/net/$nic/statistics
-    echo epoch,rx_bytes,tx_bytes,rx_packets,tx_packets
-    while :; do echo \$(date +%s.%N),\$(cat \$d/rx_bytes),\$(cat \$d/tx_bytes),\$(cat \$d/rx_packets),\$(cat \$d/tx_packets); sleep 1; done' \
-    > $out 2>/dev/null < /dev/null & echo \$! > $out.pid"
-}
-
 # Headers only (128 bytes: outer Ethernet/IP/UDP/GTP-U, inner IP and TCP/ICMP).
 worker_capture_start() {
   local out="$1" secs="$2" iface="${3:-br-ran}" filter="${4:-udp port 2152}"
@@ -332,10 +324,10 @@ mark_unfinished() {
 
 # ── campaigns ─────────────────────────────────────────────────────────────────
 
-# One attempt at a run: the given schedule lines, with the worker's counters
-# and, when capture_s > 0, its br-ran capture for that long.
+# One attempt at a run: the given schedule lines, with the footprint samplers
+# and, when capture_s > 0, the worker's br-ran capture for that long.
 net_attempt() {
-  local run_dir="$1" sched="$2" capture_s="$3" link="$4" slug stamp attempt job expected deadline server nic wfile
+  local run_dir="$1" sched="$2" capture_s="$3" link="$4" slug stamp attempt job expected deadline server nic
   local points="" pt iface
   slug="$(basename "$(dirname "$run_dir")")"; stamp="$(basename "$run_dir")"
   attempt="$(next_attempt "$run_dir")"; job="$(job_name "$slug" "$stamp" "$attempt")"
@@ -355,8 +347,6 @@ net_attempt() {
     "ran_nic=$nic" "attempts=$attempt" "capture=${KELT_CAPTURE:-1}" "capture_points=$(paste -sd, <<< "$points")" \
     "attempt_${attempt}_sessions_start=$(prom_value 'sum(fivegs_smffunction_sm_sessionnbr)')" \
     "attempt_${attempt}_ran_ue_start=$(prom_value 'sum(ran_ue)')"
-  wfile="/tmp/kelt-ran-nic-$stamp-$attempt.csv"
-  worker_sampler_start "$wfile" "$((deadline + 120))" "$nic"
   footprint_start "$stamp-$attempt" "$((deadline + 120))" "$run_dir/raw/footprint/$attempt"
   [ "$capture_s" -gt 0 ] && worker_capture_start "/tmp/kelt-br-ran-$stamp-$attempt.pcap" "$capture_s"
   points_start "$stamp-$attempt" "$((deadline + 120))" <<< "$points"
@@ -365,7 +355,6 @@ net_attempt() {
   ue_wait "$job" "$expected" "$deadline"
   (cd "$EXP_ROOT" && python3 -m lib.runmeta close "$run_dir" "attempt-$attempt")
   ue_fetch "$run_dir" "$job" || die "the job's files stay on the UE in /tmp/$job; run.sh resume or run.sh stop fetches them"
-  worker_fetch "$wfile" "$run_dir/raw/worker/$attempt/ran-nic.csv"
   footprint_stop "$stamp-$attempt" "$run_dir/raw/footprint/$attempt"
   [ "$capture_s" -gt 0 ] && worker_fetch "/tmp/kelt-br-ran-$stamp-$attempt.pcap" "$run_dir/raw/worker/$attempt/br-ran.pcap.gz"
   points_fetch "$stamp-$attempt" "$run_dir/raw/worker/$attempt/points" <<< "$points"
@@ -407,6 +396,7 @@ net_summarise() {
   # every run as its own statistics.
   footprint_summarise "$run_dir" --discard "$( [ "$slug" = throughput ] \
     && (cd "$EXP_ROOT/network" && python3 -c 'from throughput import DISCARD_S; print(DISCARD_S)') || echo 0)"
+  check_run "$run_dir"
   left="$(remaining_schedule "$run_dir" | wc -l)"
   [ "$left" = 0 ] && log "$slug -> $run_dir" || log "$slug -> $run_dir ($left run(s) not finished: run.sh resume)"
 }
@@ -437,7 +427,6 @@ take_over() {
   slug="$(basename "$(dirname "$run_dir")")"; stamp="$(basename "$run_dir")"
   [ -f "$run_dir/schedule.txt" ] || die "$run_dir has no schedule.txt: not a run started by this runner"
   ue_fetch "$run_dir" "$job" >&2 || die "fetch failed; nothing removed from the UE"
-  worker_fetch "/tmp/kelt-ran-nic-$stamp-$attempt.csv" "$run_dir/raw/worker/$attempt/ran-nic.csv" >&2
   footprint_stop "$stamp-$attempt" "$run_dir/raw/footprint/$attempt" >&2
   worker_fetch "/tmp/kelt-br-ran-$stamp-$attempt.pcap" "$run_dir/raw/worker/$attempt/br-ran.pcap.gz" >&2
   if [ "$slug" = rtt ]; then

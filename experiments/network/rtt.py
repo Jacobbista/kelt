@@ -259,19 +259,19 @@ def write(run_dir: str, s: dict) -> None:
     md = ["# rtt", "", f"UE address in the capture: {s['ue_address'] or '—'}; foreign packets to or from it: "
           f"{s['foreign_packets'] if s['foreign_packets'] is not None else '—'} in the whole capture, "
           f"{', '.join(str(x) for x in in_runs) or '—'} inside the idle runs", "",
-          "| condition | part | n | median ms | p90 | p99 | max | loss per run |", "|---|---|---|---|---|---|---|---|"]
+          "| condition | part | n | min ms | mean | median | p90 | p99 | max | loss per run |", "|---|---|---|---|---|---|---|---|---|---|"]
     for cond, c in s["conditions"].items():
         loss = ", ".join(f"{r['loss']:.2%}" if r["loss"] is not None else "—" for r in c["runs"])
         for part in ("total", "core", "access"):
             if part in c:
                 x = c[part]
-                md.append(f"| {cond} | {part} | {x['n']} | {x['median']} | {x['p90']} | {x['p99']} | {x['max']} "
+                md.append(f"| {cond} | {part} | {x['n']} | {x['min']} | {x['mean']} | {x['median']} | {x['p90']} | {x['p99']} | {x['max']} "
                           f"| {loss if part == 'total' else ''} |")
     parts = [(cond, name, x) for cond, c in s["conditions"].items() for name, x in c.get("segments", {}).items()]
     if parts:
         md += ["", "Parts of the core (worker's clock):", "",
-               "| condition | part | n | median ms | p90 | p99 | max |", "|---|---|---|---|---|---|---|"]
-        md += [f"| {cond} | {name} | {x['n']} | {x['median']} | {x['p90']} | {x['p99']} | {x['max']} |"
+               "| condition | part | n | min ms | mean | median | p90 | p99 | max |", "|---|---|---|---|---|---|---|---|---|"]
+        md += [f"| {cond} | {name} | {x['n']} | {x['min']} | {x['mean']} | {x['median']} | {x['p90']} | {x['p99']} | {x['max']} |"
                for cond, name, x in parts]
     with open(os.path.join(run_dir, "summary.md"), "w") as fh:
         fh.write("\n".join(md) + "\n")

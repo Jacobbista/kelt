@@ -99,12 +99,6 @@ def _inside(series: list[tuple], windows: list[tuple]) -> list[tuple]:
     return [(t, v) for t, v in series if any(a <= t <= b for a, b in windows)]
 
 
-def _stats(values: list[float]) -> dict:
-    s = summary(values)
-    s["mean"] = round(sum(values) / len(values), 3) if values else None
-    return s
-
-
 def condition_windows(run_dir: str, discard_s: float = 0.0) -> dict[str, list[tuple]]:
     """condition -> [(start, end)] from every run's .meta, after the discard."""
     out: dict[str, list[tuple]] = collections.defaultdict(list)
@@ -170,7 +164,7 @@ def _group(pods: list[tuple], grid: list[float]) -> dict:
             cpu.append(round(c, 3))
         if m is not None:
             mem.append(round(m, 3))
-    return {"cpu_mcores": _stats(cpu), "mem_mib": _stats(mem)}
+    return {"cpu_mcores": summary(cpu), "mem_mib": summary(mem)}
 
 
 def summarize(run_dir: str, windows: dict[str, list[tuple]], groups: dict,
@@ -187,11 +181,17 @@ def summarize(run_dir: str, windows: dict[str, list[tuple]], groups: dict,
         # What each VM takes from the host, apart from anything else on it.
         for vm, samples in sorted(vms.items()):
             vcpu, vmem = vm_series(sorted(samples))
-            c["nodes"][f"vm-process {vm}"] = {"cpu_mcores": _stats([v for _, v in _inside(vcpu, win)]),
-                                              "mem_mib": _stats([v for _, v in _inside(vmem, win)])}
+            c["nodes"][f"vm-process {vm}"] = {"cpu_mcores": summary([v for _, v in _inside(vcpu, win)]),
+                                              "mem_mib": summary([v for _, v in _inside(vmem, win)])}
+        grid = [a + 0.5 + k for a, b in win for k in range(int(b - a))]
+        # All VM processes together, on the grid like a group: the sum of the
+        # VMs' peaks would overstate the busiest second.
+        if vms:
+            c["nodes"]["vm-process total"] = _group(
+                [_steps([(t, ticks / clk * 1e6, rss * 1024) for t, ticks, clk, rss in sorted(x)]) for x in vms.values()], grid)
         for node, ((ncpu, nmem), pods) in series.items():
-            c["nodes"][node] = {"cpu_mcores": _stats([v for _, v in _inside(ncpu, win)]),
-                                "mem_mib": _stats([v for _, v in _inside(nmem, win)])}
+            c["nodes"][node] = {"cpu_mcores": summary([v for _, v in _inside(ncpu, win)]),
+                                "mem_mib": summary([v for _, v in _inside(nmem, win)])}
             for uid, (pcpu, pmem) in pods.items():
                 cpu, mem = _inside(pcpu, win), _inside(pmem, win)
                 if not cpu and not mem:
@@ -199,9 +199,8 @@ def summarize(run_dir: str, windows: dict[str, list[tuple]], groups: dict,
                 namespace, pod = names.get(uid, ("", uid))
                 group = group_of(namespace, pod, groups, server_prefix, probes)
                 c["pods"].append({"node": node, "namespace": namespace, "pod": pod, "group": group,
-                                  "cpu_mcores": _stats([v for _, v in cpu]), "mem_mib": _stats([v for _, v in mem])})
+                                  "cpu_mcores": summary([v for _, v in cpu]), "mem_mib": summary([v for _, v in mem])})
                 members[group].append(steps[node][uid])
-        grid = [a + 0.5 + k for a, b in win for k in range(int(b - a))]
         c["groups"] = {g: _group(pods, grid) for g, pods in sorted(members.items())}
         c["pods"].sort(key=lambda p: (p["group"], p["pod"]))
         out[cond] = c

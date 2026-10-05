@@ -22,7 +22,7 @@ def iperf(mbits, step=1.0, sent=None, retrans=None):
     return {"intervals": ivs, "end": end}
 
 
-def run_dir(runs, ue=None, worker_rows=None):
+def run_dir(runs, ue=None):
     """runs: list of (index, name, iperf_json, start, end, rc, if_before, if_after)."""
     d = tempfile.mkdtemp()
     r = os.path.join(d, "raw", "ue", "1", "runs")
@@ -34,12 +34,6 @@ def run_dir(runs, ue=None, worker_rows=None):
             fh.write(f"start={start} end={end} rc={rc} if_before={','.join(map(str, b))} if_after={','.join(map(str, a))}\n")
     with open(os.path.join(d, "ue.json"), "w") as fh:
         json.dump(ue or {"ue_tcp_cc": "cubic", "server_tcp_cc": "cubic", "target": TARGET}, fh)
-    if worker_rows is not None:
-        os.makedirs(os.path.join(d, "raw", "worker", "1"))
-        with open(os.path.join(d, "raw", "worker", "1", "ran-nic.csv"), "w") as fh:
-            fh.write("epoch,rx_bytes,tx_bytes,rx_packets,tx_packets\n")
-            for row in worker_rows:
-                fh.write(",".join(map(str, row)) + "\n")
     return d
 
 
@@ -118,6 +112,16 @@ class WindowTest(unittest.TestCase):
         js = iperf([5] * 50 + [10] * 15, step=0.1)
         self.assertEqual(throughput.windows(js, width=1.0, discard_s=5.0), [10.0])
 
+    def test_a_sub_millisecond_gap_inside_the_run_does_not_end_it(self):
+        # iperf3's interval timer can fire late: the next interval starts
+        # 0.2-0.9 ms after the last ended (a 4-stream downlink, 2026-10-04)
+        js = {"intervals": [{"sum": {"start": 5.0, "end": 5.5, "bits_per_second": 10e6}},
+                            {"sum": {"start": 5.5003, "end": 6.0, "bits_per_second": 30e6}},
+                            {"sum": {"start": 6.0, "end": 7.0, "bits_per_second": 40e6}}]}
+        w = throughput.windows(js, width=1.0, discard_s=5.0)
+        self.assertEqual(len(w), 2)
+        self.assertAlmostEqual(w[0], 20.0, places=2)
+
     def test_uneven_intervals_are_weighted_by_their_time(self):
         js = {"intervals": [{"sum": {"start": 5.0, "end": 5.5, "bits_per_second": 10e6}},
                             {"sum": {"start": 5.5, "end": 6.0, "bits_per_second": 30e6}}]}
@@ -162,9 +166,29 @@ class SummarizeTest(unittest.TestCase):
         cut = iperf([0] * 5 + [99])
         d = run_dir([(1, "dl4", good, 0, 6, 0, Z, Z), (2, "dl4", bad, 10, 11, 1, Z, Z), (3, "dl4", cut, 20, 26, 124, Z, Z)])
         s = throughput.summarize(d, discard_s=5.0)["combinations"]["dl4"]
-        self.assertEqual(s["failed"], [2, 3])
+        self.assertEqual(s["failed"], [{"index": 2, "reason": "exit code 1: unable to connect to server"},
+                                       {"index": 3, "reason": "exit code 124"}])
         self.assertEqual(s["n_runs"], 1)
         self.assertEqual(s["samples"]["n"], 1)
+
+    def test_a_downlink_run_measured_whole_counts_despite_an_error_at_the_end(self):
+        # iperf3 -R: the UE receives and reports every interval itself; an error
+        # exchanging results afterwards (2026-10-04) does not touch them
+        js = {**iperf([0] * 5 + [4] * 6), "error": "unable to receive results: Cannot allocate memory",
+              "start": {"test_start": {"reverse": 1, "duration": 11}}}
+        d = run_dir([(1, "dl4", js, 0, 11, 0, Z, Z)])
+        s = throughput.summarize(d, discard_s=5.0)["combinations"]["dl4"]
+        self.assertEqual((s["n_runs"], s["failed"]), (1, []))
+        self.assertEqual(s["runs"][0]["tool_error"], "unable to receive results: Cannot allocate memory")
+
+    def test_an_uplink_run_with_an_error_at_the_end_has_failed(self):
+        # without -R the receiver is the server, whose report comes in the
+        # exchange that failed
+        js = {**iperf([0] * 5 + [4] * 6), "error": "unable to receive results: Cannot allocate memory",
+              "start": {"test_start": {"reverse": 0, "duration": 11}}}
+        d = run_dir([(1, "ul4", js, 0, 11, 0, Z, Z)])
+        s = throughput.summarize(d, discard_s=5.0)["combinations"]["ul4"]
+        self.assertEqual(s["failed"], [{"index": 1, "reason": "unable to receive results: Cannot allocate memory"}])
 
     def test_link_bytes_next_to_the_tool_bytes(self):
         js = iperf([0] * 5 + [8], sent=1_000_000)   # received 6 MB over 6 s at the mbit values
@@ -180,19 +204,6 @@ class SummarizeTest(unittest.TestCase):
         d = run_dir([(1, "dl1", js, 0, 6, 0, before, after)])
         run = throughput.summarize(d, discard_s=5.0)["combinations"]["dl1"]["runs"][0]
         self.assertEqual(run["link_bytes"], 5_000 + 1_000)
-
-    def test_worker_counters_interpolated_at_the_run_edges(self):
-        # samples every 3 s; the run starts and ends between two of them
-        rows = [(10, 100, 1000, 1, 10), (13, 400, 5000, 4, 50), (16, 700, 9000, 7, 90)]
-        d = run_dir([(1, "dl1", iperf([0] * 5 + [1]), 11.5, 14.5, 0, Z, Z)], worker_rows=rows)
-        run = throughput.summarize(d, discard_s=5.0)["combinations"]["dl1"]["runs"][0]
-        self.assertEqual(run["ran_nic"], {"rx_bytes": 300, "tx_bytes": 4000, "rx_packets": 3, "tx_packets": 40})
-
-    def test_worker_counters_inside_the_run_window_only(self):
-        rows = [(5, 0, 0, 0, 0), (10, 100, 1000, 1, 10), (13, 400, 5000, 4, 50), (16, 700, 9000, 7, 90), (30, 9999, 9999, 99, 99)]
-        d = run_dir([(1, "dl1", iperf([0] * 5 + [1]), 10, 16, 0, Z, Z)], worker_rows=rows)
-        run = throughput.summarize(d, discard_s=5.0)["combinations"]["dl1"]["runs"][0]
-        self.assertEqual(run["ran_nic"], {"rx_bytes": 600, "tx_bytes": 8000, "rx_packets": 6, "tx_packets": 80})
 
     def test_sender_congestion_control_per_direction(self):
         d = run_dir([(1, "dl1", iperf([0] * 5 + [1]), 0, 6, 0, Z, Z), (2, "ul1", iperf([0] * 5 + [1]), 10, 16, 0, Z, Z)],
@@ -258,3 +269,20 @@ class SummarizeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LevelsTest(unittest.TestCase):
+    def test_downlink_windows_and_runs_counted_per_level(self):
+        # low below 50, high from 100, between: a transition (fixed before the sessions)
+        high = iperf([0] * 5 + [130, 128, 70, 131])      # high, one transition
+        low = iperf([0] * 5 + [20, 25, 22, 21])
+        both = iperf([0] * 5 + [130, 20, 129, 25])
+        d = run_dir([(1, "dl4", high, 0, 9, 0, Z, Z), (2, "dl4", low, 10, 19, 0, Z, Z), (3, "dl4", both, 20, 29, 0, Z, Z)])
+        c = throughput.summarize(d, discard_s=5.0)["combinations"]["dl4"]
+        self.assertEqual(c["levels"], {"windows": {"low": 6, "transition": 1, "high": 5},
+                                       "runs": {"low": 1, "both": 1, "high": 1}})
+        self.assertEqual(len(c["windows"]), 12)
+
+    def test_uplink_has_no_levels(self):
+        d = run_dir([(1, "ul1", iperf([0] * 5 + [35, 35]), 0, 7, 0, Z, Z)])
+        self.assertNotIn("levels", throughput.summarize(d, discard_s=5.0)["combinations"]["ul1"])

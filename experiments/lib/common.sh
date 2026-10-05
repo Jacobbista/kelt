@@ -181,3 +181,10 @@ footprint_summarise() {
     --core "$CORE_NS" --exposure "$EXPOSURE_NS_RE" --identity "$IAM_NS" --apps "$APPS_NS" \
     --probe "${KELT_PROBE_DEPLOY:-netshoot}" >/dev/null
 }
+
+# check_run <run dir>: the checks every run gets (validation/check_run.py),
+# kept in checks.txt. A failed check flags the run; the campaign goes on.
+check_run() {
+  python3 "$EXP_ROOT/validation/check_run.py" "$1" > "$1/checks.txt" 2>&1 || log "a check FAILED: $1/checks.txt"
+  cat "$1/checks.txt" >&2
+}
