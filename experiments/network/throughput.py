@@ -164,29 +164,6 @@ def br_ran(run_dir: str, target: str, windows_: list[tuple[int, float, float]]) 
 DISCARD_S = 10.0
 
 
-# The downlink runs at one of two levels, about 20-30 and about 130 Mbit/s
-# (2026-09-28 to 10-04), and a run can switch. Fixed before the thesis sessions:
-# a 1 s window is low below 50 Mbit/s, high from 100, a transition between.
-LOW_BELOW, HIGH_FROM = 50.0, 100.0
-
-
-def level(mbit_s: float) -> str:
-    return "low" if mbit_s < LOW_BELOW else "high" if mbit_s >= HIGH_FROM else "transition"
-
-
-def levels(runs: list[list[float]]) -> dict:
-    """Windows per level, and runs: high with no low window, low with no high
-    window, both otherwise (transitions do not decide)."""
-    out = {"windows": {"low": 0, "transition": 0, "high": 0}, "runs": {"low": 0, "both": 0, "high": 0}}
-    for ws in runs:
-        seen = {level(w) for w in ws}
-        for w in ws:
-            out["windows"][level(w)] += 1
-        if ws:
-            out["runs"]["both" if {"low", "high"} <= seen else "high" if "high" in seen else "low"] += 1
-    return out
-
-
 def failure(js: dict, rc: int, discard_s: float) -> str | None:
     """Why a run has no usable result, or None. A downlink run (-R) whose every
     window is there counts even with an iperf3 error: the UE is the receiver and
@@ -233,7 +210,6 @@ def summarize(run_dir: str, discard_s: float = DISCARD_S) -> dict:
         ws = windows(js, 1.0, discard_s)
         before, after = meta["if_before"], meta["if_after"]
         c["windows"] += ws
-        c.setdefault("per_run", []).append(ws)
         c["runs"].append({
             "index": idx,
             "mean": round(statistics.fmean(ws), 3) if ws else None,
@@ -261,8 +237,6 @@ def summarize(run_dir: str, discard_s: float = DISCARD_S) -> dict:
             "runs": c["runs"],
             "windows": c["windows"],
         }
-        if name.startswith("dl"):
-            out["combinations"][name]["levels"] = levels(c.get("per_run", []))
     return out
 
 
@@ -282,12 +256,6 @@ def write(run_dir: str, s: dict) -> None:
         if rep:
             with open(os.path.join(run_dir, f"series-{name}.csv"), "w") as fh:
                 fh.write("interval,mbit_s\n" + "".join(f"{i},{v:.3f}\n" for i, v in enumerate(rep["series"])))
-    lv = [(name, c["levels"]) for name, c in s["combinations"].items() if "levels" in c]
-    if lv:
-        md += ["", f"Downlink levels (1 s windows: low < {LOW_BELOW:g}, high >= {HIGH_FROM:g} Mbit/s, between: transition):", "",
-               "| combination | windows low | transition | high | runs low | both | high |", "|---|---|---|---|---|---|---|"]
-        md += [f"| {name} | {x['windows']['low']} | {x['windows']['transition']} | {x['windows']['high']} "
-               f"| {x['runs']['low']} | {x['runs']['both']} | {x['runs']['high']} |" for name, x in lv]
     notes = [f"- {name} run {f['index']} failed: {f['reason']}" for name, c in s["combinations"].items() for f in c["failed"]]
     notes += [f"- {name} run {r['index']} counted, iperf3 reported after measuring: {r['tool_error']}"
               for name, c in s["combinations"].items() for r in c["runs"] if r.get("tool_error")]

@@ -4,7 +4,7 @@
   tables.py <resource-use|verification|response-time|throughput|rtt>
 
 Uses every non-pilot run of the campaign, or only the runs listed in
-experiments/thesis-runs.txt when that file exists (one "<slug>/<stamp>" per
+runs/thesis-runs.txt when that file exists (one "<slug>/<stamp>" per
 line, "#" comments). Writes runs/_tables/<slug>.md and <slug>.csv (runs/ is
 not committed). The thesis numbers come only from here. Owner: experiments/README.md.
 """
@@ -39,8 +39,8 @@ def select_runs(runs_dir: str, slug: str, listed: set[str] | None) -> list[str]:
     return out
 
 
-def _listed() -> set[str] | None:
-    p = os.path.join(EXP, "thesis-runs.txt")
+def _listed(runs_dir: str) -> set[str] | None:
+    p = os.path.join(runs_dir, "thesis-runs.txt")
     if not os.path.exists(p):
         return None
     with open(p) as fh:
@@ -76,7 +76,15 @@ def footprint_rows(runs: list[str]) -> list[dict]:
 # The thesis footprint table: these rows, the conditions as columns.
 PIVOT_ROWS = [("group", "core", "core"), ("group", "exposure", "exposure"), ("group", "identity", "identity"),
               ("group", "mec-server", "measurement server"), ("machine", "host", "host"),
-              ("machine", "vm-process total", "VM processes")]
+              ("machine", "vm-process total", "VM processes"), ("machine", "vms inside total", "VMs, from inside")]
+PIVOT_LEGEND = [
+    "- host: everything running on the host machine, the testbed and anything else.",
+    "- VM processes: the VirtualBox processes on the host. Their memory is what each VM has touched since it "
+    "started: VirtualBox does not give pages back to the host, so it grows towards the RAM assigned to the VM "
+    "when the guest fills its cache (in session 1, with the captures written on the worker).",
+    "- VMs, from inside: CPU busy and memory in use (total minus available) inside the master and worker VMs, "
+    "the k3s control plane included; the guest's cache is not counted.",
+]
 PIVOT_COLS = [("resource-use", "idle", "rest"), ("throughput", "dl1", "dl1"), ("throughput", "dl4", "dl4"),
               ("throughput", "ul1", "ul1"), ("throughput", "ul4", "ul4"), ("rtt", "idle", "RTT rest"),
               ("rtt", "load", "RTT load")]
@@ -97,7 +105,20 @@ def footprint_pivot(rows: list[dict]) -> list[str]:
                        and r[mean_k] is not None]
                 cells.append(f"{sum(r[mean_k] for r in hit) / len(hit):.0f} / {max(r[peak_k] for r in hit):.0f}" if hit else "—")
             md.append(f"| {label} | " + " | ".join(cells) + " |")
-    return md
+    return md + [""] + PIVOT_LEGEND
+
+
+def machine_note(runs: list[str]) -> str:
+    """The CPUs and memory each machine reports (its own /proc), from the
+    footprint samples: the size the numbers are measured against."""
+    seen: dict[str, tuple] = {}
+    for d in runs:
+        for c in _load(os.path.join(d, "footprint.json")).values():
+            for name, x in c["nodes"].items():
+                if x.get("cpus"):
+                    seen.setdefault(name, (x["cpus"], x["mem_total_mib"]))
+    return "Machines, as each reports itself: " + "; ".join(
+        f"{n} {cpus} CPUs, {mem:.0f} MiB" for n, (cpus, mem) in sorted(seen.items())) + "."
 
 
 def verification_rows(runs: list[str]) -> list[dict]:
@@ -137,14 +158,6 @@ def _ue(d: str) -> dict:
         return {}
 
 
-LEVEL_COLS = [f"windows_{k}" for k in ("low", "transition", "high")] + [f"runs_{k}" for k in ("low", "both", "high")]
-
-
-def _levels(lv: dict | None) -> dict:
-    return {f"{kind}_{k}": (lv or {}).get(kind, {}).get(k) if lv else None
-            for kind, ks in (("windows", ("low", "transition", "high")), ("runs", ("low", "both", "high"))) for k in ks}
-
-
 def throughput_rows(runs: list[str]) -> list[dict]:
     """One row per session (run directory) and combination; with several
     sessions, one "all" row per combination from their 1 s windows together."""
@@ -158,22 +171,19 @@ def throughput_rows(runs: list[str]) -> list[dict]:
                          "failed": len(c["failed"]), "mean_mbit_s": c["samples"].get("mean"),
                          "median_mbit_s": c["samples"].get("median"),
                          "p90_mbit_s": c["samples"].get("p90"), "run_mean_min": sp[0], "run_mean_max": sp[1],
-                         "sender_tcp_cc": c.get("sender_tcp_cc"), **_levels(c.get("levels"))})
-            p = pool.setdefault(name, {"row": rows[-1], "windows": [], "means": [], "runs": 0, "failed": 0, "levels": []})
+                         "sender_tcp_cc": c.get("sender_tcp_cc")})
+            p = pool.setdefault(name, {"row": rows[-1], "windows": [], "means": [], "runs": 0, "failed": 0})
             p["windows"] += c.get("windows", [])
             p["means"] += c.get("run_means", [])
             p["runs"] += c["n_runs"]
             p["failed"] += len(c["failed"])
-            p["levels"].append(rows[-1])
     if len(runs) > 1:
         for name, p in pool.items():
             st = summary(p["windows"])
-            lv = {k: sum(r[k] for r in p["levels"]) if all(r[k] is not None for r in p["levels"]) else None
-                  for k in LEVEL_COLS}
             rows.append({**p["row"], "run": "all", "runs": p["runs"], "failed": p["failed"],
                          "mean_mbit_s": st["mean"], "median_mbit_s": st["median"], "p90_mbit_s": st["p90"],
                          "run_mean_min": min(p["means"]) if p["means"] else None,
-                         "run_mean_max": max(p["means"]) if p["means"] else None, **lv})
+                         "run_mean_max": max(p["means"]) if p["means"] else None})
     return rows
 
 
@@ -277,7 +287,7 @@ def main() -> int:
     slug = sys.argv[1]
     runs_dir = os.environ.get("KELT_EXP_RUNS_DIR", os.path.join(EXP, "runs"))
     campaigns = FOOTPRINT_CAMPAIGNS if slug == "resource-use" else (slug,)
-    runs = [d for c in campaigns for d in select_runs(runs_dir, c, _listed())]
+    runs = [d for c in campaigns for d in select_runs(runs_dir, c, _listed(runs_dir))]
     if slug == "resource-use":
         runs = [d for d in runs if os.path.exists(os.path.join(d, "footprint.json"))]
     if not runs:
@@ -297,7 +307,7 @@ def main() -> int:
     md += NOTES[slug](runs) if slug in NOTES else []
     md += [check_note(runs)]
     if slug == "resource-use":
-        md += footprint_pivot(rows) + ["", "Every level and pod:"]
+        md += footprint_pivot(rows) + ["", machine_note(runs), "", "Every level and pod:"]
     md += ["", "| " + " | ".join(cols) + " |", "|" + "---|" * len(cols)]
     md += ["| " + " | ".join(str(r[c]) for c in cols) + " |" for r in rows]
     with open(os.path.join(out, f"{slug}.md"), "w") as fh:

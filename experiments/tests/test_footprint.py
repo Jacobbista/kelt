@@ -105,6 +105,27 @@ V 102.0 worker 150 100 2097152
         self.assertEqual((total["cpu_mcores"]["mean"], total["cpu_mcores"]["max"]), (1750.0, 2000.0))
         self.assertEqual(total["mem_mib"]["max"], 3072.0)
 
+    def test_the_vms_from_inside_summed_second_by_second(self):
+        # memory in use inside each VM (total minus available, the guest's
+        # cache left out) and its CPU, master + worker; the host is not a VM
+        master = """N 100.0 2 1000 900 2000000 1500000
+N 101.0 2 1200 1050 2000000 1500000
+N 102.0 2 1400 1200 2000000 1488000
+"""
+        d = run({"master": master, "worker": WORKER, "host": HOST})
+        total = footprint.summarize(d, {"all": [(100.0, 102.0)]}, GROUPS)["all"]["nodes"]["vms inside total"]
+        # CPU: master 50 then 50 busy jiffies a second (500 m), worker 1000 then 2000 m
+        self.assertEqual((total["cpu_mcores"]["mean"], total["cpu_mcores"]["max"]), (2000.0, 2500.0))
+        # memory at the grid points: 500000 + 1000000 kB (the next samples come at 102 s)
+        self.assertEqual(total["mem_mib"]["max"], round(1500000 / 1024, 3))
+
+    def test_each_machine_records_its_size(self):
+        # what the machine itself reports: CPUs and MemTotal (a VM shows a little
+        # less than the RAM assigned to it: the guest kernel keeps some)
+        s = footprint.summarize(run(), {"all": [(99.0, 103.0)]}, GROUPS)["all"]
+        self.assertEqual((s["nodes"]["worker"]["cpus"], s["nodes"]["worker"]["mem_total_mib"]), (4, 3906.25))
+        self.assertEqual(s["nodes"]["host"]["cpus"], 8)
+
     def test_a_group_is_the_sum_of_its_pods_second_by_second(self):
         s = footprint.summarize(run(), {"all": [(99.0, 103.0)]}, GROUPS)["all"]
         self.assertEqual(s["groups"]["core"]["cpu_mcores"]["max"], 305.0)
@@ -166,6 +187,19 @@ class WindowsTest(unittest.TestCase):
         self.meta(d, "4-load", 500, 820)
         self.assertEqual(footprint.condition_windows(d, discard_s=0),
                          {"idle": [(100.0, 400.0)], "load": [(500.0, 820.0)]})
+
+    def test_a_run_with_a_ping_is_the_pings_own_span(self):
+        # the load starts 10 s before the ping and ends after it; the condition
+        # is the time the ping measured (its -D timestamps), not the load tool's
+        # start and end (2026-10-05: iperf3 ending took 0.8 of a core for 1 s)
+        d = tempfile.mkdtemp()
+        self.meta(d, "4-load", 500, 832)
+        with open(os.path.join(d, "raw", "ue", "1", "runs", "4-load.ping"), "w") as fh:
+            fh.write("PING x (x) 56(84) bytes of data.\n"
+                     "[510.25] 64 bytes from x: icmp_seq=1 ttl=63 time=111 ms\n"
+                     "[809.75] 64 bytes from x: icmp_seq=3000 ttl=63 time=120 ms\n\n"
+                     "--- x ping statistics ---\n")
+        self.assertEqual(footprint.condition_windows(d, discard_s=0), {"load": [(510.25, 809.75)]})
 
 
 if __name__ == "__main__":

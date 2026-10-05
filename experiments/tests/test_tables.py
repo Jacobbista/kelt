@@ -56,22 +56,20 @@ class NetworkRowsTest(unittest.TestCase):
         self.assertEqual(rows, [{"run": "20260930T100000Z", "target": "10.208.0.202", "combination": "dl1", "mode": "nat",
                                  "runs": 5, "failed": 1, "mean_mbit_s": 24.0,
                                  "median_mbit_s": 23.5, "p90_mbit_s": 31.0, "run_mean_min": 20.0, "run_mean_max": 25.0,
-                                 "sender_tcp_cc": "cubic", **{k: None for k in tables.LEVEL_COLS}}])
+                                 "sender_tcp_cc": "cubic"}])
 
     def test_throughput_sessions_pooled_from_their_windows(self):
         root = tempfile.mkdtemp()
 
-        def comb(ws, lv):
+        def comb(ws):
             return {"n_runs": 1, "failed": [], "samples": {}, "run_means": [sum(ws) / len(ws)],
-                    "spread": [sum(ws) / len(ws)] * 2, "sender_tcp_cc": "cubic", "runs": [], "windows": ws, "levels": lv}
-        lv = {"windows": {"low": 1, "transition": 0, "high": 1}, "runs": {"low": 0, "both": 1, "high": 0}}
-        a = mk_net(root, "throughput", "20261005T100000Z", {"combinations": {"dl1": comb([20.0, 130.0], lv)}})
-        b = mk_net(root, "throughput", "20261006T100000Z", {"combinations": {"dl1": comb([128.0, 132.0], lv)}})
+                    "spread": [sum(ws) / len(ws)] * 2, "sender_tcp_cc": "cubic", "runs": [], "windows": ws}
+        a = mk_net(root, "throughput", "20261005T100000Z", {"combinations": {"dl1": comb([20.0, 130.0])}})
+        b = mk_net(root, "throughput", "20261006T100000Z", {"combinations": {"dl1": comb([128.0, 132.0])}})
         rows = tables.throughput_rows([a, b])
         pooled = rows[-1]
         self.assertEqual((pooled["run"], pooled["runs"], pooled["median_mbit_s"], pooled["mean_mbit_s"]), ("all", 2, 130.0, 102.5))
         self.assertEqual((pooled["run_mean_min"], pooled["run_mean_max"]), (75.0, 130.0))
-        self.assertEqual((pooled["windows_low"], pooled["windows_high"], pooled["runs_both"]), (2, 2, 2))
 
     def test_rtt_sessions_pooled_from_their_samples(self):
         root = tempfile.mkdtemp()
@@ -182,3 +180,16 @@ class FootprintPivotTest(unittest.TestCase):
         self.assertEqual(core, "| core | 100 / 200 | 400 / 900 | — | — | — | — | — |")
         host = next(ln for ln in md if ln.startswith("| host |"))
         self.assertTrue(host.endswith("| 2000 / 3000 |"))
+
+
+class MachineNoteTest(unittest.TestCase):
+    def test_the_size_each_machine_reports(self):
+        root = tempfile.mkdtemp()
+        d = mk(root, "resource-use", "20261005T100000Z")
+        doc = {"idle": {"nodes": {"host": {"cpus": 16, "mem_total_mib": 63960.0},
+                                  "worker": {"cpus": 4, "mem_total_mib": 9941.0},
+                                  "vm-process worker": {}}, "groups": {}, "pods": []}}
+        with open(os.path.join(d, "footprint.json"), "w") as fh:
+            json.dump(doc, fh)
+        self.assertEqual(tables.machine_note([d]),
+                         "Machines, as each reports itself: host 16 CPUs, 63960 MiB; worker 4 CPUs, 9941 MiB.")

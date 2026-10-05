@@ -64,11 +64,7 @@ Recorded for each run:
 
 Reported per combination: mean, median and p90 of the goodput over 1 s
 windows, the mean of each run and the spread of the run means, and the 0.1 s
-series of the run closest to the median, for a figure. The downlink runs at one
-of two levels, about 20-30 and about 130 Mbit/s, and a run can switch: each
-downlink combination counts its 1 s windows per level (low below 50 Mbit/s,
-high from 100, a transition between) and its runs (high with no low window, low
-with no high window, both otherwise). The first 10 s of every run are left
+series of the run closest to the median, for a figure. The first 10 s of every run are left
 out: the uplink climbs to its level over 8-10 s in every run
 ([known issue](../docs/known-issues/radio-path-throughput.md)).
 
@@ -161,7 +157,10 @@ iperf3 and ping. Nothing is installed on it.
 
 The CPU and memory the testbed takes: at rest (`resource-use`, 300 s with
 nothing running, `KELT_RESOURCE_S`), and during every network condition
-(`dl1` to `ul4`, `idle`, `load`), recorded by the campaign that produces it.
+(`dl1` to `ul4`, `idle`, `load`), recorded by the campaign that produces it. A
+condition's windows are its runs' measured time: for throughput each run after
+its first 10 s, for rtt each ping from its first to its last reply (the load
+starts before the ping and ends after it).
 
 `lib/footprint-sampler.sh` runs once a second on both VMs and on the host, for
 the whole campaign, and writes the raw counters; `resource-use/footprint.py`
@@ -177,10 +176,16 @@ turns them into rates per condition.
 CPU is in millicores: thousandths of one CPU core, so 1000 m is one core busy
 for the whole interval. It is the usage between two consecutive samples over
 their time apart (about 1 s), so the maximum of a condition is its 1 s peak.
-Memory is in MiB.
+Memory is in MiB. Each machine's size, as it reports it (CPUs, total memory),
+is kept with the footprint and printed under the thesis table.
 
 The levels nest. The host counts everything running on it, the testbed and
-anything else. The VM process is what one VM takes from the host. The VM, read
+anything else. The VM process is what one VM takes from the host; its memory
+is every page the VM has touched since it started, because VirtualBox does not
+give pages back to the host, so it grows towards the RAM assigned to the VM as
+the guest fills its cache (the captures written on the worker do). The VMs
+from inside, master and worker summed second by second, count the memory in
+use without that cache. The VM, read
 from inside, also counts what runs outside pods: on the master, the k3s
 control plane, a system service. A pod is one pod. Pods are summed into
 groups: core (`5g`), exposure (`positioning`, `camara`), identity (`iam`), the
@@ -284,7 +289,8 @@ footprint sample per second from every machine and pod, every pod named. A faile
 the tables name it.
 
 `runs/_tables/` holds what `tables.py` builds: every non-pilot run of a
-campaign, or only the runs listed in `thesis-runs.txt` when that file exists.
+campaign, or only the runs listed in `runs/thesis-runs.txt` when that file
+exists (it lives with the data it lists).
 Each run directory is one session: throughput and rtt give one row per session,
 and with several sessions an `all` row computed from their windows or samples
 together. `tables.py resource-use` also gives the thesis footprint table: the

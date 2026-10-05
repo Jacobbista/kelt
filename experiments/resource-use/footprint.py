@@ -7,8 +7,9 @@ condition, from the 1 s samples of lib/footprint-sampler.sh.
 
 Samples: raw/footprint/<attempt>/<node>.txt[.gz] (node = master, worker, host)
 and pods.tsv (uid, namespace, pod). Conditions: the given windows (epoch s), or
-one per run from its .meta (raw/ue/<attempt>/runs/<i>-<condition>.meta), the
-first --discard seconds of each left out. A CPU value is the usage between two
+one per run from its .meta (raw/ue/<attempt>/runs/<i>-<condition>.meta), or,
+for an rtt run, from its ping's first to last reply, the first --discard
+seconds of each left out. A CPU value is the usage between two
 consecutive samples over their time apart (about 1 s), so its maximum is the
 1 s peak; memory is the working set, and for a machine the memory in use (total
 minus available). A group is the sum of its pods on one 1 s grid per window
@@ -99,6 +100,17 @@ def _inside(series: list[tuple], windows: list[tuple]) -> list[tuple]:
     return [(t, v) for t, v in series if any(a <= t <= b for a, b in windows)]
 
 
+PING_STAMP_RE = re.compile(r"^\[(\d+(?:\.\d+)?)\] .*icmp_seq=")
+
+
+def _ping_stamps(path: str) -> list[float]:
+    try:
+        with open(path) as fh:
+            return [float(m.group(1)) for m in map(PING_STAMP_RE.match, fh) if m]
+    except OSError:
+        return []
+
+
 def condition_windows(run_dir: str, discard_s: float = 0.0) -> dict[str, list[tuple]]:
     """condition -> [(start, end)] from every run's .meta, after the discard."""
     out: dict[str, list[tuple]] = collections.defaultdict(list)
@@ -108,7 +120,13 @@ def condition_windows(run_dir: str, discard_s: float = 0.0) -> dict[str, list[tu
             continue
         with open(path) as fh:
             f = dict(kv.split("=", 1) for kv in fh.read().split())
-        out[m.group(1)].append((float(f["start"]) + discard_s, float(f["end"])))
+        start, end = float(f["start"]) + discard_s, float(f["end"])
+        # An rtt run: the time its ping measured (ping -D stamps each reply),
+        # not the load tool's lead and teardown around it.
+        stamps = _ping_stamps(path[:-len(".meta")] + ".ping")
+        if stamps:
+            start, end = stamps[0] + discard_s, stamps[-1]
+        out[m.group(1)].append((start, end))
     return {k: sorted(v) for k, v in out.items()}
 
 
@@ -189,9 +207,19 @@ def summarize(run_dir: str, windows: dict[str, list[tuple]], groups: dict,
         if vms:
             c["nodes"]["vm-process total"] = _group(
                 [_steps([(t, ticks / clk * 1e6, rss * 1024) for t, ticks, clk, rss in sorted(x)]) for x in vms.values()], grid)
+        # Every VM from inside, together: CPU busy time and memory in use
+        # (total minus available: the guest's cache is not counted). /proc/stat
+        # counts in USER_HZ, 100 per second on Linux.
+        inside = [_steps([(x[0], (x[2] - x[3]) * 1e4, (x[4] - x[5]) * 1024) for x in sorted(ns)])
+                  for node, (ns, _) in nodes.items() if node != "host" and ns]
+        if inside:
+            c["nodes"]["vms inside total"] = _group(inside, grid)
         for node, ((ncpu, nmem), pods) in series.items():
+            first = min(nodes[node][0]) if nodes[node][0] else None
             c["nodes"][node] = {"cpu_mcores": summary([v for _, v in _inside(ncpu, win)]),
-                                "mem_mib": summary([v for _, v in _inside(nmem, win)])}
+                                "mem_mib": summary([v for _, v in _inside(nmem, win)]),
+                                "cpus": first[1] if first else None,
+                                "mem_total_mib": round(first[4] / 1024, 3) if first else None}
             for uid, (pcpu, pmem) in pods.items():
                 cpu, mem = _inside(pcpu, win), _inside(pmem, win)
                 if not cpu and not mem:

@@ -270,19 +270,3 @@ class SummarizeTest(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
-
-class LevelsTest(unittest.TestCase):
-    def test_downlink_windows_and_runs_counted_per_level(self):
-        # low below 50, high from 100, between: a transition (fixed before the sessions)
-        high = iperf([0] * 5 + [130, 128, 70, 131])      # high, one transition
-        low = iperf([0] * 5 + [20, 25, 22, 21])
-        both = iperf([0] * 5 + [130, 20, 129, 25])
-        d = run_dir([(1, "dl4", high, 0, 9, 0, Z, Z), (2, "dl4", low, 10, 19, 0, Z, Z), (3, "dl4", both, 20, 29, 0, Z, Z)])
-        c = throughput.summarize(d, discard_s=5.0)["combinations"]["dl4"]
-        self.assertEqual(c["levels"], {"windows": {"low": 6, "transition": 1, "high": 5},
-                                       "runs": {"low": 1, "both": 1, "high": 1}})
-        self.assertEqual(len(c["windows"]), 12)
-
-    def test_uplink_has_no_levels(self):
-        d = run_dir([(1, "ul1", iperf([0] * 5 + [35, 35]), 0, 7, 0, Z, Z)])
-        self.assertNotIn("levels", throughput.summarize(d, discard_s=5.0)["combinations"]["ul1"])

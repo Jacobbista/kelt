@@ -40,7 +40,11 @@ def sequence_ranges(run_dir: str, target: str, windows: dict[str, tuple]) -> dic
             if not run:
                 continue
             hl = (ip[0] & 0x0F) * 4
-            src = addr(ip[12:16])
+            src, dst = addr(ip[12:16]), addr(ip[16:20])
+            # only the measurement's flows: other traffic on the cell (another
+            # UE, or this one) is not what iperf3 counted
+            if target not in (src, dst):
+                continue
             sport, dport, seq, _, off = struct.unpack("!HHIIB", ip[hl:hl + 13])
             payload = struct.unpack("!H", ip[2:4])[0] - hl - (off >> 4) * 4
             direction = "dl" if src == target else "ul"
