@@ -95,6 +95,14 @@ def check_echoes(run_dir: str) -> tuple[bool, str]:
 # scenario, so it is reported per run, not judged.
 
 
+def covered(wins: list[tuple], first: float, last: float) -> list[tuple]:
+    """The runs (name, start, end) the full capture spans from start to end,
+    by start. rtt captures everything only around the runs at rest; a load run
+    it touches for a moment is not covered (a rate over the whole run would
+    count a few seconds of traffic)."""
+    return sorted((w for w in wins if first <= w[1] and w[2] <= last), key=lambda w: w[1])
+
+
 def check_cell(run_dir: str) -> tuple[bool, str]:
     caps = captures(run_dir)
     if not caps:
@@ -105,25 +113,21 @@ def check_cell(run_dir: str) -> tuple[bool, str]:
     for meta in glob.glob(os.path.join(run_dir, "raw", "ue", "*", "runs", "*.meta")):
         m = throughput.read_meta(meta)
         wins.append((os.path.basename(meta)[:-5], m["start"], m["end"]))
-    peers, other, ours = collections.Counter(), [], []
+    peers, other, stamps = collections.Counter(), [], []
     for path in caps:
         for t, frame, link in read_pcap(path):
+            stamps.append(t)
             ip = gtpu_inner(frame, link)
             if not ip:
                 continue
             src, dst, n = addr(ip[12:16]), addr(ip[16:20]), struct.unpack("!H", ip[2:4])[0]
             if target in (src, dst):
                 peers[dst if src == target else src] += n
-                ours.append(t)
             else:
                 other.append((t, src, dst, n))
     ue = peers.most_common(1)[0][0] if peers else None
     rates = []
-    for run, a, b in sorted(wins, key=lambda w: w[1]):
-        # a run the full capture did not cover (rtt: the load runs) has none
-        # of the measurement's own packets in it
-        if not any(a <= t <= b for t in ours):
-            continue
+    for run, a, b in covered(wins, min(stamps, default=0.0), max(stamps, default=0.0)):
         inside = sum(n for t, src, dst, n in other if a <= t <= b and ue not in (src, dst))
         rates.append((run, round(inside / (b - a), 1) if b > a else 0.0))
     if not rates:
