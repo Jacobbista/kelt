@@ -75,9 +75,16 @@ def footprint_rows(runs: list[str]) -> list[dict]:
 
 # The thesis footprint table: these rows, the conditions as columns.
 PIVOT_ROWS = [("group", "core", "core"), ("group", "exposure", "exposure"), ("group", "identity", "identity"),
-              ("group", "mec-server", "measurement server"), ("machine", "host", "host"),
+              ("group", "mec-server", "measurement server"), ("group", "edge-apps", "edge applications"),
+              ("group", "platform", "platform"), ("group", "diagnostic", "diagnostic"), ("machine", "host", "host"),
               ("machine", "vm-process total", "VM processes"), ("machine", "vms inside total", "VMs, from inside")]
 PIVOT_LEGEND = [
+    "- edge applications: the applications deployed at the edge, the measurement server apart.",
+    "- platform: the pods that run the testbed itself: Kubernetes and KubeEdge system pods, monitoring "
+    "(Prometheus, Grafana, Loki and their agents), the dashboard's web pods, the front door, the image registry. "
+    "k3s itself runs as a process, not a pod (it is in VMs, from inside); the dashboard backend runs on a third "
+    "VM, which is not sampled from inside (it is in host and VM processes).",
+    "- diagnostic: the probe pod used to check the network planes, idle during the runs.",
     "- host: everything running on the host machine, the testbed and anything else.",
     "- VM processes: the VirtualBox processes on the host. Their memory is what each VM has touched since it "
     "started: VirtualBox does not give pages back to the host, so it grows towards the RAM assigned to the VM "

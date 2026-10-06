@@ -46,9 +46,11 @@ def group_of(namespace: str, pod: str, groups: dict, server_pod_prefix: str, pro
         return "exposure"
     if re.fullmatch(groups["identity"], namespace):
         return "identity"
-    if re.fullmatch(groups["apps"], namespace) and pod.startswith(server_pod_prefix):
-        return "mec-server"
-    return "other"
+    if re.fullmatch(groups["apps"], namespace):
+        return "mec-server" if pod.startswith(server_pod_prefix) else "edge-apps"
+    # Everything else runs the testbed itself: Kubernetes and KubeEdge system
+    # pods, monitoring, the dashboard, the front door, the image registry.
+    return "platform"
 
 
 def _open(path: str):

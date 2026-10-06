@@ -19,7 +19,9 @@ class GroupTest(unittest.TestCase):
         self.assertEqual(g("camara", "camara-gateway-1"), "exposure")
         self.assertEqual(g("iam", "keycloak-0"), "identity")
         self.assertEqual(g("mec", "measurement-server-1"), "mec-server")
-        self.assertEqual(g("mec", "face-recognition-1"), "other")
+        self.assertEqual(g("mec", "face-recognition-1"), "edge-apps")
+        self.assertEqual(g("monitoring", "prometheus-0"), "platform")
+        self.assertEqual(g("kube-system", "coredns-1"), "platform")
 
     def test_probes_are_diagnostic_wherever_they_live(self):
         def g(ns, pod):
