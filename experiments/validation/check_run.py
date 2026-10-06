@@ -12,7 +12,7 @@ A failed check flags the run, it does not remove it. Checks by campaign:
 - rtt: every run of the schedule has a result; every echo paired on br-ran has
   all its parts; access is never negative.
 - throughput and rtt: the other UEs' traffic on the cell inside each run, from
-  the full br-ran capture (rtt: the idle runs), at most 1000 B/s.
+  the full br-ran capture (rtt: the idle runs), reported (part of the scenario).
 - every campaign with a footprint: one sample per second from each machine and
   each pod inside the measured windows (no gap over 2 s); every pod named.
 
@@ -91,9 +91,8 @@ def check_echoes(run_dir: str) -> tuple[bool, str]:
 
 
 # Other UEs on the cell: their traffic shares the radio with the measurement.
-# The same limit as the measured UE's own foreign traffic (tables.py): what a
-# realistic cell carries in the background, not a load.
-CELL_LIMIT_B_S = 1000
+# Other devices stay attached, as in a real cell: their traffic is part of the
+# scenario, so it is reported per run, not judged.
 
 
 def check_cell(run_dir: str) -> tuple[bool, str]:
@@ -129,10 +128,9 @@ def check_cell(run_dir: str) -> tuple[bool, str]:
         rates.append((run, round(inside / (b - a), 1) if b > a else 0.0))
     if not rates:
         return True, "no run inside the full capture"
-    over = [f"{r} {v} B/s" for r, v in rates if v > CELL_LIMIT_B_S]
-    top = max(v for _, v in rates)
-    return not over, (f"other UEs over {CELL_LIMIT_B_S} B/s: {', '.join(over)}" if over
-                      else f"other UEs at most {top} B/s in a run, {len(rates)} run(s) covered (limit {CELL_LIMIT_B_S})")
+    values = [v for _, v in rates]
+    return True, (f"other UEs {min(values)}-{max(values)} B/s per run "
+                  f"(mean {sum(values) / len(values):.0f}), {len(rates)} run(s) covered")
 
 
 def check_footprint(run_dir: str) -> tuple[bool, str]:

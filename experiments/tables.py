@@ -273,6 +273,19 @@ def check_note(runs: list[str]) -> str:
     return "Runs with a failed check: " + ("; ".join(flagged) if flagged else "none") + "."
 
 
+def cell_note(runs: list[str]) -> list[str]:
+    """The other UEs' traffic on the cell per session, as check_run.py reported it."""
+    out = []
+    for d in runs:
+        try:
+            with open(os.path.join(d, "checks.txt")) as fh:
+                out += [f"Other UEs on the cell, {os.path.basename(d)}: {ln.split(':', 1)[1].strip()}."
+                        for ln in fh if ln[5:].startswith("cell:")]
+        except OSError:
+            pass
+    return out
+
+
 NOTES = {"rtt": rtt_notes}
 
 BUILDERS = {"resource-use": footprint_rows, "verification": verification_rows,
@@ -305,7 +318,7 @@ def main() -> int:
     md = [f"# {slug}", "", f"Runs: {len(runs)} ({', '.join(os.path.basename(d) for d in runs)}).",
           f"Discarded and repeated: {len(gone)}" + (": " + "; ".join(gone) if gone else ".")]
     md += NOTES[slug](runs) if slug in NOTES else []
-    md += [check_note(runs)]
+    md += [check_note(runs)] + cell_note(runs)
     if slug == "resource-use":
         md += footprint_pivot(rows) + ["", machine_note(runs), "", "Every level and pod:"]
     md += ["", "| " + " | ".join(cols) + " |", "|" + "---|" * len(cols)]

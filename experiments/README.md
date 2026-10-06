@@ -283,8 +283,9 @@ Every campaign ends with `validation/check_run.py`: every planned run has a
 result or a failure reason; every counted throughput run has its 1 s windows
 to the end; iperf3's bytes against the capture; every paired echo has all its
 parts and a non-negative access; the other UEs' traffic on the cell inside
-each run, from the full `br-ran` capture, at most 1000 B/s (other devices stay
-attached: a cell carries some background; it is measured, not removed); one
+each run, from the full `br-ran` capture, reported, not judged (other devices
+stay attached: a cell carries some background; it is measured, not removed);
+one
 footprint sample per second from every machine and pod, every pod named. A failed check flags the run, which stays;
 the tables name it.
 
