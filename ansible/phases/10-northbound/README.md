@@ -10,7 +10,7 @@ default; the umbrella `NORTHBOUND_ENABLED` (`testbed northbound on`) enables it.
 
 | Role | Builds | Flag |
 |------|--------|------|
-| `positioning_engine` | Fusion engine + standalone `synthetic-adapter` adapter (NodePort `31930`, REST + WebSocket). Owns the blueprint store (PVC at `/app/data`, `GET/PUT /blueprint`, cold-start seed) | `positioning_enabled` |
+| `positioning_engine` | Fusion engine + standalone `synthetic-adapter` adapter (ClusterIP, REST + WebSocket; reached by the gateway and in-cluster services). Owns the blueprint store (PVC at `/app/data`, `GET/PUT /blueprint`, cold-start seed) | `positioning_enabled` |
 | `camara_gateway` | CAMARA Location API gateway, validates Bearer tokens against the realm, forwards to the engine (NodePort `31920`) | `camara_enabled` |
 | `placement_editor` | Room-geometry UI, a write-client that PUTs the blueprint to the engine (no PVC), **always** behind its Keycloak front-door gate (includes `frontdoor_gate`) | `placement_editor_enabled` |
 | `frontdoor_gate` | Generic oauth2-proxy that gives any no-auth UI a Keycloak login + group authorization (parameterized on `gate_*`) | included by callers |

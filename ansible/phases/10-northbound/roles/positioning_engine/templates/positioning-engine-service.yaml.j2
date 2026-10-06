@@ -12,6 +12,5 @@ spec:
     - protocol: TCP
       port: {{ positioning_engine_service_port }}
       targetPort: 8080
-      nodePort: {{ positioning_engine_nodeport }}
       name: http
-  type: NodePort
+  type: ClusterIP

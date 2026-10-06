@@ -98,7 +98,7 @@ without a testbed release.
 | `ConfigMap positioning-engine-wiring` | Deployment wiring, rewritten on every run from `all.yml`: `DEVICE_IDS`, `BLUEPRINT_SEED_PATH`. No static `ADAPTER_URLS`: adapters self-register (an optional seed is rendered only if `engine_adapter_urls` is set) |
 | `ConfigMap positioning-engine-config` | Operator settings (`DEVICE_MAP`, `FUSION_STRATEGY`, `FUSION_COMPARE`, `WEBSOCKET_INTERVAL_MS`): seeded once from the role defaults, then owned by the dashboard Configure form; the role never rewrites it. Listed after the wiring in `envFrom`, so it wins |
 | `Deployment positioning-engine` | Single replica, image from `5g-northbound`, REST + WebSocket on `8080`; the `synthetic-adapter` deployed by the same role is its baseline source |
-| `Service positioning-engine` | ClusterIP plus NodePort `31930` |
+| `Service positioning-engine` | ClusterIP |
 | `Deployment/Service synthetic-adapter` | Standalone reference synthetic adapter (ClusterIP), source `synthetic`; the engine discovers it from its `devices` capability so the demo shows live movement out of the box |
 | `PVC positioning-blueprint` | Engine-owned blueprint store, RWO at `/app/data`; only the engine mounts it. The engine serves `GET/PUT /blueprint` |
 | `ConfigMap positioning-blueprint-seed` | Cold-start default room + `gps_origin`, read once via `BLUEPRINT_SEED_PATH` when the blueprint PVC is empty |

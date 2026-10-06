@@ -144,6 +144,33 @@
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
+# The engine was a NodePort until 2026-10; only the gateway and in-cluster
+# services call it. A live NodePort Service is removed once so the ClusterIP
+# definition below applies cleanly (a type change keeps the old nodePort).
+- name: Read the live positioning engine Service
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Service
+    name: positioning-engine
+    namespace: "{{ positioning_namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: engine_svc
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Remove the positioning engine Service if it is still a NodePort
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: Service
+    name: positioning-engine
+    namespace: "{{ positioning_namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+    wait: true
+  when: (engine_svc.resources | default([]) | length > 0) and engine_svc.resources[0].spec.type == 'NodePort'
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
 - name: Deploy positioning engine Service
   kubernetes.core.k8s:
     state: present
@@ -197,8 +224,7 @@
   debug:
     msg:
       - "Positioning engine + synthetic-adapter deployed"
-      - "REST: http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ positioning_engine_nodeport }}"
-      - "WebSocket: ws://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ positioning_engine_nodeport }}/ws/positions"
+      - "REST and WebSocket (/ws/positions): http://positioning-engine.{{ positioning_namespace }}.svc.cluster.local:{{ positioning_engine_service_port }} (in-cluster only)"
       - "Adapters: self-register with the engine (GET /adapters for the live registry){{ ' | seed: ' ~ engine_adapter_urls if engine_adapter_urls else '' }}"
       - "FUSION_STRATEGY: {{ engine_fusion_strategy }}{{ ' (compare: ' ~ engine_fusion_compare ~ ')' if engine_fusion_compare else '' }}"
       - "DEVICE_IDS: {{ engine_device_ids }}"

@@ -64,7 +64,6 @@ apps_registry_nodeport: 31501       # local image registry (containerd pulls, pu
 dashboard_cluster_nodeport: 31573   # dashboard frontend, cluster build
 keycloak_nodeport: 31910
 camara_gateway_nodeport: 31920
-positioning_engine_nodeport: 31930
 positioning_demo_nodeport: 31940    # location-app demo
 placement_gate_nodeport: 31950      # Keycloak gate in front of the placement editor
 grafana_nodeport: 30300
