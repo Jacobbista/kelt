@@ -6,6 +6,10 @@ service-cidr: "{{ service_cidr }}"
 cluster-dns: "{{ cluster_dns_ip }}"
 flannel-backend: "{{ flannel_backend }}"
 flannel-iface: "{{ k3s_flannel_iface }}"
+# NodePorts only on the management (host-only) network, not on the RAN segment
+# or the 5G plane bridges the worker also has addresses on.
+kube-proxy-arg:
+  - "nodeport-addresses={{ mgmt_subnet }}"
 disable:
 {% for component in disable_components %}
   - {{ component }}

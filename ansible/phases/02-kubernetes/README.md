@@ -55,7 +55,7 @@ This design ensures:
 
 #### kube-proxy
 
-kube-proxy maintains the translation rules that allow Kubernetes Services to route to backend Pods. K3s usually deploys it automatically; however, in some releases or misconfigurations it may be absent — so a small guard role ensures it's always available.
+kube-proxy maintains the translation rules that allow Kubernetes Services to route to backend Pods. NodePorts are opened only on the management network (`mgmt_subnet`, kube-proxy `nodeport-addresses` in the server config and the agent unit), not on the worker's RAN-segment or 5G plane addresses. K3s usually deploys it automatically; however, in some releases or misconfigurations it may be absent — so a small guard role ensures it's always available.
 
 #### CoreDNS
 

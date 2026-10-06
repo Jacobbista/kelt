@@ -26,5 +26,6 @@ TimeoutStopSec=30
 ExecStartPre=/bin/sh -xc '! /usr/bin/systemctl is-enabled --quiet nm-cloud-setup.service'
 ExecStartPre=-/sbin/modprobe br_netfilter
 ExecStartPre=-/sbin/modprobe overlay
-ExecStart={{ k3s_install_dir }}/k3s agent --flannel-iface={{ k3s_flannel_iface }}
+# NodePorts only on the management (host-only) network: see the server config.
+ExecStart={{ k3s_install_dir }}/k3s agent --flannel-iface={{ k3s_flannel_iface }} --kube-proxy-arg=nodeport-addresses={{ mgmt_subnet }}
 

@@ -239,6 +239,13 @@ satisfy the following:
    HTTP because the tunnel terminates TLS upstream. A dashboard opened on its
    plain-HTTP LAN address shows "Sign-in needs HTTPS" with a link to the same
    path on its HTTPS origin (`VITE_SECURE_URL`, set by phase 09).
+   The front-door enforces it for requests the tunnel reports as plain HTTP
+   (`X-Forwarded-Proto: http`): on the browser surfaces GET and HEAD are
+   redirected to HTTPS (308) and other methods are refused; on the CAMARA
+   gateway every such request is refused (403), so a client configured with
+   `http://` fails instead of sending its token in clear on each call. Answers
+   served over HTTPS carry `Strict-Transport-Security`. Requests without the
+   header (direct LAN access to the NodePort) are unaffected.
 3. **WebSocket upgrade allowed.** The dashboard streams logs, packet captures,
    and pod exec over `wss://`. Tunnel must forward `Upgrade: websocket`.
 4. **HTTP Host header preserved.** Vite blocks unknown Host headers by
@@ -250,7 +257,13 @@ satisfy the following:
    reachable directly from outside; all traffic flows through the dashboard
    frontend's reverse proxy. The backend and the watchdog listen on the ansible
    VM's management address, so the cluster frontend on the worker can proxy to
-   them; the watchdog also requires the admin token on every request.
+   them; the watchdog also requires the admin token on every request. NodePorts
+   are opened only on the management (host-only) network (kube-proxy
+   `nodeport-addresses`, phase 02), not on the worker's RAN-segment or 5G plane
+   addresses. A VPN subnet route to the host-only network (for example a Tailscale subnet
+   router on the host advertising it) makes every NodePort reachable from that
+   VPN: restrict the route to the operator's own devices in the VPN's access
+   rules.
 
 ## Front-end gating (recommended)
 
