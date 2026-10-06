@@ -109,14 +109,16 @@ part is a difference on one clock and no synchronisation is needed:
   the UE, its router and modem, the radio, the gNB, the cable to the worker
   (radio and gNB processing cannot be separated);
 - core in parts, each the request's time from one point to the next plus the
-  reply's time back: **worker** (routing RAN to N3), **ovs_n3** (switching to
-  the UPF), **upf**, **ovs_n6m** (switching to the server), and **server**
-  (its own turnaround).
+  reply's time back: **worker** (the worker's IP routing from the RAN bridge
+  to the N3 bridge), **ovs_n3** (the N3 Open vSwitch bridge and the veth into
+  the UPF), **upf** (inside the UPF, N3 interface to N6m interface),
+  **ovs_n6m** (the N6m Open vSwitch bridge and the veth into the server), and
+  **server** (its own turnaround).
 
 The `idle` runs also have a full capture on `br-ran`, for the other traffic
 (below).
 
-The captures are in nanoseconds (the switching steps are a few microseconds)
+The captures are in nanoseconds (the bridge steps are a few microseconds)
 and each keeps tcpdump's own report next to it (`<capture>.log`: packets
 captured, dropped by the kernel). ping reports three significant digits, so the
 total and access resolve 0.1 ms between 10 and 100 ms and 1 ms above 100 ms
@@ -189,7 +191,10 @@ use without that cache. The VM, read
 from inside, also counts what runs outside pods: on the master, the k3s
 control plane, a system service. A pod is one pod. Pods are summed into
 groups: core (`5g`), exposure (`positioning`, `camara`), identity (`iam`), the
-mec measurement server, diagnostic probes (`netshoot`), other. The samplers of
+mec measurement server, the other edge applications (`mec`), diagnostic probes
+(`netshoot`), and the platform: every other pod (Kubernetes and KubeEdge
+system pods, monitoring, the dashboard's web pods, the front door, the
+registry). The samplers of
 different machines are not aligned, so a group is summed on one 1 s grid: at
 each point, each pod's CPU over the interval holding it and its last memory
 sample.
@@ -223,6 +228,7 @@ experiments/run.sh verification
 experiments/run.sh response-time
 experiments/run.sh report                                         # every run, one line each
 python3 experiments/tables.py <campaign>                          # the thesis table of a campaign
+experiments/.venv/bin/python experiments/figures.py               # the thesis figures of throughput and rtt
 ```
 
 | Variable | Default | Meaning |
@@ -299,6 +305,14 @@ groups, the host and all VM processes together (summed second by second), with
 the conditions as columns, mean and 1 s peak; several sessions give the mean of
 their means and the highest of their peaks.
 
+`runs/_figures/` holds what `figures.py` draws from the same runs, in the
+thesis style (`thesis.mplstyle`: the thesis text width, Arial, its palette; it
+needs matplotlib, `python3 -m venv experiments/.venv && experiments/.venv/bin/pip install matplotlib`,
+and the Arial font): per direction, 1 and 4 streams in 1 s windows over the whole run (the run whose
+mean is closest to the median of all sessions' run means, the discarded start
+shaded, the cell's theoretical maximum dashed); the mean of each part of the core per condition, stacked (means add
+up, medians do not); and the distribution of the RTT at rest and under load, each on its own scale.
+
 ## Reading the numbers
 
 - **Why 1 s windows.** A TCP flow delivers in bursts and stalls for longer than
@@ -349,6 +363,8 @@ their means and the highest of their peaks.
 run.sh                 entry point: checks, campaign, summary
 report.sh              one line per recorded run
 tables.py              thesis tables from the chosen runs
+figures.py             thesis figures from the same runs
+thesis.mplstyle        the thesis' figure style
 provenance.sh          what was measured, read from the live deployment
 lib/common.sh          cluster access; addresses and names read from all.yml or the cluster
 lib/stats.py           the one percentile method every table uses

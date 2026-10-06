@@ -1,0 +1,24 @@
+# The thesis' figure style (latex/thesis/figures/src/thesis.mplstyle in the
+# thesis sources): 13 cm text width, Arial 9/8 pt, the thesis palette.
+font.family: Arial
+font.size: 9
+axes.titlesize: 9
+axes.labelsize: 9
+xtick.labelsize: 8
+ytick.labelsize: 8
+legend.fontsize: 8
+legend.frameon: False
+axes.prop_cycle: cycler('color', ['6c8ebf', 'b85450', '82b366', 'd79b00', '666666'])
+axes.spines.top: False
+axes.spines.right: False
+axes.grid: True
+axes.axisbelow: True
+grid.color: e0e0e0
+grid.linewidth: 0.5
+lines.linewidth: 1.2
+figure.figsize: 5.12, 2.8
+figure.dpi: 150
+savefig.format: pdf
+savefig.bbox: tight
+savefig.pad_inches: 0.02
+pdf.fonttype: 42

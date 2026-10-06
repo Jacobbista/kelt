@@ -183,17 +183,23 @@ def failure(js: dict, rc: int, discard_s: float) -> str | None:
     return error
 
 
-def summarize(run_dir: str, discard_s: float = DISCARD_S) -> dict:
-    with open(os.path.join(run_dir, "ue.json")) as fh:
-        ue = json.load(fh)
-    # Every attempt of the run (raw/ue/<attempt>/runs); a run cut before it
-    # wrote its .meta did not finish and is left out (redone by a later attempt
-    # when the run was resumed).
+def run_files(run_dir: str) -> dict[int, str]:
+    """The iperf3 result of each run, by index. Every attempt of the run
+    (raw/ue/<attempt>/runs) is searched; a run cut before it wrote its .meta
+    did not finish and is left out (redone by a later attempt when the run
+    was resumed)."""
     found: dict[int, str] = {}
     for path in sorted(glob.glob(os.path.join(run_dir, "raw", "ue", "*", "runs", "*.json"))):
         m = RUN_RE.match(os.path.basename(path))
         if m and not path.endswith(".load.json") and os.path.exists(path[:-len(".json")] + ".meta"):
             found[int(m.group(1))] = path
+    return found
+
+
+def summarize(run_dir: str, discard_s: float = DISCARD_S) -> dict:
+    with open(os.path.join(run_dir, "ue.json")) as fh:
+        ue = json.load(fh)
+    found = run_files(run_dir)
     metas = {idx: read_meta(p[:-len(".json")] + ".meta") for idx, p in found.items()}
     seen = br_ran(run_dir, ue.get("target", ""), [(i, m["start"], m["end"]) for i, m in metas.items()]) \
         if captures(run_dir) else {}
