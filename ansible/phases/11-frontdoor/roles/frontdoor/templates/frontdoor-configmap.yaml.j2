@@ -10,6 +10,20 @@
   rather than crashing nginx at startup. Northbound server blocks are emitted
   only when their feature flag is on.
 #}
+{#- A request the tunnel reports as plain HTTP (X-Forwarded-Proto: http) is
+    never proxied. Browser surfaces: GET/HEAD move to HTTPS (308), anything else
+    is refused, since its body already crossed the internet in clear. API
+    surface: always refused, so a client configured with http:// fails instead
+    of sending its token in clear on every call. Direct LAN access to the
+    NodePort carries no such header and is unaffected. -#}
+{% macro edge_https_browser() %}
+        if ($edge_redirect) { return 308 https://$host$request_uri; }
+        if ($edge_plain) { return 403 "HTTPS required"; }
+{% endmacro %}
+{% macro edge_https_api() %}
+        default_type application/json;
+        if ($edge_plain) { return 403 '{"status":403,"code":"PERMISSION_DENIED","message":"HTTPS required"}'; }
+{% endmacro %}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -28,6 +42,14 @@ data:
 
       # WebSocket upgrade (Vite HMR on the dev surface, live log streams).
       map $http_upgrade $connection_upgrade { default upgrade; '' close; }
+
+      # The scheme the client used at the public edge, as the tunnel reports it
+      # (see the macros at the top). HSTS only on answers the edge served over
+      # HTTPS; not includeSubDomains: other hosts under the base are not KELT's.
+      map $http_x_forwarded_proto $edge_plain { http 1; default 0; }
+      map "$edge_plain:$request_method" $edge_redirect { "1:GET" 1; "1:HEAD" 1; default 0; }
+      map $http_x_forwarded_proto $edge_hsts { https "max-age=31536000"; default ""; }
+      add_header Strict-Transport-Security $edge_hsts always;
 
       proxy_http_version 1.1;
       proxy_set_header Host              $host;
@@ -54,7 +76,7 @@ data:
       server {
         listen 80;
         server_name {{ catalogue_subdomain }}.{{ external_base_domain }};
-        root /usr/share/nginx/html;
+{{ edge_https_browser() }}        root /usr/share/nginx/html;
         # Exact match wins, so the co-brand JSON is served as itself; everything
         # else falls back to the welcome page.
         location = /brand.json { default_type application/json; }
@@ -91,7 +113,7 @@ data:
       server {
         listen 80;
         server_name {{ dashboard_subdomain }}.{{ external_base_domain }};
-        location / {
+{{ edge_https_browser() }}        location / {
           set $up http://dashboard-frontend.{{ dashboard_namespace }}.svc.cluster.local:{{ dashboard_frontend_service_port }};
           proxy_pass $up;
         }
@@ -102,7 +124,7 @@ data:
       server {
         listen 80;
         server_name {{ camara_subdomain }}.{{ external_base_domain }};
-        location / {
+{{ edge_https_api() }}        location / {
           set $up http://camara-gateway.{{ camara_namespace }}.svc.cluster.local:{{ camara_gateway_service_port }};
           proxy_pass $up;
         }
@@ -114,7 +136,7 @@ data:
       server {
         listen 80;
         server_name {{ positioning_demo_subdomain }}.{{ external_base_domain }};
-        location / {
+{{ edge_https_browser() }}        location / {
           set $up http://{{ frontdoor_demo_service }}.{{ apps_namespace }}.svc.cluster.local:{{ positioning_demo_service_port }};
           proxy_pass $up;
         }
@@ -126,7 +148,7 @@ data:
       server {
         listen 80;
         server_name {{ placement_editor_subdomain }}.{{ external_base_domain }};
-        location / {
+{{ edge_https_browser() }}        location / {
           set $up http://oauth2-proxy-placement.{{ positioning_namespace }}.svc.cluster.local:{{ oauth2_proxy_port }};
           proxy_pass $up;
         }
@@ -139,7 +161,7 @@ data:
       server {
         listen 80;
         server_name {{ dashboard_dev_subdomain }}.{{ external_base_domain }};
-        location / {
+{{ edge_https_browser() }}        location / {
           proxy_pass http://{{ frontdoor_dev_upstream }};
         }
       }
@@ -157,7 +179,7 @@ data:
       server {
         listen 80;
         server_name ~^{{ kelt_prefix }}-(?<app>[^.]+)\.{{ external_base_domain | regex_escape }}$;
-        root /usr/share/nginx/html;
+{{ edge_https_browser() }}        root /usr/share/nginx/html;
         # Branded 404 ONLY when KELT itself cannot reach the app: the Service name
         # does not resolve (no such app) or the upstream refuses / times out — both
         # surface as nginx-generated 502/504. proxy_intercept_errors stays OFF (the

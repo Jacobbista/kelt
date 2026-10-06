@@ -26,8 +26,11 @@ redirect URIs (phase 08) and the dashboard public links derive from the same var
 - Upstreams use a cluster-DNS `resolver` + variable `proxy_pass`, so a
   disabled-or-not-yet-deployed service returns 502 instead of crashing nginx at
   startup. Northbound server blocks are emitted only when their flag is on.
-- `X-Forwarded-Proto` is set to `external_scheme` (https) so Keycloak and
-  oauth2-proxy see the real edge scheme behind the tunnel.
+- A request the tunnel reports as plain HTTP is never proxied: browser
+  surfaces redirect GET/HEAD to HTTPS (308) and refuse other methods; the CAMARA
+  gateway refuses it (403). HTTPS answers carry `Strict-Transport-Security`.
+  Upstream, `X-Forwarded-Proto` is set to `external_scheme` (https), which is
+  then what the edge used.
 - WebSocket upgrade is wired (Vite HMR on the dev surface, live log streams).
 - TLS terminates at Cloudflare; the tunnel reaches this NodePort over HTTP,
   consistent with the rest of the testbed.
