@@ -55,6 +55,9 @@ DEFAULT_POSITIONING_DEMO_EXTERNAL_ORIGIN=""
 # 'ask' prompts on every phase 08 launch (interactive only); true/false skips
 # the prompt. See docs/security/iam.md.
 DEFAULT_KEYCLOAK_REALM_RECONCILE="ask"
+# A value given in the environment decides that one run (prompt_kc_reconcile)
+# and is never saved; read it here, before load_config replaces it.
+KC_RECONCILE_ENV="${KEYCLOAK_REALM_RECONCILE:-}"
 DEFAULT_KEYCLOAK_ADMIN_PASSWORD=""
 DEFAULT_CAMARA_CLIENT_SECRET=""
 DEFAULT_CAMARA_API_DEMO_SECRET=""
@@ -859,6 +862,10 @@ do_iam() {
 # gum from the tty and folded ANSI bytes into the command line).
 prompt_kc_reconcile() {
   KC_RECONCILE_THIS_RUN=""
+
+  case "${KC_RECONCILE_ENV}" in
+    true|false) KC_RECONCILE_THIS_RUN="${KC_RECONCILE_ENV}"; return 0 ;;
+  esac
 
   if ! $HAS_GUM || [[ ! -t 0 ]]; then
     case "${KEYCLOAK_REALM_RECONCILE}" in
