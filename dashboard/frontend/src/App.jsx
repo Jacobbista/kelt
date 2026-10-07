@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from "react";
-import { Routes, Route, Navigate, useNavigate } from "react-router-dom";
+import React, { useEffect, useRef, useState } from "react";
+import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { getRuntimeInfo } from "./api";
 import { AuthProvider, useAuth } from "./auth/AuthContext";
 import { ToastProvider } from "./context/ToastContext";
@@ -8,13 +8,14 @@ import { UpdateProvider } from "./context/UpdateContext";
 import { IsolationSummaryProvider } from "./context/IsolationSummaryContext";
 import { StatusSummaryProvider } from "./context/StatusSummaryContext";
 import { useBackendHealth } from "./hooks/useBackendHealth";
+import { useIamHealth } from "./hooks/useIamHealth";
+import { useWatchdog } from "./hooks/useWatchdog";
 import ErrorBoundary from "./components/ErrorBoundary";
 import Layout from "./Layout";
 import { ROUTES } from "./navigation";
-import { env } from "./runtime-env";
 import LogViewer from "./components/LogViewer";
 import PodTerminal from "./components/PodTerminal";
-import CallbackPage from "./pages/CallbackPage";
+import AuthGate from "./components/AuthGate";
 import CorePage from "./pages/CorePage";
 import HealthPage from "./pages/HealthPage";
 import CapturePage from "./pages/CapturePage";
@@ -24,7 +25,6 @@ import IamPage from "./pages/IamPage";
 import BrandingPage from "./pages/BrandingPage";
 import StoragePage from "./pages/StoragePage";
 import KubernetesPage from "./pages/KubernetesPage";
-import LoggedOutPage from "./pages/LoggedOutPage";
 import MetricsPage from "./pages/MetricsPage";
 import NorthboundPage from "./pages/NorthboundPage";
 import NorthboundAssetsPage from "./pages/NorthboundAssetsPage";
@@ -39,7 +39,7 @@ import RanPage from "./pages/RanPage";
 import SubscribersPage from "./pages/SubscribersPage";
 import TopologyPage from "./pages/TopologyPage";
 import UEMonitoringPage from "./pages/UEMonitoringPage";
-import { autoLogin } from "./lib/authFlow";
+import { gateView } from "./lib/authFlow";
 
 
 export default function App() {
@@ -68,65 +68,48 @@ function AdminOnly({ children }) {
   );
 }
 
-// The session ended while the page was open (lib/authFlow.js): the login page
-// opens on the click, fresh, and the user comes back to the same page.
-function SessionEnded({ onSignIn }) {
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-950 p-6 text-slate-300">
-      <div className="max-w-md rounded-lg border border-slate-700 bg-slate-900 p-6">
-        <h2 className="mb-2 text-lg font-semibold text-slate-100">Session ended</h2>
-        <p className="text-sm leading-relaxed text-slate-400">
-          The dashboard session expired while this page was open. Sign in again to go on where you were.
-        </p>
-        <button type="button" onClick={() => onSignIn()} className="mt-4 rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500">
-          Sign in
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// Sign-in cannot start on a plain-HTTP origin (see AuthContext). Say so and
-// point at the HTTPS address of this same frontend, keeping the path.
-function InsecureOrigin() {
-  const secure = env("VITE_SECURE_URL");
-  const here = window.location.pathname + window.location.search;
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-950 p-6 text-slate-300">
-      <div className="max-w-md rounded-lg border border-slate-700 bg-slate-900 p-6">
-        <h2 className="mb-2 text-lg font-semibold text-slate-100">Sign-in needs HTTPS</h2>
-        <p className="text-sm leading-relaxed text-slate-400">
-          This address ({window.location.origin}) is plain HTTP, and the browser does not allow the
-          login there.
-        </p>
-        {secure ? (
-          <a href={`${secure.replace(/\/+$/, "")}${here}`} className="mt-4 inline-block rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500">
-            Open {secure.replace(/^https:\/\//, "").replace(/\/+$/, "")}
-          </a>
-        ) : (
-          <p className="mt-3 text-sm text-slate-400">Open the dashboard through its HTTPS address, or on localhost.</p>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function AppInner() {
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const auth = useAuth();
+  // Once the shell has opened it stays mounted: a lost backend covers it
+  // (gate "backend-lost") instead of unmounting the pages.
+  const [appShown, setAppShown] = useState(false);
   const [runtime, setRuntime] = useState({ mode: "unknown", runtime_source: "unknown" });
   const [logTarget, setLogTarget] = useState(null);
   const [termTarget, setTermTarget] = useState(null);
-  const { unreachable: backendUnreachable, sessionExpired, serverTime } = useBackendHealth();
-
+  const { state: backendState, serverTime, check: recheckBackend } = useBackendHealth();
+  const iamState = useIamHealth();
+  const watchdog = useWatchdog(auth);
+  const isAdmin = !auth.enabled || auth.roles.includes("dashboard-admin");
+  const view = gateView({ ...auth, path: pathname, backend: backendState, iam: iamState, appShown });
   useEffect(() => {
-    // With no session, go to Keycloak on a first visit; a session that ended
-    // while the page was open waits for "Sign in" (lib/authFlow.js). The
-    // auth/callback route handles the return trip; /logged-out renders its own
-    // "sign in again" so an explicit logout does not bounce straight back
-    // through the still-alive Keycloak SSO session.
-    if (autoLogin({ ...auth, path: window.location.pathname })) auth.login();
-  }, [auth.enabled, auth.loading, auth.user, auth.loggingOut, auth.ended, auth.login]);
+    if (view === "app") setAppShown(true);
+  }, [view]);
+  // The cover over the shell fades out (index.css .gate.is-leaving) when the
+  // backend answers again, instead of vanishing in one frame.
+  const [coverLeaving, setCoverLeaving] = useState(false);
+  const lastView = useRef(view);
+  useEffect(() => {
+    if (lastView.current === "backend-lost" && view === "app") {
+      setCoverLeaving(true);
+      const id = setTimeout(() => setCoverLeaving(false), 250);
+      lastView.current = view;
+      return () => clearTimeout(id);
+    }
+    lastView.current = view;
+    return undefined;
+  }, [view]);
+
+  // A first visit with no session goes to Keycloak by itself (gate
+  // "redirecting"). Once per page load: StrictMode runs effects twice, and two
+  // sign-in redirects at once leave Keycloak with a stale auth session.
+  const redirected = useRef(false);
+  useEffect(() => {
+    if (view !== "redirecting" || redirected.current) return;
+    redirected.current = true;
+    auth.login();
+  }, [view, auth.login]);
 
   useEffect(() => {
     // Avoid firing while the auth context is still resolving an existing
@@ -165,26 +148,11 @@ function AppInner() {
     navigate(ROUTES[id] ?? "/");
   }
 
-  // While auth is enabled and the session is unresolved or absent, do not mount
-  // the app: the redirect to Keycloak is already in flight (effect above).
-  // Rendering pages here would fire API calls with no token and flash a 401
-  // banner before the redirect lands. The callback and logged-out routes must
-  // still render to drive their own flow, so they are exempt.
-  const authPath = window.location.pathname;
-  if (auth.insecureOrigin) return <InsecureOrigin />;
-  if (
-    auth.enabled
-    && authPath !== "/auth/callback"
-    && authPath !== "/logged-out"
-    && (auth.loading || !auth.user)
-  ) {
-    if (auth.ended && !auth.loading && !auth.loggingOut) return <SessionEnded onSignIn={auth.login} />;
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-400">
-        {auth.loggingOut ? "Signing out…" : "Signing in…"}
-      </div>
-    );
-  }
+  // No session, no backend or Keycloak yet, or an auth route: the gate's full
+  // screen, never the shell (lib/authFlow.js gateView). Pages mount only with a
+  // session, so they never fire API calls without a token.
+  const gate = <AuthGate view={view} auth={auth} backend={backendState} iam={iamState} watchdog={watchdog} isAdmin={isAdmin} recheck={recheckBackend} />;
+  if (view !== "app" && view !== "backend-lost") return gate;
 
   return (
     <ErrorBoundary>
@@ -197,12 +165,9 @@ function AppInner() {
       onNavigate={onNavigate}
       runtime={runtime}
       serverTime={serverTime}
-      backendUnreachable={backendUnreachable}
-      sessionExpired={sessionExpired}
     >
       <Routes>
-        <Route path="/auth/callback" element={<CallbackPage />} />
-        <Route path="/logged-out" element={<LoggedOutPage />} />
+        <Route path="/logged-out" element={<Navigate to="/" replace />} />
         <Route path="/" element={<OverviewPage />} />
         <Route path="/kubernetes" element={<KubernetesPage />} />
         <Route path="/core" element={
@@ -260,6 +225,9 @@ function AppInner() {
         />
       )}
     </Layout>
+    {(view === "backend-lost" || coverLeaving) && (
+      <AuthGate view="backend-lost" leaving={coverLeaving} auth={auth} watchdog={watchdog} isAdmin={isAdmin} recheck={recheckBackend} />
+    )}
     </StatusSummaryProvider>
     </IsolationSummaryProvider>
     </UpdateProvider>

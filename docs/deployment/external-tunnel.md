@@ -157,7 +157,7 @@ Covers REST + `/api/v1/ws/*` WebSocket endpoints. Backend Bearer JWT validation 
 | Path | `kelt-dev.example.com/health` |
 | Policy action | `Bypass` + `Everyone` |
 
-`SystemHealthGate` polls `/health` before the SPA hydrates; an Access challenge here keeps the splash screen up forever.
+The dashboard's gate (`AuthGate`) polls `/health` before it opens the shell; without this bypass every probe meets the Access challenge and the gate shows "Access session expired".
 
 **App D3: Bypass watchdog**
 
@@ -214,8 +214,8 @@ The same passthrough requirements apply:
 | Login form POST returns 400 with `cookie_not_found` | `/auth/realms/*` intercepted; form action target differs from cookie domain. |
 | Browser console: CORS error on `/auth/resources/.../js/passwordVisibility.js` | `/auth/resources/*` not bypassed; gateway 302s to its own origin. |
 | Browser console: `WebSocket connection to 'wss://.../api/v1/ws/...' failed` | `/api/v1/ws/*` not bypassed; gateway rejects upgrade. |
-| Periodic dashboard reload, `SystemHealthGate` splash flashes | Vite HMR WebSocket dropped by gateway. Set `DASHBOARD_DEV_HMR_PATH=/__vite_hmr` and add a bypass for that path, or disable HMR with `DASHBOARD_DEV_HMR_ENABLED=false`. |
-| `SystemHealthGate` stuck on "Waiting for services to come online" on the dev hostname | `/health` not bypassed on the dev hostname. The fetch hangs at the Access challenge and never resolves. |
+| Periodic dashboard reload, the gate's "Waiting for the services" screen flashes | Vite HMR WebSocket dropped by gateway. Set `DASHBOARD_DEV_HMR_PATH=/__vite_hmr` and add a bypass for that path, or disable HMR with `DASHBOARD_DEV_HMR_ENABLED=false`. |
+| The gate shows "Access session expired" on the dev hostname right after signing in to Access | `/health` not bypassed on the dev hostname: the probe meets the Access challenge. |
 | Logout redirects back to the dashboard logged in | Two causes. Keycloak SSO session on the prod hostname is still alive across tabs (close them and retry), or the `dashboard` client has no `post.logout.redirect.uris` and the SPA `post_logout_redirect_uri` does not match `redirectUris` exactly. Phase 08 realm template sets the attribute; re-apply the playbook after changing dev/prod hostnames. |
 
 ---

@@ -164,7 +164,7 @@ export default function AppHeader({ runtime, serverTime }) {
         )}
 
         <span className="mx-1 h-5 w-px bg-slate-800" aria-hidden="true" />
-        <span title={runtime.runtime_source}>{modeBadge}</span>
+        <span title={`${mode === "dev" ? "Dev frontend (Vite)" : mode === "prod" ? "Cluster frontend" : "Frontend"}\nBackend code: ${runtime.runtime_source}`}>{modeBadge}</span>
         <button
           ref={syncRef}
           type="button"
@@ -197,7 +197,7 @@ export default function AppHeader({ runtime, serverTime }) {
           <span className="text-[10px] text-slate-500" aria-hidden="true">▾</span>
         </button>
         {showMenu && (
-          <AccountMenu runtimeSource={runtime.runtime_source} modeBadge={modeBadge} onClose={closeMenu} anchorRef={menuRef} />
+          <AccountMenu onClose={closeMenu} anchorRef={menuRef} />
         )}
       </div>
     </header>

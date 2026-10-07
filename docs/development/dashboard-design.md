@@ -127,6 +127,33 @@ Example: the gNB settings on the RAN page (AMF address and NGAP port, RAN
 gateway, user-plane route) are read from the backend; the NGAP port is read by
 name from the running AMF pod.
 
+## 13. One gate before the shell
+
+The shell (sidebar, header, pages) opens only once the backend and Keycloak
+have answered and there is a session. Every state before that is one frame,
+`AuthGate` (`components/AuthGate.jsx`), chosen by `gateView` (`lib/authFlow.js`):
+waiting for the services (each listed with its state), opening the sign-in
+page, completing it, session ended, signed out, sign-in failed, HTTPS needed,
+access session expired. The auth routes (`/auth/callback`, `/logged-out`) are
+gate states, never pages inside the shell. Keycloak is probed only until the
+shell opens.
+
+A backend lost with the shell open does not unmount it: the same frame covers
+the shell ("Backend not reachable"), with the service state and its last
+messages and, for admins, a restart through the watchdog; it goes away by itself
+when the backend answers. Meanwhile reads wait and are sent on recovery, so the
+pages keep their data and their state; writes fail at once
+(`lib/backendState.js`, `api.js`).
+The gate is the only place with the spinner; inside the shell the loader is
+`SignalBars` (6).
+
+## 14. Toasts under the header
+
+Short results any page raises (`useToast`, `context/ToastContext.jsx`) appear
+at the top right, under the header, never over its controls. A state that holds
+(an update available, an operation running) is in the header, where its click
+leads to the place to act on it; it is not repeated as a toast.
+
 ## Where the dashboard does not follow these yet
 
 - RAN page, the gNB console address: "Publish" and "Remove" call the API

@@ -1,8 +1,9 @@
 import React, { useCallback, useState } from "react";
 import { createPortal } from "react-dom";
 import { useAuth } from "../auth/AuthContext";
-import { useConfirm } from "../context/ConfirmContext";
+import { btn } from "./ui";
 import DevModeIndicator from "./DevModeIndicator";
+import { env } from "../runtime-env";
 import usePopover, { belowRight } from "../hooks/usePopover";
 
 // What the account can DO, in plain words rather than the role's system name:
@@ -22,14 +23,19 @@ export function Avatar({ name, cls }) {
   );
 }
 
-// The account button's popover: who you are, where this frontend comes from,
-// the dev frontend switch (admin, on prod), log out. See hooks/usePopover.js.
-export default function AccountMenu({ runtimeSource, modeBadge, onClose, anchorRef }) {
+// The account button's popover: who you are, the dev frontend switch (admin, on
+// the prod frontend), log out. The environment badge is in the header only.
+// See hooks/usePopover.js.
+export default function AccountMenu({ onClose, anchorRef }) {
   const auth = useAuth();
-  const confirm = useConfirm();
   const { ref, style } = usePopover(anchorRef, onClose, belowRight);
   const [loggingOut, setLoggingOut] = useState(false);
+  // Log out asks in place, inside the menu (dashboard-design.md, 3: no modal).
+  const [asking, setAsking] = useState(false);
   const badge = roleBadge(auth.roles);
+  // DevModeIndicator renders only for an admin on the prod frontend.
+  const showDevSwitch = auth.roles.includes("dashboard-admin")
+    && (env("VITE_FRONTEND_MODE") || "").toLowerCase() !== "dev";
   // Which tenant's CAMARA assets the account sees: its own org, or all of them
   // when the token carries no org claim (operator).
   const scopeLabel = auth.org ? `tenant ${auth.org}` : "all tenants";
@@ -39,7 +45,6 @@ export default function AccountMenu({ runtimeSource, modeBadge, onClose, anchorR
 
   const handleLogout = useCallback(async () => {
     if (loggingOut) return;
-    if (!(await confirm({ title: "Log out?", body: "End this dashboard session.", confirmLabel: "Log out" }))) return;
     setLoggingOut(true);
     try {
       await auth.logout();
@@ -47,7 +52,7 @@ export default function AccountMenu({ runtimeSource, modeBadge, onClose, anchorR
       console.error("Logout failed:", err);
       setLoggingOut(false);
     }
-  }, [auth, loggingOut, confirm]);
+  }, [auth, loggingOut]);
 
   if (!style) return null; // first frame, before the anchor rect is measured
 
@@ -73,24 +78,34 @@ export default function AccountMenu({ runtimeSource, modeBadge, onClose, anchorR
         </div>
       )}
 
-      <div className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">Frontend</div>
-      <div className="flex items-center gap-2 px-2 pb-1.5">
-        {modeBadge}
-        <span className="truncate font-mono text-[10px] text-slate-500" title={runtimeSource}>{runtimeSource}</span>
-      </div>
-      <div className="px-2 pb-1">
-        <DevModeIndicator />
-      </div>
+      {showDevSwitch && (
+        <>
+          <div className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">Dev frontend</div>
+          <div className="px-2 pb-1">
+            <DevModeIndicator />
+          </div>
+        </>
+      )}
 
-      {auth.enabled && auth.user && (
+      {auth.enabled && auth.user && !asking && (
         <button
           type="button"
-          onClick={handleLogout}
-          disabled={loggingOut}
-          className="mt-1 flex w-full items-center rounded border-t border-slate-800 px-2 py-1.5 text-left text-slate-300 hover:bg-slate-800 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+          onClick={() => setAsking(true)}
+          className="mt-1 flex w-full items-center rounded border-t border-slate-800 px-2 py-1.5 text-left text-slate-300 hover:bg-slate-800 hover:text-white"
         >
-          {loggingOut ? "Logging out..." : "Log out"}
+          Log out
         </button>
+      )}
+      {auth.enabled && auth.user && asking && (
+        <div className="mt-1 border-t border-slate-800 px-2 pb-1 pt-2">
+          <p className="text-slate-300">End this dashboard session?</p>
+          <div className="mt-2 flex justify-end gap-2">
+            <button type="button" className={btn.ghost} onClick={() => setAsking(false)} disabled={loggingOut}>Cancel</button>
+            <button type="button" className={btn.indigo} onClick={handleLogout} disabled={loggingOut} autoFocus>
+              {loggingOut ? "Logging out…" : "Log out"}
+            </button>
+          </div>
+        </div>
       )}
     </div>,
     document.body,

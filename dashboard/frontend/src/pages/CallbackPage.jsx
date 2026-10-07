@@ -28,7 +28,8 @@ const RETRY_WINDOW_MS = 15000;
 // already happened moments ago.
 const RECOVERABLE = /./;
 
-export default function CallbackPage() {
+// Rendered by AuthGate, which passes its frame and its buttons.
+export default function CallbackPage({ Screen, Actions, Button }) {
   const navigate = useNavigate();
   const [error, setError] = useState(null);
   // React.StrictMode runs effects twice in development. The second call to
@@ -86,29 +87,23 @@ export default function CallbackPage() {
 
   if (error) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-200">
-        <div className="max-w-md rounded-lg border border-rose-700 bg-rose-950/50 p-6 text-center">
-          <h2 className="mb-2 text-lg font-semibold text-rose-200">Login failed</h2>
-          <p className="mb-4 text-sm text-rose-300">{error}</p>
-          <button
+      <Screen title="Sign-in failed" body={error}>
+        <Actions>
+          <Button
+            kind="primary"
             onClick={() => {
               try { sessionStorage.removeItem(RETRY_KEY); } catch { /* noop */ }
               const um = getUserManager();
               if (um) um.signinRedirect().catch(() => window.location.assign("/"));
               else window.location.assign("/");
             }}
-            className="rounded-md border border-rose-600 bg-rose-900/40 px-4 py-2 text-sm font-medium text-rose-100 hover:bg-rose-900/70"
           >
             Sign in again
-          </button>
-        </div>
-      </div>
+          </Button>
+        </Actions>
+      </Screen>
     );
   }
 
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-400">
-      Completing login…
-    </div>
-  );
+  return <Screen busy title="Completing sign-in" />;
 }

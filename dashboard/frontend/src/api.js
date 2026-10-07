@@ -5,6 +5,7 @@ const API_BASE = "";
 
 import { getCurrentAccessToken } from "./auth/AuthContext";
 import { AUTH_ENABLED, getUserManager } from "./auth/oidc";
+import { backendDown, holdWhileDown } from "./lib/backendState";
 
 function _authHeader() {
   const token = getCurrentAccessToken();
@@ -40,13 +41,27 @@ function _httpError(path, status, text = "") {
   return err;
 }
 
-async function get(path) {
-  const res = await fetch(`${API_BASE}${path}`, { headers: { ..._authHeader() } });
-  if (!res.ok) { _maybeReauth(res.status); throw _httpError(path, res.status); }
-  return res.json();
+// While the backend is known to be down (lib/backendState.js) the gate covers
+// the pages: reads wait for it to come back (holdWhileDown), writes fail at once,
+// since a change must not be sent later without the user knowing.
+function _offline(path) {
+  if (!backendDown()) return;
+  const err = new Error("Backend not reachable.");
+  err.status = 0;
+  err.path = path;
+  throw err;
+}
+
+function get(path) {
+  return holdWhileDown(path, async () => {
+    const res = await fetch(`${API_BASE}${path}`, { headers: { ..._authHeader() } });
+    if (!res.ok) { _maybeReauth(res.status); throw _httpError(path, res.status); }
+    return res.json();
+  });
 }
 
 async function post(path, body) {
+  _offline(path);
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ..._authHeader() },
@@ -61,6 +76,7 @@ async function post(path, body) {
 }
 
 async function put(path, body) {
+  _offline(path);
   const res = await fetch(`${API_BASE}${path}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json", ..._authHeader() },
@@ -75,6 +91,7 @@ async function put(path, body) {
 }
 
 async function del(path) {
+  _offline(path);
   const res = await fetch(`${API_BASE}${path}`, { method: "DELETE", headers: { ..._authHeader() } });
   if (!res.ok) {
     _maybeReauth(res.status);
@@ -85,6 +102,7 @@ async function del(path) {
 }
 
 async function patch(path, body) {
+  _offline(path);
   const res = await fetch(`${API_BASE}${path}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json", ..._authHeader() },
@@ -316,6 +334,7 @@ export const getNorthboundVersions = () => get("/api/v1/northbound/versions");
 // Update all companion services (re-run phase 10) with streamed progress.
 // onEvent({phase, done, total, pct, line}); resolves to the final result.
 export async function updateAllNorthboundStream(onEvent) {
+  _offline("/api/v1/northbound/update-all");
   const res = await fetch(`/api/v1/northbound/update-all`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ..._authHeader() },
@@ -407,6 +426,7 @@ export const setAppImage = (name, image) => put(`/api/v1/apps/${encodeURICompone
 export const getAppRegistryCredentials = () => get("/api/v1/apps/registry-credentials");
 export const getAppRegistryImages = () => get("/api/v1/apps/registry/images");
 export async function getStarterKitZip() {
+  _offline("/api/v1/apps/starter-kit");
   const res = await fetch(`${API_BASE}/api/v1/apps/starter-kit`, { headers: { ..._authHeader() } });
   if (!res.ok) throw new Error(`starter kit failed: ${res.status}`);
   return res.blob();
@@ -414,6 +434,7 @@ export async function getStarterKitZip() {
 
 // One-click provision (phase 12 + 11) with streaming progress (NDJSON).
 export async function provisionAppsStream(onProgress) {
+  _offline("/api/v1/apps/provision");
   const res = await fetch(`/api/v1/apps/provision`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ..._authHeader() },

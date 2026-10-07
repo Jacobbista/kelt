@@ -11,22 +11,44 @@
  *   toast.error(`deploy failed: ${e.message}`);
  *   toast.info("engine restarting…");
  */
-import React, { createContext, useCallback, useContext, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
 
 const Ctx = createContext(null);
 let _id = 0;
 
-const STYLE = {
-  ok: "border-emerald-700/50 bg-emerald-950/80 text-emerald-200",
-  err: "border-rose-700/50 bg-rose-950/80 text-rose-200",
-  info: "border-slate-600/50 bg-slate-900/90 text-slate-200",
+// Read from index.css so the unmount waits exactly as long as the slide out.
+function closeMs() {
+  const v = getComputedStyle(document.documentElement).getPropertyValue("--toast-close").trim();
+  return parseFloat(v) || 250;
+}
+
+// Solid surface (not see-through over the page), a coloured edge by kind.
+const KIND = {
+  ok: { edge: "bg-emerald-400", text: "text-emerald-100" },
+  err: { edge: "bg-rose-400", text: "text-rose-100" },
+  info: { edge: "bg-sky-400", text: "text-slate-100" },
 };
 
 function ToastItem({ t, onClose }) {
+  // Mount closed, open on the next frame: the slide-in needs a start state.
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setOpen(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
+  const k = KIND[t.kind] || KIND.info;
   return (
-    <div className={`svc-fade pointer-events-auto flex items-start gap-2 rounded-lg border px-3 py-2 text-xs shadow-lg backdrop-blur ${STYLE[t.kind] || STYLE.info}`}>
-      <span className="flex-1 break-words">{t.text}</span>
-      <button type="button" onClick={onClose} className="shrink-0 text-current/70 hover:text-current" aria-label="dismiss">✕</button>
+    <div className={`t-toast-slot${t.leaving ? " is-gone" : ""}`}>
+      <div className="pb-2">
+        <div
+          role={t.kind === "err" ? "alert" : "status"}
+          className={`t-toast${open && !t.leaving ? " is-open" : ""} pointer-events-auto relative flex items-start gap-3 overflow-hidden rounded-lg border border-slate-700 bg-slate-900 py-3 pl-4 pr-3 text-sm shadow-2xl shadow-black/60 ring-1 ring-black/40`}
+        >
+          <span className={`absolute inset-y-0 left-0 w-1 ${k.edge}`} aria-hidden="true" />
+          <span className={`flex-1 break-words leading-snug ${k.text}`}>{t.text}</span>
+          <button type="button" onClick={onClose} className="shrink-0 text-slate-500 transition-colors hover:text-slate-200" aria-label="Dismiss">✕</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -34,11 +56,15 @@ function ToastItem({ t, onClose }) {
 export function ToastProvider({ children }) {
   const [toasts, setToasts] = useState([]);
 
-  const remove = useCallback((id) => setToasts((list) => list.filter((x) => x.id !== id)), []);
+  // Slide out first (leaving), unmount once the close transition is over.
+  const remove = useCallback((id) => {
+    setToasts((list) => list.map((x) => (x.id === id ? { ...x, leaving: true } : x)));
+    setTimeout(() => setToasts((list) => list.filter((x) => x.id !== id)), closeMs());
+  }, []);
 
   const push = useCallback((kind, text, ttl) => {
     const id = ++_id;
-    setToasts((list) => [...list, { id, kind, text }]);
+    setToasts((list) => [...list, { id, kind, text, leaving: false }]);
     const life = ttl ?? (kind === "err" ? 7000 : 4000);
     if (life) setTimeout(() => remove(id), life);
     return id;
@@ -55,7 +81,8 @@ export function ToastProvider({ children }) {
   return (
     <Ctx.Provider value={api}>
       {children}
-      <div className="pointer-events-none fixed right-4 top-4 z-[120] flex w-80 max-w-[90vw] flex-col gap-2">
+      {/* Under the header (h-12), aligned with its right edge: never over its controls. */}
+      <div className="pointer-events-none fixed right-6 top-16 z-[120] flex w-96 max-w-[90vw] flex-col" aria-live="polite">
         {toasts.map((t) => (
           <ToastItem key={t.id} t={t} onClose={() => remove(t.id)} />
         ))}

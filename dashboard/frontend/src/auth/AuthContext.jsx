@@ -1,6 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { AUTH_ENABLED, extractRoles, getUserManager, KEYCLOAK_AUTHORITY } from "./oidc";
 import { env } from "../runtime-env";
+import { returnPath } from "../lib/authFlow";
+import { WATCHDOG_TOKEN_KEY } from "../hooks/useWatchdog";
+
+// The page left at logout, for "Sign in again" on the signed-out screen.
+const RETURN_KEY = "kelt_return_to";
 
 // Keycloak end-session URL for a real RP-initiated logout: a TOP-LEVEL redirect
 // carrying id_token_hint plus post_logout_redirect_uri. Both matter. The hint is
@@ -106,9 +111,12 @@ export function AuthProvider({ children }) {
     const um = getUserManager();
     if (!um || INSECURE_ORIGIN) return;
     // Preserve where the user was so the callback returns them there, not to "/"
-    // (CallbackPage navigates to user.state). Keeps deep links across login.
-    const here = window.location.pathname + window.location.search;
-    const state = here && here !== "/auth/callback" ? here : "/";
+    // (CallbackPage navigates to user.state). Keeps deep links across login; from
+    // the signed-out screen, the page left at logout.
+    let stored = null;
+    try { stored = sessionStorage.getItem(RETURN_KEY); } catch { /* noop */ }
+    const state = returnPath(window.location.pathname + window.location.search, stored);
+    try { sessionStorage.removeItem(RETURN_KEY); } catch { /* noop */ }
     await um.signinRedirect({ state });
   }, []);
 
@@ -118,6 +126,8 @@ export function AuthProvider({ children }) {
     // Set BEFORE removeUser so the user-is-null render that follows finds the
     // guard already up and does not fire auto-login.
     setLoggingOut(true);
+    try { sessionStorage.setItem(RETURN_KEY, window.location.pathname + window.location.search); } catch { /* noop */ }
+    try { sessionStorage.removeItem(WATCHDOG_TOKEN_KEY); } catch { /* noop */ }
     const idToken = user?.id_token;
     const clientId = env("VITE_KEYCLOAK_CLIENT_ID", "dashboard");
     // Hand the browser to Keycloak so the SSO session really ends, and let it
