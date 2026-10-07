@@ -332,6 +332,9 @@ placement_editor_external_origin: "{{ lookup('ansible.builtin.env', 'PLACEMENT_E
 # proxies /auth/*; the root in LAN mode, where Keycloak has its own NodePort.
 # Every client builds its issuer URL from these, so they are declared once.
 keycloak_realm: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_REALM') | default('5g-testbed', true) }}"
+# Days of audit kept (dashboard Settings -> Audit): Keycloak's events (phase 08)
+# and the dashboard backend's own record of actions (phase 09).
+audit_retention_days: 30
 keycloak_path_prefix: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_PATH_PREFIX') | default(('/auth' if external_base_domain else ''), true) }}"
 
 # Physical RAN Integration (for femtocell/small cell connectivity)

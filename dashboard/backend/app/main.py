@@ -9,7 +9,7 @@ from starlette.responses import Response
 from fastapi import APIRouter, Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.auth import require_admin, require_viewer_or_admin
+from app.auth import ActorMiddleware, require_admin, require_viewer_or_admin
 from app.config import settings
 from app.route_guard import PUBLIC_ROUTES, unguarded_routes
 from app.routers.admin import router as admin_router
@@ -46,6 +46,7 @@ from app.routers.storage import write_router as storage_write_router
 from app.routers.selfupdate import read_router as selfupdate_read_router
 from app.routers.selfupdate import write_router as selfupdate_write_router
 from app.routers.iam import router as iam_router
+from app.routers.audit import router as audit_router
 
 log = logging.getLogger(__name__)
 
@@ -93,6 +94,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(CatchAllMiddleware)
+# Names the caller for the audit record (app/auth.py).
+app.add_middleware(ActorMiddleware)
 
 # Auth dependency groups. The full role-to-endpoint matrix is documented in
 # docs/security/iam.md. While settings.skip_auth is True (default until phase
@@ -159,6 +162,8 @@ app.include_router(selfupdate_write_router, dependencies=_admin)
 # IAM convenience: reveal a seeded M2M client secret (read from .testbed.secrets,
 # audit-logged). Admin-only even though it is a GET.
 app.include_router(iam_router, dependencies=_admin)
+# Audit: Keycloak events and the dashboard's own actions (Settings -> Audit).
+app.include_router(audit_router, dependencies=_admin)
 
 # The API description, for any logged-in user.
 openapi_router = APIRouter()

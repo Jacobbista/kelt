@@ -24,7 +24,11 @@ from fastapi import Depends, Header, HTTPException, Query, status
 from jose import jwt
 from jose.exceptions import JWTError
 
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+
 from app.config import settings
+from app.services.audit import current_actor, current_request
 
 log = logging.getLogger(__name__)
 
@@ -221,3 +225,40 @@ def require_any_role(*roles: str):
 # Convenience aliases for the dashboard role model.
 require_admin = require_role("dashboard-admin")
 require_viewer_or_admin = require_any_role("dashboard-admin", "dashboard-viewer")
+
+
+# ── Audit actor ────────────────────────────────────────────────────────
+
+class ActorMiddleware(BaseHTTPMiddleware):
+    """Name the caller and where the request came from, for the audit record
+    (services/audit.py current_actor, current_request).
+
+    Set here, before the route runs, because FastAPI runs dependencies in
+    their own thread: a value set there never reaches the route. The claims
+    are read without verifying the token: a request whose token is not valid
+    is refused by the route's role dependency before anything is written.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        actor = "skip-auth" if settings.skip_auth else None
+        header = request.headers.get("authorization", "")
+        if not actor and header.lower().startswith("bearer "):
+            try:
+                claims = jwt.get_unverified_claims(header[7:].strip())
+                actor = claims.get("preferred_username") or claims.get("email") or claims.get("sub")
+            except JWTError:
+                actor = None
+        # The client as Cloudflare saw it, else the first forwarded hop, else
+        # the peer (a direct NodePort call).
+        fwd = request.headers.get("x-forwarded-for", "")
+        ip = (request.headers.get("cf-connecting-ip") or (fwd.split(",")[0].strip() if fwd else "")
+              or (request.client.host if request.client else None))
+        req = {"ip": ip, "user_agent": request.headers.get("user-agent"),
+               "method": request.method, "path": request.url.path}
+        token = current_actor.set(actor)
+        req_token = current_request.set(req)
+        try:
+            return await call_next(request)
+        finally:
+            current_request.reset(req_token)
+            current_actor.reset(token)

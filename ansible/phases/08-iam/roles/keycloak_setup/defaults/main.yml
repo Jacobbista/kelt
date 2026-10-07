@@ -25,6 +25,21 @@ keycloak_admin_password: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_ADMIN_PASSW
 # renewal always fails and the session ends at the first expiry.
 dashboard_access_token_lifespan: 300
 
+# Audit (dashboard Settings -> Audit). Keycloak stores these user events and
+# every admin event (without the changed representations, which can carry
+# credentials) for audit_retention_days (all.yml); successful token refreshes
+# and client logins are left out: one every few minutes per open tab or M2M client.
+keycloak_event_types:
+  - LOGIN
+  - LOGIN_ERROR
+  - LOGOUT
+  - LOGOUT_ERROR
+  - CODE_TO_TOKEN_ERROR
+  - REFRESH_TOKEN_ERROR
+  - CLIENT_LOGIN_ERROR
+  - UPDATE_PASSWORD
+  - UPDATE_PASSWORD_ERROR
+
 # ── Northbound realm gating ─────────────────────────────────────────────────
 # The camara/positioning/placement realm objects (camara-location-read role,
 # g-camara-users group, camara-gateway / positioning-demo / placement-editor-proxy

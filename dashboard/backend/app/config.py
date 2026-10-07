@@ -81,6 +81,9 @@ class Settings(BaseSettings):
     dev_external_url: str = ""
 
     audit_log_path: str = "logs/audit.log"
+    # Days the dashboard keeps its own audit entries (audit_retention_days in
+    # all.yml, set by the phase 09 unit; Keycloak keeps its events as long).
+    audit_retention_days: int = 30
     cors_origin: str = "http://localhost:5173"
 
     # Subscriber snapshot Secret, named by all.yml subscriber_snapshot_secret (see

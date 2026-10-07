@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import ServiceCard from "../components/ServiceCard";
-import { IconShield, IconPalette, IconDisk, IconRocket } from "../components/icons";
+import { IconShield, IconPalette, IconDisk, IconRocket, IconHistory } from "../components/icons";
 import { getBranding, getRetention, getStorageUsage } from "../api";
 
 // Admin configuration hub, in the same idiom as the Services hub: a card per
@@ -41,7 +41,7 @@ export default function SettingsPage() {
     <div className="svc-fade flex flex-col gap-6 pb-8">
       <header>
         <p className="text-xs text-slate-500">
-          Deployment configuration: who can get in, how the front door looks, what the nodes are storing, and how long the record of operations is kept.
+          Deployment configuration: who can get in, how the front door looks, what the nodes are storing, how long the record of operations is kept, and who signed in and changed what.
         </p>
       </header>
 
@@ -99,6 +99,15 @@ export default function SettingsPage() {
             { label: "runs", value: record?.runs ?? "—" },
             { label: "size", value: record?.bytes != null ? fmtBytes(record.bytes) : "—" },
           ]}
+        />
+
+        <ServiceCard
+          icon={IconHistory}
+          title="Audit"
+          subtitle="Who signed in, and who changed what"
+          status=""
+          cta="open"
+          to="/settings/audit"
         />
       </div>
     </div>

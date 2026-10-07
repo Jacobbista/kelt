@@ -247,6 +247,45 @@
       or ((_kc_dashboard_full.json.attributes | default({})).get('post.logout.redirect.uris', '')) != _dashboard_post_logout_uris
       or ((_kc_dashboard_full.json.attributes | default({})).get('access.token.lifespan', '')) != (dashboard_access_token_lifespan | string)
 
+# Audit events (dashboard Settings -> Audit): the realm imports once, so an
+# existing realm gets its events configuration here. See docs/security/iam.md.
+- name: Read realm events configuration
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/events/config"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    return_content: true
+    status_code: 200
+  register: _kc_events_config
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Reconcile realm events configuration
+  ansible.builtin.uri:
+    url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/events/config"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ _kc_admin_token.json.access_token }}"
+    body_format: json
+    body:
+      eventsEnabled: true
+      eventsExpiration: "{{ audit_retention_days * 86400 }}"
+      eventsListeners: "{{ _kc_events_config.json.eventsListeners | default(['jboss-logging']) }}"
+      enabledEventTypes: "{{ keycloak_event_types }}"
+      adminEventsEnabled: true
+      adminEventsDetailsEnabled: false
+    status_code: 204
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when:
+    - keycloak_realm_reconcile | bool
+    - not (_kc_events_config.json.eventsEnabled | default(false))
+      or (_kc_events_config.json.eventsExpiration | default(0) | int) != (audit_retention_days * 86400)
+      or (_kc_events_config.json.enabledEventTypes | default([]) | sort) != (keycloak_event_types | sort)
+      or not (_kc_events_config.json.adminEventsEnabled | default(false))
+      or (_kc_events_config.json.adminEventsDetailsEnabled | default(true))
+
 - name: Reconcile positioning-demo client origins
   ansible.builtin.uri:
     url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/clients/{{ _kc_positioning_client.json[0].id }}"

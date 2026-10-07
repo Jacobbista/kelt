@@ -197,6 +197,8 @@ export const getOperations = (state) => get(`/api/v1/operations${state ? `?state
 export const getOperation = (id) => get(`/api/v1/operations/${encodeURIComponent(id)}`);
 // How long the operations record is kept, and what it holds now.
 export const getRetention = () => get("/api/v1/operations/retention");
+// Audit (Settings -> Audit, admin): kind all | access | changes | failures.
+export const getAudit = (kind, days) => get(`/api/v1/audit?kind=${encodeURIComponent(kind)}&days=${days}`);
 export const setRetention = (max_age_days, max_mb) => put("/api/v1/operations/retention", { max_age_days, max_mb });
 export const enableUeransimMode = () => post("/api/v1/ran/modes/ueransim/enable", {});
 export const disableUeransimMode = () => post("/api/v1/ran/modes/ueransim/disable", {});

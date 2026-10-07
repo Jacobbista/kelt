@@ -49,6 +49,7 @@ const SUBPAGES = [
   { path: "/settings/branding",          label: "Branding",          parent: "/settings" },
   { path: "/settings/storage",           label: "Storage",           parent: "/settings" },
   { path: "/settings/operations",        label: "Operations record", parent: "/settings" },
+  { path: "/settings/audit",             label: "Audit",             parent: "/settings" },
 ];
 
 const ALL_ITEMS = [...NAV_GROUPS.flatMap((g) => g.items.map((i) => ({ ...i, group: g.label }))), ...NAV_FOOTER];

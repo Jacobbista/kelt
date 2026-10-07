@@ -120,6 +120,30 @@ class IamService:
         put = httpx.put(f"{base}/clients/{rep['id']}", json=rep, headers=headers, timeout=10)
         put.raise_for_status()
 
+    # ── audit ──────────────────────────────────────────────────────────────────
+    def audit_events(self, date_from: str, max_events: int = 1000) -> dict[str, Any]:
+        """Keycloak's stored user and admin events since date_from (YYYY-MM-DD),
+        and the user names behind their ids (admin events are made by users of
+        the master realm, sign-ins by users of the dashboard realm)."""
+        headers = {"Authorization": f"Bearer {self._admin_token()}"}
+        base = f"{self._kc_base()}/admin/realms"
+        realm = settings.keycloak_realm
+
+        def get(path: str, **params: Any) -> Any:
+            r = httpx.get(f"{base}/{path}", params=params, headers=headers, timeout=10)
+            r.raise_for_status()
+            return r.json()
+
+        users: dict[str, str] = {}
+        for r in (realm, "master"):
+            for u in get(f"{r}/users", max=1000, briefRepresentation="true"):
+                users[u["id"]] = u.get("username") or u["id"]
+        return {
+            "user_events": get(f"{realm}/events", dateFrom=date_from, max=max_events),
+            "admin_events": get(f"{realm}/admin-events", dateFrom=date_from, max=max_events),
+            "users": users,
+        }
+
     # ── rotation ───────────────────────────────────────────────────────────────
     def rotate(self, client_id: str) -> dict[str, Any]:
         meta = CLIENTS[client_id]

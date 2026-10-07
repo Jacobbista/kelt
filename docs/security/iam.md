@@ -371,6 +371,25 @@ Already-issued access tokens stay valid until they expire (1h lifespan for the
 M2M clients in this realm); revoking those earlier requires the Keycloak admin
 console (client sessions).
 
+## Audit
+
+Settings → Audit (admin only, `GET /api/v1/audit`) lists who signed in and who
+changed what, newest first, from two sources:
+
+- **Keycloak's events**, stored in its database: sign-ins, sign-outs and their
+  failures, failed session renewals and client authentications, password
+  changes (`keycloak_event_types`, phase 08 defaults), and every admin event
+  (changes to users, roles and clients) without the changed representation,
+  which can carry credentials. Successful session renewals and client logins
+  are not stored: one every few minutes per open tab or M2M client.
+- **The dashboard's own record of actions** (`logs/audit.log` in the backend
+  directory): each change made through the backend, with the user who made
+  the request.
+
+Both are kept for `audit_retention_days` (`all.yml`, 30): Keycloak drops older
+events itself, the backend trims its record as it grows. If Keycloak does not
+answer, the page still lists the dashboard's actions and says what is missing.
+
 ## Realm idempotency and reconcile
 
 Keycloak's `--import-realm` flag imports the realm JSON only when the realm
@@ -383,6 +402,7 @@ values via the Keycloak admin API (no DB reset). The reconciled fields are:
 
 - `dashboard` client `redirectUris`, `webOrigins`, `post.logout.redirect.uris`,
   `access.token.lifespan`
+- the realm's events configuration (see [Audit](#audit))
 - realm roles, groups, and composite links (managed by separate idempotent
   tasks; safe to re-run)
 

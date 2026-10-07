@@ -134,6 +134,15 @@ export const IconShield = (p) => (
   </Svg>
 );
 
+// A clock turned back: the audit record.
+export const IconHistory = (p) => (
+  <Svg {...p}>
+    <path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1" />
+    <polyline points="3.5 4 3.5 8.5 8 8.5" />
+    <polyline points="12 7.5 12 12 15 14" />
+  </Svg>
+);
+
 export const IconPalette = (p) => (
   <Svg {...p}>
     <path d="M12 3a9 9 0 100 18 2 2 0 001.6-3.2 2 2 0 011.6-3.2H18a3 3 0 003-3c0-4.8-4-8.6-9-8.6z" />

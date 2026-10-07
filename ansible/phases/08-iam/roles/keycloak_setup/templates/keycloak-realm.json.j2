@@ -10,6 +10,12 @@
   "editUsernameAllowed": false,
   "bruteForceProtected": true,
   "accessTokenLifespan": 3600,
+  "eventsEnabled": true,
+  "eventsExpiration": {{ audit_retention_days * 86400 }},
+  "eventsListeners": ["jboss-logging"],
+  "enabledEventTypes": {{ keycloak_event_types | to_json }},
+  "adminEventsEnabled": true,
+  "adminEventsDetailsEnabled": false,
   "roles": {
     "realm": [
       {

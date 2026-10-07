@@ -35,6 +35,7 @@ import AppsPage from "./pages/AppsPage";
 import ManualPage from "./pages/ManualPage";
 import OperationsPage from "./pages/OperationsPage";
 import OperationsSettingsPage from "./pages/OperationsSettingsPage";
+import AuditPage from "./pages/AuditPage";
 import RanPage from "./pages/RanPage";
 import SubscribersPage from "./pages/SubscribersPage";
 import TopologyPage from "./pages/TopologyPage";
@@ -195,6 +196,7 @@ function AppInner() {
         <Route path="/settings/branding" element={<AdminOnly><BrandingPage /></AdminOnly>} />
         <Route path="/settings/storage" element={<AdminOnly><StoragePage /></AdminOnly>} />
         <Route path="/settings/operations" element={<AdminOnly><OperationsSettingsPage /></AdminOnly>} />
+        <Route path="/settings/audit" element={<AdminOnly><AuditPage /></AdminOnly>} />
         <Route path="/iam" element={<Navigate to="/settings/iam" replace />} />
         <Route path="/branding" element={<Navigate to="/settings/branding" replace />} />
         <Route path="/manual" element={<ManualPage />} />
