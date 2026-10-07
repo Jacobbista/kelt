@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { buildSnifferWsUrl, getSnifferPoints, runPathTrace } from "../api";
 
-const HOP_ORDER = ["br-n3", "upf-n3", "upf-ogstun", "upf-n6"];
+const HOP_ORDER = ["br-n3", "upf-n3", "upf-ogstun", "upf-n6c"];
 
 const HOP_COLORS = {
   active: {

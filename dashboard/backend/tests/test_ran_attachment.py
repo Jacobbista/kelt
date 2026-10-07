@@ -71,7 +71,7 @@ class DetachedChainTest(unittest.TestCase):
 class AttachmentFactsTest(unittest.TestCase):
     def pod(self, phy, ready=True, deleting=False):
         from types import SimpleNamespace as NS
-        nets = '[{"name": "n2-static"}' + (', {"name": "n2-physical", "interface": "n2phy"}' if phy else "") + "]"
+        nets = '[{"name": "n2-static"}' + (', {"name": "n2-ran", "interface": "n2ran"}' if phy else "") + "]"
         return NS(metadata=NS(annotations={"k8s.v1.cni.cncf.io/networks": nets}, deletion_timestamp="t" if deleting else None),
                   status=NS(phase="Running", container_statuses=[NS(ready=ready)]))
 

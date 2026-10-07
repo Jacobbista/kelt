@@ -13,7 +13,7 @@ UE_MEC_CIDR="${UE_MEC_GATEWAY}/${UE_MEC_SUBNET#*/}"
 
 # Wait for N3 and N6 interfaces
 echo "[UPF-Edge][init] Waiting for N3 and N6 interfaces..."
-while ! ip addr show n3 | grep -q "inet" || ! ip addr show n6 | grep -q "inet"; do
+while ! ip addr show n3 | grep -q "inet" || ! ip addr show n6e | grep -q "inet"; do
     sleep 1
 done
 
@@ -49,12 +49,12 @@ iptables -t mangle -C FORWARD -p tcp --tcp-flags SYN,RST SYN -i ogstun -j TCPMSS
 
 # Configure sysctls
 sysctl -w net.ipv4.ip_forward=1
-for i in all n3 n6; do sysctl -w net.ipv4.conf.$i.rp_filter=0; done
+for i in all n3 n6e; do sysctl -w net.ipv4.conf.$i.rp_filter=0; done
 
 # Configure policy routing (idempotent)
 ip rule show | grep -q "iif n3 lookup 100" || ip rule add iif n3 lookup 100
 ip route replace default via "$N3_GATEWAY" dev n3 table 100
-ip rule show | grep -q "iif n6 lookup 200" || ip rule add iif n6 lookup 200
-ip route replace default via "$N6_GATEWAY" dev n6 table 200
+ip rule show | grep -q "iif n6e lookup 200" || ip rule add iif n6e lookup 200
+ip route replace default via "$N6_GATEWAY" dev n6e table 200
 
 echo "[UPF-Edge][init] Network setup complete."

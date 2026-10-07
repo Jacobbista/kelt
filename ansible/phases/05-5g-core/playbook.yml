@@ -47,6 +47,9 @@
   roles:
     - roles/infrastructure_setup
 
+# Also tagged nf_deployments: the NF Deployments carry the hash of their config
+# and setup script, and their pods read both from these ConfigMaps, so a run that
+# rolls a Deployment (for example the ran_attach piece) must refresh them first.
 - name: "PHASE 5 | ConfigMaps Setup"
   hosts: masters
   become: true
@@ -54,6 +57,7 @@
     - phase5
     - configmaps_setup
     - configmaps
+    - nf_deployments
   roles:
     - roles/configmaps_setup
 

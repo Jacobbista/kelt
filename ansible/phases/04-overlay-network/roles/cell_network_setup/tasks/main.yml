@@ -7,7 +7,7 @@
 
 - name: Get cell count from topology
   set_fact:
-    cell_count: "{{ ueransim_topology.cells | length | int }}"
+    cell_count: "{{ ueransim_active_cells | length | int }}"
 
 # Per-cell NADs use Whereabouts IPAM for dynamic IP allocation.
 # AMF and gNB discover each other's IPs via init containers (cloud-native approach).

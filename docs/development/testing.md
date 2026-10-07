@@ -143,7 +143,7 @@ make ran
 **Tests**:
 - OVS bridge configuration and overlay gateway ownership
 - RAN gateway address on `br-ran` only (not on the bridged NIC)
-- br-ran bridge existence and patch ports
+- br-ran bridge existence, and no layer-2 link (patch port) between br-ran and the plane bridges
 - AMF/UPF overlay reachability on their fixed addresses
 - gNB connection status and UE NGAP context
 - UPF downlink route to the physical RAN over N3

@@ -768,7 +768,7 @@
   register: static_nad_results
   run_once: true
 
-# Runs before the UPF N3 NAD (its RAN route) and the n2-physical NAD below;
+# Runs before the UPF N3 NAD (its RAN route) and the N2 RAN NAD below;
 # the OVS role earlier in this phase has already created br-ran when enabled.
 - name: Physical RAN preflight — detect br-ran on worker
   ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/physical_ran_br_preflight.yml"
@@ -959,7 +959,7 @@
 # Preflight: require br-ran before NAD creation (the ran_attach piece builds br-ran first).
 # ==============================================================
 
-- name: Create Physical RAN NAD (n2-physical)
+- name: Create the AMF's N2 RAN NAD
   kubernetes.core.k8s:
     state: present
     kubeconfig: "/home/vagrant/kubeconfig"
@@ -967,7 +967,7 @@
       apiVersion: k8s.cni.cncf.io/v1
       kind: NetworkAttachmentDefinition
       metadata:
-        name: n2-physical
+        name: "{{ nad_n2_ran_name }}"
         namespace: "{{ namespace_5g }}"
       spec:
         config: "{{ {'cniVersion': '0.3.1', 'type': (use_ovs_cni | ternary('ovs','bridge')), 'bridge': 'br-ran', 'ipam': {'type': 'static'}} | to_json }}"
@@ -985,7 +985,7 @@
              and not ((physical_ran_skip_bridge_check | default(false) | bool)
                       or (physical_ran_bridge_available | default(false) | bool))) }}
 
-# Resilience: on teardown, remove n2-physical from the AMF annotation BEFORE
+# Resilience: on teardown, remove the N2 RAN NAD from the AMF annotation BEFORE
 # deleting the NAD (the ran_detach piece re-renders the AMF first, so this is a safety net). Otherwise the AMF
 # keeps an annotation referencing a NAD that no longer exists, Multus returns
 # NoNetworkFound, and the AMF pod can never start (Init:0/2) — taking the core down.
@@ -1001,32 +1001,32 @@
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 
-- name: Strip n2-physical from AMF networks annotation on teardown (keep AMF startable)
+- name: Strip the N2 RAN NAD from the AMF networks annotation on teardown (keep AMF startable)
   kubernetes.core.k8s:
     state: present
     kubeconfig: "/home/vagrant/kubeconfig"
     definition:
       apiVersion: apps/v1
       kind: Deployment
-      metadata: { name: amf, namespace: 5g }
+      metadata: { name: amf, namespace: "{{ namespace_5g }}" }
       spec:
         template:
           metadata:
             annotations:
               k8s.v1.cni.cncf.io/networks: >-
                 {{ ((amf_dep_state.resources[0].spec.template.metadata.annotations | default({})).get('k8s.v1.cni.cncf.io/networks', '[]')
-                    | from_json | rejectattr('name', 'equalto', 'n2-physical') | list) | to_json }}
+                    | from_json | rejectattr('name', 'equalto', nad_n2_ran_name) | list) | to_json }}
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
   when:
     - physical_ran_teardown | bool
     - amf_dep_state.resources | default([]) | length > 0
-    - "'n2-physical' in ((amf_dep_state.resources[0].spec.template.metadata.annotations | default({})).get('k8s.v1.cni.cncf.io/networks', ''))"
+    - nad_n2_ran_name in ((amf_dep_state.resources[0].spec.template.metadata.annotations | default({})).get('k8s.v1.cni.cncf.io/networks', ''))
 
-- name: Delete Physical RAN NAD (n2-physical) when disabling or bridge is unavailable
+- name: Delete the AMF's N2 RAN NAD when disabling or bridge is unavailable
   kubernetes.core.k8s:
     state: absent
-    name: n2-physical
+    name: "{{ nad_n2_ran_name }}"
     namespace: "{{ namespace_5g }}"
     api_version: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition

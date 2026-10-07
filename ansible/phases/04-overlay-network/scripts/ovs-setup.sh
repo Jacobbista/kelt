@@ -171,17 +171,33 @@ else
   echo "ℹ️  No per-cell bridges (CELL_COUNT=${CELL_COUNT:-0})"
 fi
 
+# Per-cell bridges exist only for the cells of an active UERANSIM topology
+# (ueransim_active_cells, phase 06 vars): remove those of any other cell, once no
+# pod is attached. A bridge removed under an attached pod makes the pod's CNI
+# delete fail, so the pod never terminates; phase 05 removes the bridges that
+# its AMF rollout has emptied.
+for br in $(ovs-vsctl list-br | grep -E '^br-n[23]-cell-[0-9]+$'); do
+  cell_id="${br##*-}"
+  if [[ "$cell_id" -gt "${CELL_COUNT:-0}" ]]; then
+    if [[ -z "$(ovs-vsctl list-ports "$br")" ]]; then
+      echo "🧹 Removing $br (cell $cell_id is not active)"
+      ovs-vsctl --if-exists del-br "$br"
+    else
+      echo "ℹ️  Keeping $br until its pods detach (cell $cell_id is not active)"
+    fi
+  fi
+done
+
 # ============================================================
 # Physical RAN Interface Bridging (Optional)
 # ============================================================
-# When RAN_BRIDGE_MODE is set, bridge a physical interface to OVS
-# for direct femtocell/physical gNB connectivity without NAT/NodePort
-#
-# Modes:
-#   - disabled: No physical RAN bridging (default)
-#   - n2_only:  Bridge to N2 network only (control plane)
-#   - n3_only:  Bridge to N3 network only (user plane)  
-#   - n2_n3:    Bridge to both N2 and N3 (full connectivity)
+# RAN_BRIDGE_MODE (ran_bridge_mode in all.yml):
+#   - disabled: no RAN bridge; an existing br-ran is torn down
+#   - n2_n3:    br-ran carries the worker's RAN NIC and the RAN gateway address.
+#               N2 reaches the AMF on its own br-ran interface (n2ran, NAD n2-ran);
+#               N3 is routed by the worker from br-ran to br-n3. br-ran has no
+#               layer-2 link to any plane bridge.
+# See docs/deployment/physical-ran.md
 # ============================================================
 
 bridge_ran_interface() {
@@ -240,32 +256,18 @@ if [[ "${RAN_BRIDGE_MODE:-disabled}" != "disabled" ]] && [[ "$NODE_NAME" == "wor
     ip addr flush dev "$RAN_IF" 2>/dev/null || true
     
     case "${RAN_BRIDGE_MODE}" in
-      n2_only)
-        echo "  Mode: N2 only (control plane for NGAP/SCTP)"
-        bridge_ran_interface "$RAN_IF" "br-n2"
-        ;;
-      n3_only)
-        echo "  Mode: N3 only (user plane for GTP-U)"
-        bridge_ran_interface "$RAN_IF" "br-n3"
-        ;;
       n2_n3)
-        echo "  Mode: N2+N3 (full connectivity)"
-        # For combined mode, we create a dedicated RAN bridge and connect it to both
         create_br "br-ran"
         bridge_ran_interface "$RAN_IF" "br-ran"
-        # Create patch ports to connect br-ran to br-n2 and br-n3
-        ovs-vsctl --may-exist add-port br-ran patch-ran-n2 -- \
-          set interface patch-ran-n2 type=patch options:peer=patch-n2-ran
-        ovs-vsctl --may-exist add-port br-n2 patch-n2-ran -- \
-          set interface patch-n2-ran type=patch options:peer=patch-ran-n2
-        ovs-vsctl --may-exist add-port br-ran patch-ran-n3 -- \
-          set interface patch-ran-n3 type=patch options:peer=patch-n3-ran
-        ovs-vsctl --may-exist add-port br-n3 patch-n3-ran -- \
-          set interface patch-n3-ran type=patch options:peer=patch-ran-n3
-        echo "  Created br-ran with patches to br-n2 and br-n3"
-        # Gateway IP on br-ran so the worker can route between the physical
-        # RAN subnet and the overlay N2/N3 networks; the gNB uses it as its
-        # default gateway. The UPF reaches the RAN back through the N3 gateway.
+        # Earlier versions joined br-ran to br-n2 and br-n3 with patch ports,
+        # which made the RAN segment and both planes one layer-2 domain. Remove
+        # them where they are still present.
+        ovs-vsctl --if-exists del-port br-n2 patch-n2-ran
+        ovs-vsctl --if-exists del-port br-n3 patch-n3-ran
+        ovs-vsctl --if-exists del-port br-ran patch-ran-n2
+        ovs-vsctl --if-exists del-port br-ran patch-ran-n3
+        # The RAN gateway: the gNB's default gateway, through which the worker
+        # routes GTP-U to br-n3. The UPF reaches the RAN back through the N3 gateway.
         ensure_bridge_ip br-ran "$RAN_GATEWAY_CIDR"
         ;;
       *)
@@ -347,13 +349,12 @@ apply_plane_filter() {
     deny "ip daddr { $PLANE_UE_POOLS } oifname != \"br-*\"" "to UE pools outside the planes"
     deny "ip saddr { $PLANE_UE_POOLS } iifname != \"br-*\"" "from UE pools outside the planes"
     echo "    iifname != \"br-*\" oifname != \"br-*\" accept"
-    # Physical RAN transport toward the AMF (N2) and the UPF (N3), when the RAN
-    # bridge exists (physical RAN on).
+    # Physical RAN transport toward the UPF (N3, GTP-U), when the RAN bridge
+    # exists (physical RAN on). N2 needs no crossing: the AMF has its own
+    # interface on br-ran.
     if [[ " $(echo $bridges) " == *" br-ran "* ]]; then
-      for br in br-n2 br-n3; do
-        echo "    iifname \"br-ran\" oifname \"$br\" counter accept comment \"allowed: br-ran -> $br\""
-        echo "    iifname \"$br\" oifname \"br-ran\" counter accept comment \"allowed: $br -> br-ran\""
-      done
+      echo "    iifname \"br-ran\" oifname \"br-n3\" counter accept comment \"allowed: br-ran -> br-n3\""
+      echo "    iifname \"br-n3\" oifname \"br-ran\" counter accept comment \"allowed: br-n3 -> br-ran\""
     fi
     # N6c internet breakout (NAT on the egress interface).
     if [[ -n "$egress" ]]; then

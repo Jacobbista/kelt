@@ -363,7 +363,7 @@ class NetworkHealthService:
         pod, container = pod_info
 
         out = _exec(thread_core(), pod, container,
-                     ["ping", "-c", "1", "-W", "2", "-I", "n6", ips["n6c_gw"]])
+                     ["ping", "-c", "1", "-W", "2", "-I", "n6c", ips["n6c_gw"]])
         m = _RE_LATENCY.search(out)
         if "1 received" in out or "1 packets received" in out:
             result["status"] = "ok"

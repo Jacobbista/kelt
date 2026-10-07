@@ -10,7 +10,7 @@ Capture points:
   - br-n3 on the worker node via SSH (GTP-U from gNB)
   - n3 inside the UPF pod via kubectl exec (GTP-U arriving at UPF)
   - ogstun inside the UPF pod (decapsulated UE IP traffic)
-  - n6 inside the UPF pod (traffic exiting toward Data Network)
+  - n6c inside the UPF pod (traffic exiting toward the internet)
   - br-n2 on the worker node (NGAP signaling)
 """
 
@@ -58,12 +58,12 @@ CAPTURE_POINTS = {
         "default_filter": "",
         "protocol": "IP",
     },
-    "upf-n6": {
-        "label": "UPF N6 Interface",
-        "description": "Traffic exiting toward Data Network",
+    "upf-n6c": {
+        "label": "UPF N6c Interface",
+        "description": "Traffic exiting toward the internet (N6c)",
         "method": "pod",
         "pod_app": "upf-cloud",
-        "interface": "n6",
+        "interface": "n6c",
         "default_filter": "",
         "protocol": "IP",
     },
@@ -369,7 +369,7 @@ def run_path_trace(k8s: K8sService, duration: int = 5) -> list[dict[str, Any]]:
         ("br-n3", CAPTURE_POINTS["br-n3"]),
         ("upf-n3", CAPTURE_POINTS["upf-n3"]),
         ("upf-ogstun", CAPTURE_POINTS["upf-ogstun"]),
-        ("upf-n6", CAPTURE_POINTS["upf-n6"]),
+        ("upf-n6c", CAPTURE_POINTS["upf-n6c"]),
     ]
 
     results = []
@@ -421,6 +421,6 @@ def run_path_trace(k8s: K8sService, duration: int = 5) -> list[dict[str, Any]]:
                 **capture,
             })
 
-    order = ["br-n3", "upf-n3", "upf-ogstun", "upf-n6"]
+    order = ["br-n3", "upf-n3", "upf-ogstun", "upf-n6c"]
     results.sort(key=lambda r: order.index(r["point_id"]) if r["point_id"] in order else 99)
     return results

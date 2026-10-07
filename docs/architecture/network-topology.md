@@ -91,7 +91,7 @@ OVS is a programmable software switch. Unlike Linux bridge, it supports OpenFlow
 
 - One OVS bridge per 5G interface (6 bridges total per node)
 - VXLAN tunnel ports connect the worker and edge bridges for each network
-- Optional patch ports bridge the physical RAN subnet into the N2/N3 bridges
+- With a physical gNB, a separate bridge `br-ran` holds the worker's RAN NIC; the AMF attaches to it and the worker routes N3 from it to `br-n3`
 
 ---
 
@@ -316,7 +316,7 @@ The `exclude` list keeps the fixed endpoints (like the AMF's `10.202.0.100`) out
 
 ## Per-Cell Network Scaling
 
-The default deployment creates one shared N2 and N3 bridge for all cells. For multi-cell scenarios (multiple gNBs), each cell gets its own dedicated N2/N3 bridge and VXLAN tunnel:
+Every deployment has one shared N2 and one shared N3 bridge. With UERANSIM on, each simulated cell also gets its own N2 and N3 bridge, and its own VXLAN tunnel when an edge node exists:
 
 ```mermaid
 graph LR
@@ -349,43 +349,45 @@ graph LR
     end
 ```
 
-The per-cell bridges are created by the `cell_network_setup` role in Phase 4. The number of cells and their IDs are configured in `ansible/phases/06-ueransim-mec/vars/topology.yml`.
+The cells and their IDs are listed in `ansible/phases/06-ueransim-mec/vars/topology.yml`, and they are active only while `ueransim_enabled` is true (`ueransim_active_cells`). Phase 4 creates the bridges and NADs of the active cells, and phase 5 gives the AMF one interface per active cell. When UERANSIM is off, phase 5 removes the cells' NADs and bridges once the AMF no longer uses them.
 
 ---
 
 ## Physical RAN Integration
 
-When a physical gNB (femtocell) is connected, the worker creates an additional OVS bridge (`br-ran`) and links it into `br-n2` and `br-n3` via patch port pairs:
+When a physical gNB is connected, the worker has one more OVS bridge, `br-ran`, on
+the RAN transport network. The AMF attaches to it with a second interface, `n2ran`:
 
 ```mermaid
 graph LR
     GNB["Physical gNB
-    192.168.6.0/24"]
+    RAN transport"]
 
     BRAN["br-ran
-    192.168.6.1/24
     worker OVS bridge"]
 
-    BN2["br-n2
-    10.202.0.0/24"]
+    BN2["br-n2"]
 
-    BN3["br-n3
-    10.203.0.0/24"]
+    BN3["br-n3"]
 
     AMF["AMF pod
-    10.202.0.100"]
+    n2, n2ran"]
 
     UPF["UPF-Cloud pod
-    10.203.0.101"]
+    n3"]
 
     GNB -->|"L2 bridged NIC"| BRAN
-    BRAN -->|"patch-ran-n2 ↔ patch-n2-ran"| BN2
-    BRAN -->|"patch-ran-n3 ↔ patch-n3-ran"| BN3
+    BRAN -->|"N2 / NGAP to n2ran"| AMF
+    BRAN -->|"N3, routed by the worker"| BN3
     BN2 --> AMF
     BN3 --> UPF
 ```
 
-The worker performs L3 routing between the physical RAN subnet (192.168.6.x) and the overlay subnets (10.20x.x.x). Patch ports provide L2 connectivity within the worker OVS instance; the subnet boundary is crossed by IP routing. N4, N6, and N1 bridges remain completely isolated.
+The gNB's NGAP association terminates on the AMF's `n2ran`, on the RAN subnet.
+GTP-U to the UPF is routed by the worker from `br-ran` to `br-n3`, since the RAN
+subnet and the N3 subnet differ. `br-ran` has no layer-2 link to any plane
+bridge; `make ran` checks it ("No Layer-2 Link to the Planes").
+The addresses are in [5G Interfaces](5g-interfaces.md).
 
 See [Physical RAN Integration](../deployment/physical-ran.md) for the step-by-step setup guide.
 

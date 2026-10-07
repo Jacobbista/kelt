@@ -24,8 +24,8 @@ PLANE_LABELS = {
 
 
 def _interface_label(nad_name: str) -> str:
-    if nad_name == "n2-physical":
-        return "N2-Physical"
+    if nad_name == plan_value("nad_n2_ran_name"):
+        return "N2-RAN"
     return PLANE_LABELS.get(nad_plane(nad_name) or "", nad_name)
 
 

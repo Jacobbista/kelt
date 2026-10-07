@@ -218,6 +218,10 @@ nad_n3_name: n3-net
 nad_n3_namespace: "{{ namespace_5g }}"
 nad_n6c_name: n6c-net
 nad_n6c_namespace: "{{ namespace_5g }}"
+# The AMF's N2 attachment on the physical RAN bridge (br-ran), with the physical
+# RAN on: the NAD and the interface name inside the AMF.
+nad_n2_ran_name: n2-ran
+amf_n2_ran_interface: n2ran
 
 # Edge node toggle (set to true to deploy KubeEdge EdgeCore, edge OVS, edge Multus)
 # Passed from Vagrantfile via -e edge_enabled=true/false
@@ -349,7 +353,7 @@ keycloak_path_prefix: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_PATH_PREFIX') 
 # amf_physical_ran_ip: IP for AMF on the RAN network (gNB connects here)
 #
 physical_ran_enabled: "{{ (lookup('ansible.builtin.env', 'PHYSICAL_RAN_ENABLED') or 'false') | bool }}"
-# Skip worker br-ran check before creating n2-physical / patching AMF (not recommended).
+# Skip worker br-ran check before creating the AMF's N2 RAN NAD / patching AMF (not recommended).
 physical_ran_skip_bridge_check: false
 physical_ran_interface: ""
 physical_ran_subnet: "192.168.6.0/24"

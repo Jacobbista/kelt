@@ -35,7 +35,7 @@ class PhysicalRANTestSuite:
             ("Overlay Gateway Ownership", self.test_overlay_gateway_ownership),
             ("RAN Interface Detection", self.test_ran_interface),
             ("OVS RAN Bridge Exists", self.test_ovs_ran_bridge),
-            ("Patch Ports Configured", self.test_patch_ports),
+            ("No Layer-2 Link to the Planes", self.test_no_patch_ports),
             ("AMF Overlay IP Reachable", self.test_amf_overlay_reachable),
             ("UPF Overlay IP Reachable", self.test_upf_overlay_reachable),
             ("gNB Connection Status", self.test_gnb_connection),
@@ -156,31 +156,31 @@ class PhysicalRANTestSuite:
         self.logger.success("br-ran bridge exists")
         return True
     
-    def test_patch_ports(self) -> bool:
-        """Test patch ports between br-ran and br-n2/br-n3"""
-        self.logger.info("Checking patch ports...")
-        
-        # First check if br-ran exists
+    def test_no_patch_ports(self) -> bool:
+        """br-ran has no patch port: the RAN segment is not one layer-2 domain
+        with any plane. N2 reaches the AMF on its own br-ran interface and N3 is
+        routed by the worker (docs/deployment/physical-ran.md)."""
+        self.logger.info("Checking that br-ran has no patch port...")
+
         rc, stdout, stderr = self._ssh_worker("sudo ovs-vsctl list-br | grep br-ran")
         if rc != 0 or "br-ran" not in stdout:
             self.logger.info("br-ran not configured, skipping patch port test")
             return None
-        
-        # Check patch ports
-        rc, stdout, stderr = self._ssh_worker("sudo ovs-vsctl list-ports br-ran")
+
+        rc, stdout, stderr = self._ssh_worker(
+            "for b in $(sudo ovs-vsctl list-br); do for p in $(sudo ovs-vsctl list-ports $b); do "
+            "t=$(sudo ovs-vsctl get interface $p type); [ \"$t\" = patch ] && echo $b:$p; done; done; true")
         if rc != 0:
-            self.logger.error(f"Failed to list ports on br-ran: {stderr}")
+            self.logger.error(f"Failed to list OVS ports: {stderr}")
             return False
-        
-        expected_patches = ["patch-ran-n2", "patch-ran-n3"]
-        for patch in expected_patches:
-            if patch not in stdout:
-                self.logger.error(f"Patch port {patch} not found on br-ran")
-                return False
-        
-        self.logger.success("Patch ports configured correctly")
+        patches = [line for line in stdout.split() if "ran" in line]
+        if patches:
+            self.logger.error(f"Patch ports between br-ran and the planes: {', '.join(patches)}")
+            return False
+
+        self.logger.success("br-ran has no patch port")
         return True
-    
+
     def test_amf_overlay_reachable(self) -> bool:
         """Test AMF N2 overlay IP is reachable from RAN network"""
         self.logger.info("Checking AMF overlay IP reachability...")

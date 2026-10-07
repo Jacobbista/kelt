@@ -1,7 +1,7 @@
 ---
 # Shared preflight for physical RAN resources.
 # Detect whether br-ran exists on the worker and expose a fact that callers
-# can use to skip n2-physical / AMF attachment without breaking the whole install.
+# can use to skip the N2 RAN NAD / AMF attachment without breaking the whole install.
 # See docs/deployment/physical-ran.md
 
 - name: Check OVS br-ran exists on worker node
@@ -22,7 +22,7 @@
   ansible.builtin.debug:
     msg: >-
       physical_ran_enabled=true but br-ran is missing on the worker; skipping
-      n2-physical / AMF physical RAN for this run. If you configured RAN via
+      the N2 RAN NAD / AMF physical RAN for this run. If you configured RAN via
       testbed-config, re-run provisioning from the CLI so it can reload the
       worker with PHYSICAL_RAN_BRIDGE applied, or enable physical RAN later
       from the dashboard.

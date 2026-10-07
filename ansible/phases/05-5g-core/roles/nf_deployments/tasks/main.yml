@@ -7,7 +7,7 @@
     file: "{{ playbook_dir }}/../06-ueransim-mec/vars/topology.yml"
   run_once: true
 
-- name: Build per-cell N2 networks for AMF
+- name: Build per-cell N2 networks for AMF (UERANSIM on)
   set_fact:
     # Pool address: the UERANSIM gNB discovers the AMF per-cell IP at runtime
     # through the Kubernetes API (amf-discovery init container), so it is not fixed.
@@ -16,14 +16,14 @@
         'name': 'n2-cell-' ~ item.id,
         'interface': 'n2c' ~ item.id
       }] }}
-  loop: "{{ ueransim_topology.cells }}"
+  loop: "{{ ueransim_active_cells }}"
   loop_control:
     label: "cell-{{ item.id }}"
   run_once: true
 
 - name: Update network_functions with AMF per-cell networks
   set_fact:
-    network_functions_updated: "{{ network_functions_updated | default([]) + [item | combine({'networks': item.networks + amf_cell_n2_networks}) if item.name == 'amf' else item] }}"
+    network_functions_updated: "{{ network_functions_updated | default([]) + [item | combine({'networks': item.networks + (amf_cell_n2_networks | default([]))}) if item.name == 'amf' else item] }}"
   loop: "{{ network_functions }}"
   loop_control:
     label: "{{ item.name }}"
@@ -34,7 +34,7 @@
     network_functions: "{{ network_functions_updated }}"
   run_once: true
 
-# Same guard as multus_install / dashboard: only attach n2-physical when br-ran exists.
+# Same guard as multus_install / dashboard: only attach the N2 RAN NAD when br-ran exists.
 - name: Physical RAN preflight — detect br-ran on worker
   ansible.builtin.include_tasks: "{{ playbook_dir }}/../04-overlay-network/tasks/physical_ran_br_preflight.yml"
   when:
@@ -42,14 +42,13 @@
     - not (physical_ran_skip_bridge_check | default(false) | bool)
   run_once: true
 
-# Add physical RAN interface to AMF (for femtocell/small cell connectivity)
-# This gives AMF a dedicated macvlan interface on the physical RAN network
-# so physical gNBs can connect via NGAP/SCTP
+# The AMF's N2 interface on the physical RAN bridge (br-ran), where a physical
+# gNB's NGAP association terminates. See docs/deployment/physical-ran.md
 - name: Build physical RAN N2 network for AMF
   set_fact:
     amf_physical_ran_network:
-      - name: "n2-physical"
-        interface: "n2phy"
+      - name: "{{ nad_n2_ran_name }}"
+        interface: "{{ amf_n2_ran_interface }}"
         ips: ["{{ amf_physical_ran_ip }}/{{ physical_ran_subnet.split('/')[1] }}"]
   when:
     - physical_ran_enabled | default(false) | bool
@@ -204,6 +203,66 @@
   loop_control: { label: "{{ item.item.name | default('') }}" }
   when: item.changed | default(false)
   delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+# The N2 RAN NAD was called n2-physical before 2026-10. The AMF above now names
+# the new one, so the old NAD is no longer referenced and can go.
+- name: Remove the N2 RAN NAD's former name
+  kubernetes.core.k8s:
+    state: absent
+    api_version: k8s.cni.cncf.io/v1
+    kind: NetworkAttachmentDefinition
+    name: n2-physical
+    namespace: "{{ namespace_5g }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+# Per-cell NADs exist only for the cells of an active UERANSIM topology. The AMF
+# above no longer names the others, so they can go.
+- name: List the per-cell NADs
+  kubernetes.core.k8s_info:
+    api_version: k8s.cni.cncf.io/v1
+    kind: NetworkAttachmentDefinition
+    namespace: "{{ namespace_5g }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: cell_nads
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Remove the NADs of cells that are not active
+  kubernetes.core.k8s:
+    state: absent
+    api_version: k8s.cni.cncf.io/v1
+    kind: NetworkAttachmentDefinition
+    name: "{{ item }}"
+    namespace: "{{ namespace_5g }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  loop: >-
+    {{ cell_nads.resources | map(attribute='metadata.name') | select('match', '^n[23]-cell-[0-9]+$')
+       | reject('match', '^n[23]-cell-(' ~ (ueransim_active_cells | map(attribute='id') | join('|')) ~ ')$')
+       | list }}
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+# The AMF above has detached from the bridges of inactive cells; phase 04 leaves
+# a bridge in place while a pod is attached (ovs-setup.sh), so remove the now
+# empty ones here.
+- name: Remove the empty bridges of cells that are not active
+  ansible.builtin.shell: |
+    set -eu
+    keep='^br-n[23]-cell-({{ ueransim_active_cells | map(attribute='id') | join('|') }})$'
+    for br in $(ovs-vsctl list-br | grep -E '^br-n[23]-cell-[0-9]+$' || true); do
+      echo "$br" | grep -qE "$keep" && continue
+      [ -z "$(ovs-vsctl list-ports "$br")" ] || continue
+      ovs-vsctl --if-exists del-br "$br" && echo "removed $br"
+    done
+  args:
+    executable: /bin/bash
+  register: cell_bridges_removed
+  changed_when: "'removed' in cell_bridges_removed.stdout"
+  become: true
+  delegate_to: "{{ groups['workers'][0] }}"
   run_once: true
 
 - name: Deploy Network Function Services

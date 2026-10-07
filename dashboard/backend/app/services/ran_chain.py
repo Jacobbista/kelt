@@ -74,7 +74,7 @@ def _core(f: dict) -> dict:
         return _link(2, "bad", "No NG Setup from the gNB", listen,
                      [["AMF listens on", f"{listen} (SCTP)" if f.get("ngap_port") else f"{listen} (AMF not running)"]], {"see": "setup"})
     return _link(2, "ok", "NG Setup accepted", f"{f['amf_ip']} ↔ {f['gnb_ip']}", [
-        ["AMF on br-ran", f"{f['amf_ip']} (n2phy)"],
+        ["AMF on br-ran", f"{f['amf_ip']} ({f.get('amf_iface', 'N2 RAN interface')})"],
         ["gNB", f"{f['gnb_ip']} · setup accepted"],
         ["Association", f"SCTP, port {f['ngap_port']}" if f.get("ngap_port") else "SCTP"],
     ])

@@ -472,10 +472,10 @@ export default function UEMonitoringPage() {
                   <li>AMF pod: {ranStatus.amf_pod_ready ? "Running" : "Not ready"}</li>
                   <li>br-ran bridge: {ranStatus.bridge_exists ? "Exists" : "Missing"}</li>
                   <li>Worker NIC (in br-ran): {ranStatus.bridge_detected ? `${ranStatus.ran_interface_detected || "detected"}` : "Not found"}</li>
-                  <li>AMF n2-physical: {ranStatus.amf_has_physical_ran ? "Enabled" : "Disabled -- click Enable in RAN Config"}</li>
+                  <li>AMF N2 on the RAN: {ranStatus.amf_has_physical_ran ? "Enabled" : "Disabled -- click Enable in RAN Config"}</li>
                 </ul>
                 <p className="text-[11px] text-slate-500">
-                  RAN page &rarr; Physical RAN: click <strong>Enable Physical</strong> to add n2-physical to AMF.
+                  RAN page &rarr; Physical RAN: click <strong>Enable Physical</strong> to attach the AMF to the RAN.
                   If the host interface changed (e.g. via hub), run{" "}
                   <code className="rounded bg-slate-800 px-1">PHYSICAL_RAN_BRIDGE=&lt;host_nic&gt; vagrant reload worker</code>.
                 </p>

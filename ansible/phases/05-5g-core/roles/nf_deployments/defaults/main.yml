@@ -81,8 +81,8 @@ network_functions:
     networks:
       - { name: "n3-static", interface: "n3", ips: ["{{ upf_edge_n3_ip }}/{{ n3_subnet.split('/')[1] }}"] }
       - { name: "n4-static", interface: "n4", ips: ["{{ upf_edge_n4_ip }}/{{ n4_subnet.split('/')[1] }}"] }
-      - { name: "n6e-net", namespace: "mec", interface: "n6" }
-    wait_interfaces: ["n3", "n6"]
+      - { name: "n6e-net", namespace: "mec", interface: "n6e" }
+    wait_interfaces: ["n3", "n6e"]
     setup_script: "upf_edge_init.sh"
     # Network plan for upf_edge_init.sh (the network-setup init container reads extra_env)
     extra_env:
@@ -108,9 +108,9 @@ network_functions:
     networks:
       - { name: "n3-upf-static", interface: "n3", ips: ["{{ upf_cloud_n3_ip }}/{{ n3_subnet.split('/')[1] }}"] }
       - { name: "n4-static", interface: "n4", ips: ["{{ upf_cloud_n4_ip }}/{{ n4_subnet.split('/')[1] }}"] }
-      - { name: "n6c-net", interface: "n6" }
+      - { name: "n6c-net", interface: "n6c" }
       - { name: "n6m-static", interface: "n6m", ips: ["{{ upf_cloud_n6m_ip }}/{{ n6m_subnet.split('/')[1] }}"] }
-    wait_interfaces: ["n3", "n6"]
+    wait_interfaces: ["n3", "n6c"]
     setup_script: "upf_cloud_init.sh"
     # Network plan for upf_cloud_init.sh (the network-setup init container reads extra_env).
     extra_env:

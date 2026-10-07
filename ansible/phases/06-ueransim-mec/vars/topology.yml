@@ -1,7 +1,9 @@
 ---
 # UERANSIM Topology Configuration (Phase 6 scoped)
 # One cell == one gNB. gNB/UE run on edge by default (realistic RAN placement).
-ueransim_enabled: true
+# ueransim_enabled is not set here: phases 04 and 05 load this file, and a value
+# here would override the one in all.yml. `kelt run-phase 06-ueransim-mec` and
+# DEPLOY_MODE=full pass ueransim_enabled=true.
 
 ueransim_topology:
   cells:
@@ -43,5 +45,8 @@ ueransim_topology:
       ue: "edge" # place UE on edge by default
 
 # Computed helpers (used in templates)
+# The cells the core is wired for: the per-cell bridges and NADs (phase 04) and
+# the AMF's per-cell interfaces (phase 05) exist only while UERANSIM is on.
+ueransim_active_cells: "{{ ueransim_topology.cells if (ueransim_enabled | default(false) | bool) else [] }}"
 ueransim_cell_count: "{{ ueransim_topology.cells | length | int }}" # Number of cells
 ueransim_total_ues: "{{ ueransim_topology.cells | sum(attribute='ues', start=[]) | length | int }}" # Total number of UEs

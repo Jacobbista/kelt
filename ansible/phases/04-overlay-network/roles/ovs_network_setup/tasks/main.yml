@@ -6,7 +6,7 @@
 
 - name: Set cell count from topology
   set_fact:
-    cell_count: "{{ ueransim_topology.cells | length | int }}"
+    cell_count: "{{ ueransim_active_cells | length | int }}"
   delegate_to: "{{ groups['masters'][0] }}"
   run_once: true
 

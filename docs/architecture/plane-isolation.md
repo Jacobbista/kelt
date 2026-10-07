@@ -21,11 +21,14 @@ N1, N2, N3, N4 and the N6 data networks each connect their own NFs and nothing
 else. The worker VM owns the gateway address of every overlay bridge, which makes
 it able to route between any two of them; that ability is used only for:
 
-| Crossing | Why it exists |
-|----------|---------------|
-| physical RAN ↔ N2 | NGAP from a physical gNB to the AMF |
+| Crossing | Carries |
+|----------|---------|
 | physical RAN ↔ N3 | GTP-U between a physical gNB and the UPF |
 | N6c → external network (NAT) | internet breakout for UEs |
+
+NGAP from a physical gNB crosses no plane: the AMF has its own interface on the
+RAN bridge (`n2ran`). The RAN bridge has no layer-2 link to any plane bridge, so
+the only path between the RAN and a plane is the routed one above.
 
 UE traffic toward the data networks (for example a UE reaching an N6m app) is
 routed by the UPF, by the session's DNN and the destination, never by the worker:

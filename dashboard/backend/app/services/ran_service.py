@@ -16,7 +16,7 @@ from app.services.network_plan import plan_value
 
 log = logging.getLogger(__name__)
 
-NAD_NAME = "n2-physical"
+NAD_NAME = plan_value("nad_n2_ran_name")
 NAD_NAMESPACE = plan_value("namespace_5g")
 AMF_DEPLOYMENT = "amf"
 AMF_NAMESPACE = plan_value("namespace_5g")
@@ -192,7 +192,7 @@ class RanService:
             return []
 
     def _amf_pods(self) -> list[dict[str, Any]]:
-        """The AMF's pods as they run: ready, going away, with n2phy (from the
+        """The AMF's pods as they run: ready, going away, with their N2 RAN interface (from the
         pod's own network annotation, not the Deployment template)."""
         pods = self.k8s.core.list_namespaced_pod(namespace=AMF_NAMESPACE, label_selector="app=amf").items
         out = []
@@ -248,7 +248,7 @@ class RanService:
                 amf_phy_ip = ips[0].split("/")[0] if ips else None
 
         # Data-path attachment: the AMF's ovs-cni veth must actually be a port on
-        # br-ran. ovs-cni attaches n2phy at pod creation, so a br-ran rebuilt under
+        # br-ran. ovs-cni attaches the N2 RAN interface at pod creation, so a br-ran rebuilt under
         # a running AMF leaves the annotation present but the veth gone. br_ports is
         # already fetched; a port that is not the NIC, a patch, or the bridge itself
         # is the AMF veth. Without this, status reads green while NGAP is dead.
@@ -285,6 +285,7 @@ class RanService:
             "nic_state": nic_state, "iface": iface or "", "host_nic": host_nic_applied or None,
             "nic_on_bridge": bool(iface) and iface in br_ports, "bridge_ports": br_ports,
             "amf_attached": amf_attached, "amf_ip": cfg["amf_physical_ran_ip"],
+            "amf_iface": plan_value("amf_n2_ran_interface"),
             "ngap_port": gnb["ngap_port"], "gnb_connected": gnb["connected"], "gnb_ip": gnb["ip"],
             "upf_route": upf_has_return_route, "subnet": cfg["physical_ran_subnet"],
             "n3_subnet": cfg["n3_subnet"], **counts,

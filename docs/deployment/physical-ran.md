@@ -1,334 +1,269 @@
 # Physical RAN Integration
 
-Connect a physical femtocell or small-cell gNB (e.g. nCELL-F2240) instead of, or alongside, UERANSIM.
+A physical femtocell or small-cell gNB connects to the core through the worker
+VM. This document describes how it is connected, how to attach and detach it,
+how to configure the gNB, and how to check the result.
 
-## Interfaces: Host, Worker, Bridge
+## How the gNB is connected
 
-| Layer                | Name                     | Where            | Example           | Purpose                                                                                                                      |
-| -------------------- | ------------------------ | ---------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| **Host interface**   | `PHYSICAL_RAN_BRIDGE`    | Your laptop/NUC  | `enx00e04c6817b7` | Host NIC on the same L2 network as the gNB. Can be a built-in Ethernet port, a USB-to-Ethernet adapter, or any NIC — Vagrant bridges it into the worker VM. |
-| **Worker interface** | `physical_ran_interface` | Inside worker VM | `enp0s9`          | Virtual NIC created by VirtualBox. Linux names it (e.g. `enp0s9`). Leave empty in `group_vars` for auto-detect by subnet IP. |
-| **Bridge**           | `br-ran`                 | Worker VM (OVS)  | `br-ran`          | OVS bridge. The worker interface is added to it; `br-ran` gets the gateway IP (192.168.6.1).                                 |
+```mermaid
+flowchart LR
+    UE["UE"]
+    GNB["gNB"]
+    subgraph HOST["Host"]
+        HNIC["host NIC"]
+        subgraph W["worker VM"]
+            WNIC["worker NIC"]
+            BRAN["br-ran"]
+            BN3["br-n3"]
+            AMF["AMF<br/>n2ran"]
+            UPF["UPF<br/>n3"]
+        end
+    end
 
-**Flow**: Host NIC → (VirtualBox bridge) → Worker NIC (`enp0s9`) → (OVS) → `br-ran` → patch ports → `br-n2` / `br-n3` → AMF / UPF pods.
-
-**Verification**: every time the worker starts (`vagrant up` or `reload`), the Vagrantfile writes the host adapter it bridged to `.physical_ran_bridge_applied`. That is what the worker really has, next to what `PHYSICAL_RAN_BRIDGE` in `.testbed.env` asks for: `kelt provision` reloads the worker when the two differ, and the dashboard's RAN page shows the applied adapter in the *Cable and link* details.
-
-## Architecture
-
-### Worker-as-Router Design
-
-The worker VM acts as a **transport router** between the physical RAN network and the 5G overlay networks, mirroring how a real transport network connects a cell site to the core.
-
-```
-   PHYSICAL RAN NETWORK                    WORKER VM (Router)                     5G CORE PODS
-   192.168.6.0/24                                                               (Overlay Networks)
-
-  ┌──────────┐                     ┌───────────────────────────────────┐
-  │   UE     │                     │                                   │
-  │(via Uu)  │                     │   br-ran  (192.168.6.1/24)        │
-  └────┬─────┘                     │     │                             │
-       │ radio                     │     ├── patch-ran-n2 ──┐          │
-  ┌────┴─────┐     enp0s9         │     └── patch-ran-n3 ──┼──┐       │
-  │   gNB    │ ─────────────────> │                        │  │       │    ┌──────────────┐
-  │ .6.100   │  (L2 bridged)      │   br-n2  (10.202.0.1) │  │       │    │ AMF          │
-  └──────────┘                     │     └── patch-n2-ran ──┘  │       │──> │ n2: .202.0.100│
-                                   │                           │       │    │ n2phy: .6.150 │
-                                   │   br-n3  (10.203.0.1)    │       │    └──────────────┘
-                                   │     └── patch-n3-ran ─────┘       │    ┌──────────────┐
-                                   │                                   │──> │ UPF-Cloud    │
-                                   │   br-n4  (10.204.0.1)            │    │ n3: .203.0.101│
-                                   │                                   │    └──────────────┘
-                                   └───────────────────────────────────┘
+    UE -- "NR radio" --- GNB
+    GNB -- "RAN transport" --- HNIC
+    HNIC -- "VirtualBox bridge" --- WNIC
+    WNIC --- BRAN
+    BRAN -- "N2, NGAP" --- AMF
+    BRAN -- "N3, GTP-U, routed" --- BN3
+    BN3 --- UPF
 ```
 
-### Who Owns the RAN Address
+The gNB and the worker share one layer-2 segment, the RAN transport network,
+whose subnet is `physical_ran_subnet` in `ansible/group_vars/all.yml`. A host NIC
+on that segment is bridged into the worker VM, and the worker's NIC is a port of
+the OVS bridge `br-ran`, which holds the gateway address `physical_ran_gateway`.
 
-Vagrant gives the worker's RAN NIC the address `physical_ran_gateway` so the OVS
-setup can find it. Once the NIC is a port of `br-ran`, the address belongs to the
-bridge only: the same address left on the NIC makes the worker send traffic (for
-example GTP-U downlink to the gNB) straight out of the NIC, around the bridge. The
-OVS setup therefore marks the NIC `Unmanaged` for systemd-networkd
-(`/etc/systemd/network/05-kelt-ran-unmanaged.network`), since networkd would
-otherwise restore the netplan address whenever it restarts, and then removes the
-address. After a reboot the NIC is found again as the physical port of `br-ran`.
-`make ran` checks that the address is on `br-ran` only.
+The AMF has an interface on `br-ran`, `n2ran`, with the address
+`amf_physical_ran_ip`; the gNB's NGAP association terminates there. GTP-U from
+the gNB goes to the UPF's N3 address through the gateway: the worker routes it
+from `br-ran` to `br-n3`. The UPF sends the downlink back through the same route,
+since its N3 attachment carries a route to `physical_ran_subnet` via the N3
+gateway. No address is translated on this path, and `br-ran` has no layer-2
+link to any plane bridge. The overlay addresses (the UPF's N3 address, the N2 and N3
+gateways) are in [5G Interfaces](../architecture/5g-interfaces.md).
 
-### Why This Approach Is Correct
+### Interfaces
 
-- **Mirrors real deployments**: In production 5G, the gNB connects to a transport network that reaches both the AMF (N2) and UPF (N3). OVS patch ports replicate this shared transport.
-- **Network isolation preserved**: Each N-interface remains a separate OVS bridge with its own VXLAN tunnel and subnet. The worker only routes between the physical transport and the overlays.
-- **No NAT or tunneling hacks**: The gNB communicates directly via L2 (patch ports provide bridge-level connectivity) for N2 signaling, and via L3 routing for N3 GTP-U to the UPF.
+| Layer | Setting | Where | Example | What it is |
+|-------|---------|-------|---------|------------|
+| Host interface | `PHYSICAL_RAN_BRIDGE` | Host | `enp2s0`, `enx<mac>` | The host NIC on the gNB's layer-2 network: a built-in port or a USB adapter. Vagrant bridges it into the worker VM |
+| Worker interface | `physical_ran_interface` | Worker VM | `enp0s9` | The NIC VirtualBox creates in the worker. Left empty, it is found as the interface with an address in `physical_ran_subnet` |
+| Bridge | `br-ran` | Worker VM (OVS) | `br-ran` | The OVS bridge the worker interface joins. It holds `physical_ran_gateway` |
 
-### Data Path: PDU Session User Plane
+Each time the worker starts (`vagrant up` or `reload`), the Vagrantfile writes the
+host adapter it bridged to `.physical_ran_bridge_applied`. `kelt provision`
+compares it with `PHYSICAL_RAN_BRIDGE` in `.testbed.env` and reloads the worker
+when the two differ. The dashboard's RAN page shows the applied adapter in the
+*Cable and link* details.
 
-```
-UE ──(Uu radio)──> gNB (192.168.6.100)
-                     │
-                     │ GTP-U encapsulated, dst = 10.203.0.101 (UPF N3)
-                     │
-                     ▼
-              enp0s9 (bridged into br-ran)
-                     │
-              br-ran (192.168.6.1/24)
-                     │
-              patch-ran-n3 ──> patch-n3-ran
-                     │
-              br-n3  (10.203.0.1/24)
-                     │
-              UPF-Cloud pod (n3: 10.203.0.101)
-                     │
-              ogstun  ──> iptables MASQUERADE ──> n6 ──> Data Network
+### Addresses on the RAN transport
 
-Return path:
-  UPF has route: 192.168.6.0/24 via 10.203.0.1 dev n3 (the N3 gateway)
-  Worker routes from br-n3 to br-ran (192.168.6.1)
-  br-ran delivers to gNB via enp0s9
-```
+| Component | Interface | Address | Variable |
+|-----------|-----------|---------|----------|
+| Worker | `br-ran` | `192.168.6.1/24` | `physical_ran_gateway` |
+| AMF | `n2ran` | `192.168.6.150/24` | `amf_physical_ran_ip` |
+| gNB | its RAN port | a free address, for example `192.168.6.100/24` | set on the gNB |
 
-### IP Addressing Summary
+A gNB may also have a management port on a separate network of the operator.
+KELT does not define that network.
 
-Values are the defaults of the 5G network plan in `ansible/group_vars/all.yml`
-(`physical_ran_subnet`, `physical_ran_gateway`, `amf_physical_ran_ip`, the N2/N3 plane);
-change them there. The interface matrix is [5g-interfaces.md](../architecture/5g-interfaces.md).
+### Who owns the RAN address
 
-| Component | Interface         | IP               | Role                            |
-| --------- | ----------------- | ---------------- | ------------------------------- |
-| Worker    | br-ran            | 192.168.6.1/24   | Gateway for physical RAN subnet |
-| Worker    | br-n2             | 10.202.0.1/24    | N2 overlay gateway              |
-| Worker    | br-n3             | 10.203.0.1/24    | N3 overlay gateway, UPF return-route next hop |
-| AMF       | n2phy             | 192.168.6.150/24 | NGAP endpoint for physical gNB  |
-| AMF       | n2                | 10.202.0.100/24  | NGAP endpoint (overlay)         |
-| UPF-Cloud | n3                | 10.203.0.101/24  | GTP-U endpoint                  |
-| gNB       | eth               | 192.168.6.100/24 | Physical RAN interface          |
+Vagrant gives the worker's RAN NIC the address `physical_ran_gateway`, and the
+OVS setup uses it to find the NIC. Once the NIC is a port of `br-ran`, the address
+is moved to the bridge: the same address left on the NIC makes the worker send
+traffic (for example the GTP-U downlink) straight out of the NIC, around the
+bridge. The OVS setup marks the NIC `Unmanaged` for systemd-networkd
+(`/etc/systemd/network/05-kelt-ran-unmanaged.network`), so that networkd does not
+restore the netplan address when it restarts, and then removes the address. After
+a reboot the NIC is found again as the physical port of `br-ran`. `make ran`
+checks that the address is on `br-ran` only.
 
-The gNB RAN IP is whatever the appliance is configured with on `physical_ran_subnet`
-(192.168.6.100 is an example; a given femtocell may use another address in that
-range). Many femtocells also have a second, separate **management interface** on a
-different LAN that the testbed does not define; its address is operator-specific.
+### What runs where
 
-### Management console (optional)
-
-A physical femtocell typically serves a web management UI on its management
-interface, an address only reachable on the operator's management LAN, not from a
-browser. KELT can expose it as `kelt-gnb.<base>` through the front-door without any
-deploy-time change: an admin enters the appliance management address (IP:port) in
-the dashboard RAN page, and the backend registers a selectorless Service plus
-Endpoints named `gnb` in the `mec` namespace, which the dynamic `kelt-<app>.<base>` route
-already proxies through `kube-proxy`. KELT assumes no management subnet exists, so
-the surface stays absent until set. Access control is the front-door perimeter
-(Cloudflare Access over `*.<base>`) plus the appliance's own login. The surface
-requires the apps route to be enabled. See
-[../security/external-access.md](../security/external-access.md).
-
-### OVS DaemonSet vs NAD (what runs where)
-
-| Component                                 | Where                     | What it does                                                                                                                                                 |
-| ----------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **OVS DaemonSet** (`ds-net-setup-worker`) | Worker node (hostNetwork) | Runs `ovs-setup.sh` to create/remove `br-ran`, patch ports, gateway IPs. When `RAN_BRIDGE_MODE=disabled`, it tears down `br-ran`.                            |
-| **NAD n2-physical**                       | Kubernetes API (cluster)  | NetworkAttachmentDefinition that tells Multus how to attach pods to `br-ran`. It is a cluster resource, not "on" the worker. Detach deletes it (phase 4, `nad`). |
-| **Playbook guard**                        | Ansible (phase 4 & 5)     | When `physical_ran_enabled` is true, checks whether `br-ran` exists on the worker before creating `n2-physical` and before AMF attachment. If the bridge is missing, physical-RAN-specific resources are skipped for that run so the base system can still finish deploying. Bypass: `physical_ran_skip_bridge_check: true` in `group_vars` or `-e physical_ran_skip_bridge_check=true`. |
+| Component | Where | What it does |
+|-----------|-------|--------------|
+| OVS DaemonSet (`ds-net-setup-worker`) | Worker node (hostNetwork) | Runs `ovs-setup.sh`, which creates or removes `br-ran` and its gateway address. With `RAN_BRIDGE_MODE=disabled` it removes `br-ran` |
+| NAD `n2-ran` | Kubernetes API | The NetworkAttachmentDefinition that attaches the AMF to `br-ran`. Detach deletes it (phase 4, tag `nad`) |
+| Playbook guard | Ansible, phases 4 and 5 | With `physical_ran_enabled` true, checks that `br-ran` exists on the worker before creating `n2-ran` and attaching the AMF; if it is missing, the physical RAN resources are skipped for that run and the rest deploys. `physical_ran_skip_bridge_check: true` turns the check off |
 
 ---
 
-## 1. Enable Integration
+## 1. Enable integration
 
-### Step 1: Select the Host NIC
-
-```bash
-kelt ran <host_nic>     # e.g. enp88s0; `kelt ran disable` turns it off
-```
-
-This writes `PHYSICAL_RAN_ENABLED=true` and `PHYSICAL_RAN_BRIDGE=<host_nic>` to
-`.testbed.env`. The two say different things: `PHYSICAL_RAN_BRIDGE` gives the
-worker VM its RAN adapter (the Vagrantfile adds it whenever the variable is set),
-and `PHYSICAL_RAN_ENABLED` says whether the core is attached to the RAN, which is
-what Attach and Detach change (below). The subnet and the AMF address come from `ansible/group_vars/all.yml`
-(`physical_ran_subnet`, `amf_physical_ran_ip`); `physical_ran_interface` is the
-**worker** NIC and is auto-detected when left empty (the interface holding an IP in
-`physical_ran_subnet`).
-
-### Step 2: Provision
+### Select the host NIC
 
 ```bash
-testbed provision
+kelt ran <host_nic>     # `kelt ran disable` turns it off
 ```
 
-When the bridge changed, the CLI first runs `vagrant reload worker`: the Vagrantfile
-bridges `PHYSICAL_RAN_BRIDGE` into the worker with the gateway IP `192.168.6.1`.
-The playbook then creates `br-ran` and the patch ports (phase 04) and adds the
-`n2-physical` NAD to the AMF and `PHYSICAL_RAN_SUBNET` to the UPF (phase 05).
+The command writes `PHYSICAL_RAN_ENABLED=true` and `PHYSICAL_RAN_BRIDGE=<host_nic>`
+to `.testbed.env`. `PHYSICAL_RAN_BRIDGE` gives the worker VM its RAN adapter (the
+Vagrantfile adds it whenever the variable is set). `PHYSICAL_RAN_ENABLED` says
+whether the core is attached to the RAN, which is what Attach and Detach change.
 
-### Attach and Detach
+### Provision
 
-On a running testbed whose worker has the RAN adapter, the core is attached to
-or detached from the RAN by two pieces (see
-[contributing.md](../development/contributing.md#pieces)), from the dashboard's
-RAN page or from the CLI:
+```bash
+kelt provision
+```
+
+When the bridge changed, the CLI first runs `vagrant reload worker`, and the
+Vagrantfile bridges `PHYSICAL_RAN_BRIDGE` into the worker with the address
+`physical_ran_gateway`. The playbook then creates `br-ran` (phase 4), and adds the `n2-ran` attachment to the AMF and the return route
+to the UPF (phase 5).
+
+### Attach and detach
+
+On a running testbed whose worker has the RAN adapter, two pieces attach the core
+to the RAN or detach it (see [contributing.md](../development/contributing.md#pieces)),
+from the dashboard's RAN page or from the CLI:
 
 ```bash
 kelt run-piece ran_attach   # PHYSICAL_RAN_ENABLED=true, then:
-                            # phase 04 overlay → br-ran (setup pod) → nad → phase 05 nf_deployments → AMF on br-ran
+                            # phase 4 overlay → br-ran (setup pod) → nad → phase 5 nf_deployments → AMF on br-ran
 kelt run-piece ran_detach   # PHYSICAL_RAN_ENABLED=false, then:
-                            # phase 05 nf_deployments → phase 04 nad → overlay → br-ran removed
+                            # phase 5 nf_deployments → phase 4 nad → overlay → br-ran removed
 ```
 
-- **Attach** builds `br-ran` with the adapter, creates `n2-physical`, gives the
+- **Attach** builds `br-ran` with the adapter, creates `n2-ran`, gives the
   UPF its route back to the RAN and the AMF its RAN interface, and restarts the
-  AMF again only if its port is missing from `br-ran`. The UPF and the AMF
-  restart: every PDU session on every cell drops and is set up again. The gNB
+  AMF a second time only if its port is missing from `br-ran`. The UPF and the AMF
+  restart, so every PDU session on every cell drops and is set up again. The gNB
   then sets up NGAP by itself.
-- **Detach** removes the AMF's RAN interface, `n2-physical` and the UPF's route,
+- **Detach** removes the AMF's RAN interface, `n2-ran` and the UPF's route,
   then `br-ran`; the AMF and the UPF restart once. Every device on the gNB loses
-  its link until Attach runs; the dashboard asks for `detach` to be typed first.
-  The worker keeps its RAN adapter, so a worker restart does not stand in the
-  way of Attach.
-- Both restart the worker's network setup pod when `br-ran` has to change; that
-  pod installs its tools from the Alpine package mirror at start, so the worker
-  needs internet access for Attach and Detach to finish.
-- Both change nothing when the RAN is already in that state, share one lock
-  with `ran_link` (one RAN piece at a time), and are done only when the
-  dashboard has read the state back from the running pods.
+  its link until Attach runs, and the dashboard asks for `detach` to be typed
+  first. The worker keeps its RAN adapter, so Attach does not need a worker
+  restart.
+- Both restart the worker's network setup pod when `br-ran` has to change. That
+  pod installs its tools from the Alpine package mirror when it starts, so the
+  worker needs internet access for Attach and Detach to finish.
+- Both change nothing when the RAN is already in that state, share one lock with
+  `ran_link` (one RAN piece at a time), and are done only when the dashboard has
+  read the state back from the running pods.
 
 ---
 
 ## 2. Configure the gNB
 
-### Network Configuration (Web UI)
+### Network
 
-For **commercial femtocells**, configure these in the device's web UI (typically under LAN, Network, or Ethernet settings):
+These are set in the gNB's own configuration, usually under LAN, Network or
+Ethernet settings:
 
-| Parameter                    | Value                                                              | Notes                                                                           |
-| ---------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
-| gNB IP                       | `192.168.6.100/24`                                                 | Any free IP in the RAN subnet                                                   |
-| **Default gateway**          | `192.168.6.1`                                                      | **Required.** Worker's br-ran. Without this, GTP-U to UPF (10.203.0.101) fails. |
-| Static routes (if supported) | `10.202.0.0/16 via 192.168.6.1`<br>`10.203.0.0/16 via 192.168.6.1` | Alternative if the UI has a "Static routes" or "Route table" section            |
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| gNB address | a free address in `physical_ran_subnet` | For example `192.168.6.100/24` |
+| Default gateway | `physical_ran_gateway` (`192.168.6.1`) | Required: the UPF's N3 address is reached through it. Without it, GTP-U fails with `Network is unreachable` |
+| Static routes, if the gNB has them | the N2 and N3 subnets via `physical_ran_gateway` | An alternative to the default gateway |
 
-**Critical:** The gNB reaches the AMF (192.168.6.150) on the same subnet. To reach the UPF (10.203.0.101), it must use 192.168.6.1 as gateway. If "Default gateway" is empty or wrong, you get `Network is unreachable` when the gNB tries to send GTP-U.
+The gNB reaches the AMF on its own subnet, at `amf_physical_ran_ip`. The RAN page
+of the dashboard shows these values for the running testbed, read from the
+backend.
 
-### 5G Parameters
+### 5G parameters
 
-| Parameter     | Value                                   |
-| ------------- | --------------------------------------- |
-| MCC           | `001`                                   |
-| MNC           | `01`                                    |
-| TAC           | `1`                                     |
-| AMF IP        | `192.168.6.150` (AMF's n2phy interface) |
-| AMF SCTP Port | `38412`                                 |
-| S-NSSAI       | SST=1, SD=0x000001                      |
+The PLMN and the slice are set in `ansible/phases/05-5g-core/configs/amf.yaml`:
+
+| Parameter | Value |
+|-----------|-------|
+| MCC | `001` |
+| MNC | `01` |
+| TAC | `1` |
+| AMF address | `amf_physical_ran_ip` (`192.168.6.150`) |
+| AMF SCTP port | `38412` |
+| S-NSSAI | SST 1, SD `000001` |
 
 ---
 
-## 3. Physical Connection
+## 3. Physical connection
 
-### With VirtualBox
+The gNB has to be on the same layer-2 segment as the host NIC named in
+`PHYSICAL_RAN_BRIDGE`: connected to the same switch, or to the NIC directly.
 
-The gNB must be on the same L2 segment as the host NIC specified in `PHYSICAL_RAN_BRIDGE`. Vagrant bridges that NIC into the worker VM.
-
-**NUC / Server**: the gNB is connected via a router or switch to one of the NUC's built-in Ethernet ports:
-
-```
-[NUC]
-    └── enp2s0 ─── [Router / Switch] ─── gNB (192.168.6.100)
-                          │
-    [VirtualBox]          │
-        └── Worker VM (enp0s9) ────┘
-            bridged to enp2s0
-```
-
-`./testbed-config ran enp2s0`: use the NIC name that is on the gNB's network.
-
-**Laptop**: USB-to-Ethernet adapter bridged to the same switch:
-
-```
-[Laptop]
-    └── USB Ethernet (enx00e04c...) ─── [Switch] ─── gNB (192.168.6.100)
-                                            │
-    [VirtualBox]                            │
-        └── Worker VM (enp0s9) ─────────────┘
-            bridged to USB adapter
+```mermaid
+flowchart LR
+    GNB["gNB"]
+    SW["switch"]
+    subgraph HOST["Host"]
+        HNIC["host NIC<br/>PHYSICAL_RAN_BRIDGE"]
+        WNIC["worker NIC"]
+    end
+    GNB --- SW --- HNIC
+    HNIC -- "VirtualBox bridge" --- WNIC
 ```
 
-`./testbed-config ran enx00e04c6817b7`: use the adapter's interface name.
-
-### Bare Metal (production)
-
-Connect the gNB directly to the worker's dedicated RAN NIC. No VirtualBox bridging needed.
+The host NIC can be a built-in Ethernet port or a USB Ethernet adapter;
+`kelt ran <host_nic>` takes its interface name as the host shows it.
 
 ---
 
 ## 4. Verify
 
-### OVS Bridges and Patch Ports
+### The RAN bridge
 
 ```bash
 vagrant ssh worker
-sudo ovs-vsctl show | grep -A8 br-ran
+sudo ovs-vsctl show | grep -A6 br-ran
 ```
 
-Expected:
+`br-ran` lists the worker NIC and the AMF's port, and nothing else:
 
-```
+```text
 Bridge br-ran
     Port enp0s9
         Interface enp0s9
-    Port patch-ran-n2
-        Interface patch-ran-n2
-            type: patch
-            options: {peer=patch-n2-ran}
-    Port patch-ran-n3
-        Interface patch-ran-n3
-            type: patch
-            options: {peer=patch-n3-ran}
+    Port veth...
+        Interface veth...              # the AMF's n2ran
 ```
 
-### Gateway IPs
+### Gateway addresses
 
 ```bash
-ip -4 addr show br-ran | grep inet    # 192.168.6.1/24
-ip -4 addr show br-n3 | grep inet     # 10.203.0.1/24 only
+ip -4 addr show br-ran | grep inet    # physical_ran_gateway
+ip -4 addr show br-n3 | grep inet     # the N3 gateway only
 ```
 
-### gNB Reachability
+### Reachability from the gNB
 
 ```bash
-# From the gNB
-ping 192.168.6.1      # Worker br-ran gateway
-ping 192.168.6.150    # AMF n2phy
-ping 10.203.0.101     # UPF N3 (via routing through worker)
+ping 192.168.6.1      # physical_ran_gateway, on br-ran
+ping 192.168.6.150    # amf_physical_ran_ip, the AMF's n2ran
+ping 10.203.0.101     # the UPF's N3 address, routed by the worker
 ```
 
-### AMF Registration
+### AMF and the gNB
 
 ```bash
 sudo k3s kubectl logs -f -l app=amf -n 5g | grep -i gnb
 ```
 
-Expected:
+A connected gNB shows as:
 
-```
+```text
 [Added] Number of gNBs is now 1
 ```
 
-### UPF Return Route
+### UPF return route
 
-The UPF must send GTP-U downlink to the gNB over N3. Without this route it falls
-back to its default route on N6 and the tunnel crosses `br-n6c`: traffic still
-flows, so the leak is silent. The suite checks both the route and the wire:
+The UPF sends the GTP-U downlink to the gNB over N3. Without its return route it
+uses its default route on N6, and the tunnel crosses `br-n6c` while traffic still
+flows. The suite checks both the route and the wire:
 
 ```bash
 cd tests && make ran    # "UPF Downlink Route via N3", "No GTP-U on N6 Bridges"
 ```
 
-By hand (the UPF image has no `ip`), the network-setup init log must show the route:
+The UPF image has no `ip`; the network-setup init log shows the route:
 
 ```bash
 sudo k3s kubectl logs -n 5g deploy/upf-cloud -c network-setup | grep "return route"
 ```
 
-Expected:
-
-```
+```text
 [UPF][init] Adding return route for physical RAN subnet: 192.168.6.0/24
 ```
 
@@ -336,45 +271,41 @@ Expected:
 
 ## 5. Simulated RAN (UERANSIM)
 
-Detaching the physical RAN (above) leaves the core without a RAN. The phase that
-installs UERANSIM (`06-ueransim-mec`) is not maintained at the moment, and the
-dashboard does not offer it.
+Detaching the physical RAN leaves the core without a RAN. The phase that installs
+UERANSIM (`06-ueransim-mec`) is not maintained at the moment, and the dashboard
+does not offer it.
 
 ---
 
 ## Troubleshooting
 
-| Problem                                 | Cause                                         | Solution                                                                                                                                                                                        |
-| --------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ping 192.168.6.1` fails                | br-ran has no IP                              | Re-run overlay playbook; check `RAN_SUBNET` env var                                                                                                                                             |
-| `ping 10.203.0.101` fails from gNB      | Missing route on gNB                          | **Commercial femtocell:** set Default gateway = 192.168.6.1 in web UI. Software gNB: `ip route add 10.203.0.0/16 via 192.168.6.1`                                                               |
-| UPF can't reach gNB (no GTP-U downlink) | Missing return route in UPF                   | The route is part of the UPF's N3 attachment (`n3-upf-static`); the RAN page's *User plane* link reads it from the running UPF. `kelt run-piece ran_attach` puts it back |
-| AMF doesn't see gNB                     | PLMN mismatch or SCTP issue                   | Check MCC/MNC/TAC; `sudo modprobe sctp` on worker                                                                                                                                               |
-| `failed to find bridge br-ran`          | NAD / AMF reference `br-ran` but OVS never created it | Worker needs RAN NIC + overlay applied; restart `ds-net-setup-worker` on worker. Same root cause as a skipped physical-RAN configuration (table *OVS DaemonSet vs NAD*).                            |
-| Physical RAN is skipped during deploy   | `physical_ran_enabled` true, `br-ran` missing on worker | Apply `PHYSICAL_RAN_BRIDGE` to the worker VM (`kelt provision` reloads the worker when needed, or `vagrant reload worker`), then run `kelt run-piece ran_attach` or Attach on the dashboard's RAN page. |
-| br-ran persists after Disable           | DS pod restarted before teardown; old script  | Fixed: ovs-setup.sh tears down br-ran when RAN_BRIDGE_MODE=disabled. Run `kelt run-piece ran_detach` again: it restarts the setup pod when br-ran is still there |
-| NAD n2-physical persists after Disable  | Playbook only skipped creation, never deleted | Fixed: multus_install deletes the NAD when physical_ran_enabled=false. Run `kelt run-piece ran_detach` again            |
-| `macvlan: device or resource busy`      | n2-physical NAD misconfigured                 | Ensure NAD uses `type: ovs, bridge: br-ran`                                                                                                                                                     |
-| UE authenticated but no data            | PDU session fails at PFCP                     | Check SMF→UPF N4 connectivity; check UPF logs                                                                                                                                                   |
+| Problem | Cause | Solution |
+|---------|-------|----------|
+| `ping 192.168.6.1` fails | `br-ran` has no address | Run `kelt run-piece ran_attach`; the address is set by the worker's network setup pod |
+| `ping 10.203.0.101` fails from the gNB | The gNB has no route to the N3 subnet | Set the gNB's default gateway to `physical_ran_gateway`. A software gNB: `ip route add 10.203.0.0/16 via 192.168.6.1` |
+| No GTP-U downlink to the gNB | The UPF has no return route | The route is part of the UPF's N3 attachment (`n3-upf-static`); the RAN page's *User plane* link reads it from the running UPF. `kelt run-piece ran_attach` puts it back |
+| The AMF does not see the gNB | PLMN mismatch, or SCTP not loaded | Compare MCC, MNC and TAC with the table above; `sudo modprobe sctp` on the worker |
+| `failed to find bridge br-ran` | The AMF's attachment refers to `br-ran`, which does not exist | The worker needs its RAN NIC and the overlay; restart `ds-net-setup-worker`. Same cause as a skipped physical RAN configuration (*What runs where*) |
+| The physical RAN is skipped during deploy | `physical_ran_enabled` is true and `br-ran` is missing | Apply `PHYSICAL_RAN_BRIDGE` to the worker (`kelt provision` reloads it when needed, or `vagrant reload worker`), then run `kelt run-piece ran_attach` or Attach on the RAN page |
+| `br-ran` or `n2-ran` still there after Detach | Detach did not finish | Run `kelt run-piece ran_detach` again; it restarts the setup pod while `br-ran` is still there |
+| UE registered but no data | The PDU session fails at PFCP | Check the SMF to UPF N4 path and the UPF logs |
 
-### Useful Commands
+### Useful commands
 
 ```bash
-# Check OVS bridge details
+# OVS bridges
 sudo ovs-vsctl show
 
-# Check all bridge IPs on worker
+# Bridge addresses on the worker
 ip -4 addr show | grep -E 'br-(ran|n2|n3)'
 
-# Check UPF routing table
-sudo k3s kubectl exec -n 5g deploy/upf-cloud -- ip route
-
-# Check AMF NGAP listener
+# The AMF's NGAP listener
 sudo k3s kubectl exec -n 5g deploy/amf -- ss -Slnp | grep 38412
 
-# Capture GTP-U traffic on br-n3
+# GTP-U on br-n3
 sudo tcpdump -i br-n3 udp port 2152 -c 10
 
-# Check subscribers in MongoDB
-sudo k3s kubectl exec -n 5g deploy/mongodb -- mongosh open5gs --eval "db.subscribers.find()"
+# Subscriber IMSIs and slices, without the keys
+sudo k3s kubectl exec -n 5g deploy/mongodb -- mongosh open5gs --quiet \
+  --eval 'db.subscribers.find({}, {imsi: 1, "slice.sst": 1, _id: 0})'
 ```

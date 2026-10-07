@@ -14,7 +14,7 @@ prefix_len() { echo "${1#*/}"; }
 
 # Wait for N3, N6, and N6m interfaces
 echo "[UPF][init] Waiting for N3 and N6 interfaces..."
-while ! ip addr show n3 | grep -q "inet" || ! ip addr show n6 | grep -q "inet"; do
+while ! ip addr show n3 | grep -q "inet" || ! ip addr show n6c | grep -q "inet"; do
     sleep 1
 done
 echo "[UPF][init] Waiting for N6m (MEC) interface..."
@@ -38,8 +38,8 @@ ip link set dev ogstun mtu "$UE_MTU"
 ip link set ogstun up || true
 # Internet breakout is NATed on N6c only. Traffic to the MEC apps on N6m keeps
 # the UE address: the apps route the UE pools back through this UPF.
-iptables -t nat -C POSTROUTING -s "$UE_INTERNET_SUBNET" -o n6 -j MASQUERADE 2>/dev/null || \
-  iptables -t nat -A POSTROUTING -s "$UE_INTERNET_SUBNET" -o n6 -j MASQUERADE
+iptables -t nat -C POSTROUTING -s "$UE_INTERNET_SUBNET" -o n6c -j MASQUERADE 2>/dev/null || \
+  iptables -t nat -A POSTROUTING -s "$UE_INTERNET_SUBNET" -o n6c -j MASQUERADE
 
 # Configure TUN interface for the MEC DNN (ogstun2)
 if ! ip link show ogstun2 >/dev/null 2>&1; then
@@ -77,7 +77,7 @@ ip route replace unreachable default table 300
 
 # Configure sysctls
 sysctl -w net.ipv4.ip_forward=1
-for i in all n3 n6 n6m; do sysctl -w net.ipv4.conf.$i.rp_filter=0; done
+for i in all n3 n6c n6m; do sysctl -w net.ipv4.conf.$i.rp_filter=0; done
 
 # Configure policy routing (idempotent)
 # Keep N3 symmetric policy routing for GTP-U return traffic.
@@ -85,8 +85,8 @@ ip rule show | grep -q "iif n3 lookup 100" || ip rule add iif n3 lookup 100 pref
 ip route replace default via "$N3_GATEWAY" dev n3 table 100
 
 # Remove legacy rule that can misroute UE-destined return packets into N6.
-ip rule del iif n6 lookup 200 2>/dev/null || true
-ip route replace default via "$N6_GATEWAY" dev n6 table 200
+ip rule del iif n6c lookup 200 2>/dev/null || true
+ip route replace default via "$N6_GATEWAY" dev n6c table 200
 
 # Physical RAN return route: carried by the n3 interface itself (NAD
 # 5g/n3-upf-static, phase 04), so it exists before this script runs.
@@ -94,7 +94,7 @@ ip route replace default via "$N6_GATEWAY" dev n6 table 200
 # --- Redirect decapsulated (ogstun) traffic to the Data Network (N6) ---
 # Overrides the K3s (eth0) default gateway to prevent leaks onto the management network
 echo "[UPF][init] Redirecting default route to N6 Data Network interface..."
-ip route replace default via "$N6_GATEWAY" dev n6
+ip route replace default via "$N6_GATEWAY" dev n6c
 # --------------------------------------------------------------------------------
 
 echo "[UPF][init] Network setup complete."

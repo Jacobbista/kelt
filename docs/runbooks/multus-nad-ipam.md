@@ -88,7 +88,7 @@ sudo k3s kubectl -n 5g exec deploy/smf -- ip -o -4 addr show dev n4
 sudo k3s kubectl -n 5g exec deploy/upf-cloud -- ip addr show
 sudo k3s kubectl -n 5g exec deploy/upf-cloud -- ip -o -4 addr show dev n3
 sudo k3s kubectl -n 5g exec deploy/upf-cloud -- ip -o -4 addr show dev n4
-sudo k3s kubectl -n 5g exec deploy/upf-cloud -- ip -o -4 addr show dev n6
+sudo k3s kubectl -n 5g exec deploy/upf-cloud -- ip -o -4 addr show dev n6c
 ```
 
 ### 5. Whereabouts IPAM Configuration

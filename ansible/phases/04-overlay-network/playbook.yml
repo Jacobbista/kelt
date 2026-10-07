@@ -265,7 +265,7 @@
       run_once: true
       when: ran_bridge_restart and not ansible_check_mode
 
-# Pieces ran_attach: the AMF's n2phy port is added to br-ran by ovs-cni when
+# Pieces ran_attach: the AMF's n2ran port is added to br-ran by ovs-cni when
 # the pod starts. If br-ran was rebuilt under a running AMF, the port is gone
 # and only an AMF restart puts it back. Nothing when detached or already there.
 - name: "PHASE 4 | RAN AMF on br-ran"
@@ -274,7 +274,7 @@
   gather_facts: true
   tags: [ran_amf, never]
   tasks:
-    - name: Count the veths on br-ran (the AMF's n2phy port)
+    - name: Count the veths on br-ran (the AMF's n2ran port)
       ansible.builtin.shell: |
         set -o pipefail
         n=0
