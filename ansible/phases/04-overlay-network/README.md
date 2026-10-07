@@ -44,7 +44,7 @@ Multus enables multi-interface pods via NetworkAttachmentDefinitions (NADs). Eac
 
 OVS provides the programmable data plane:
 
-- **One bridge per 5G interface**: `br-n1`, `br-n2`, `br-n3`, `br-n4`, `br-n6e`, `br-n6c`, plus per-cell bridges (`br-n2-cell-{id}`, `br-n3-cell-{id}`)
+- **One bridge per 5G interface**: `br-n1`, `br-n2`, `br-n3`, `br-n4`, `br-n6c`, `br-n6m` on the worker (`br-n6e` on the edge node); per-cell bridges (`br-n2-cell-{id}`, `br-n3-cell-{id}`) only while UERANSIM is on
 - **VXLAN tunnels**: connecting worker ↔ edge nodes (global + per-cell)
 - **Extensible**: for OpenFlow, QoS, or network slicing features
 - **Traffic Engineering**: Bandwidth limiting, latency injection, packet loss simulation (see [Network Impairments](#network-impairments-and-qos) below)
@@ -125,7 +125,7 @@ A changed NAD rolls the Deployments that use it (annotation `kelt.io/nad-config`
 
 #### 6. Per-Cell NADs (Phase 4 Extension)
 
-When Phase 6 is enabled, this phase also creates one NAD per cell for N2 and N3 based on the topology declared in `ansible/phases/06-ueransim-mec/vars/topology.yml`.
+While `ueransim_enabled` is true, this phase also creates one NAD per cell for N2 and N3, for the cells in `ansible/phases/06-ueransim-mec/vars/topology.yml` (`ueransim_active_cells`). With UERANSIM off, phase 5 removes them once the AMF no longer uses them.
 
 - Role: `roles/cell_network_setup`
 - Creates: `5g/n2-cell-{id}`, `5g/n3-cell-{id}`
