@@ -19,6 +19,12 @@ keycloak_admin_password: "{{ lookup('ansible.builtin.env', 'KEYCLOAK_ADMIN_PASSW
 # The realm, the Keycloak path prefix and the external origins that fill the
 # realm's redirect URIs and web origins come from all.yml.
 
+# Access-token lifespan of the dashboard browser client, seconds. The SPA renews
+# with the refresh token shortly before expiry, and a refresh token dies with the
+# SSO session after 30 min idle: the lifespan must stay well under that, or the
+# renewal always fails and the session ends at the first expiry.
+dashboard_access_token_lifespan: 300
+
 # ── Northbound realm gating ─────────────────────────────────────────────────
 # The camara/positioning/placement realm objects (camara-location-read role,
 # g-camara-users group, camara-gateway / positioning-demo / placement-editor-proxy

@@ -219,7 +219,7 @@
           + ([dashboard_dev_external_url ~ '/*'] if (dashboard_dev_external_url | default('')) else []))
           | join('##') }}
 
-- name: Reconcile dashboard client origins and post-logout URIs
+- name: Reconcile dashboard client origins, post-logout URIs and token lifespan
   ansible.builtin.uri:
     url: "http://{{ hostvars[groups['workers'][0]]['ansible_host'] }}:{{ keycloak_nodeport }}{{ keycloak_path_prefix }}/admin/realms/{{ keycloak_realm }}/clients/{{ _kc_dashboard_client.json[0].id }}"
     method: PUT
@@ -231,7 +231,8 @@
            'redirectUris': _dashboard_allowed_redirects,
            'webOrigins': _dashboard_allowed_origins,
            'attributes': (_kc_dashboard_full.json.attributes | default({}))
-              | combine({'post.logout.redirect.uris': _dashboard_post_logout_uris})
+              | combine({'post.logout.redirect.uris': _dashboard_post_logout_uris,
+                         'access.token.lifespan': dashboard_access_token_lifespan | string})
          }, recursive=True) }}
     status_code: 204
   delegate_to: "{{ groups['masters'][0] }}"
@@ -244,6 +245,7 @@
     - (_kc_dashboard_full.json.redirectUris | default([])) != _dashboard_allowed_redirects
       or (_kc_dashboard_full.json.webOrigins | default([])) != _dashboard_allowed_origins
       or ((_kc_dashboard_full.json.attributes | default({})).get('post.logout.redirect.uris', '')) != _dashboard_post_logout_uris
+      or ((_kc_dashboard_full.json.attributes | default({})).get('access.token.lifespan', '')) != (dashboard_access_token_lifespan | string)
 
 - name: Reconcile positioning-demo client origins
   ansible.builtin.uri:

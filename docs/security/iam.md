@@ -71,7 +71,7 @@ identities carry no `org` and stay god-mode by design.
 | `camara-gateway` | confidential | `client_credentials` | The CAMARA Location gateway's own client; no `org` attribute, so it is the operator bypass (sees all tenants). Tokens carry `camara-location-read`. |
 | `camara-api-demo` | confidential | `client_credentials` | Reference per-consumer CAMARA API client. Scoped to a tenant by the `org` attribute on its service account (default `camara_org`). Model for a real integrator client. |
 | `positioning-demo` | public | PKCE | Browser app for the 3D positioning visualization. Emits the `org` claim from the user's attribute, so the demo is scoped to the logged-in user's tenant. |
-| `dashboard` | public | PKCE | Browser frontend of the operations dashboard. Tokens carry `dashboard-admin` or `dashboard-viewer` from the user's group, plus the `org` claim from the user's attribute (absent for the operator = god-mode). |
+| `dashboard` | public | PKCE | Browser frontend of the operations dashboard. Tokens carry `dashboard-admin` or `dashboard-viewer` from the user's group, plus the `org` claim from the user's attribute (absent for the operator = god-mode). Access tokens last 5 min (`dashboard_access_token_lifespan`): the SPA renews them with the refresh token, which keeps the SSO session (30 min idle) alive while a tab is open. |
 | `dashboard-readonly` | confidential | `client_credentials` | Headless read-only consumer (monitoring agent, public demo, CI smoke check). Tokens carry `dashboard-viewer` only. |
 | `placement-editor-proxy` | confidential | authorization-code (oauth2-proxy) | Gates the no-auth `placement-editor` SPA. A `groups` protocol mapper emits group membership so oauth2-proxy admits `g-positioning-editors` (service-plane EDIT) or `g-dashboard-admins`. |
 
@@ -381,7 +381,8 @@ take effect on already-provisioned clusters by default.
 Phase 08 includes an opt-in reconcile step that re-applies the resolved
 values via the Keycloak admin API (no DB reset). The reconciled fields are:
 
-- `dashboard` client `redirectUris`, `webOrigins`, `post.logout.redirect.uris`
+- `dashboard` client `redirectUris`, `webOrigins`, `post.logout.redirect.uris`,
+  `access.token.lifespan`
 - realm roles, groups, and composite links (managed by separate idempotent
   tasks; safe to re-run)
 

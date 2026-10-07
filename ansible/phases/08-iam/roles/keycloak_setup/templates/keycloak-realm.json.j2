@@ -87,6 +87,7 @@
       "protocol": "openid-connect",
       "attributes": {
         "pkce.code.challenge.method": "S256",
+        "access.token.lifespan": "{{ dashboard_access_token_lifespan }}",
         "post.logout.redirect.uris": "{{ dashboard_external_origin }}/*{% if dashboard_dev_external_url %}##{{ dashboard_dev_external_url }}/*{% endif %}"
       },
       "protocolMappers": [
