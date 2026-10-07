@@ -6,6 +6,22 @@ Every address and VNI below is declared once, in the **5G network plan** block o
 
 > **kubectl**: All verification commands run from master using `sudo k3s kubectl`.
 
+## Names of bridges, NADs and interfaces
+
+Every name starts with its plane, so the plane of a bridge, a NAD or a pod
+interface reads from the name:
+
+| Object | Pattern | Examples |
+|--------|---------|----------|
+| OVS bridge | `br-<plane>` | `br-n2`, `br-n6m`; `br-n2-cell-1` for a cell; `br-ran` for the physical RAN transport |
+| NAD, address from the pool | `<plane>-net` | `n3-net`, `n6m-net` |
+| NAD, fixed address | `<plane>-static`, or `<plane>-<nf>-static` when one NF needs its own routes | `n2-static`, `n3-upf-static` |
+| NAD for a cell or the RAN | `<plane>-cell-<n>`, `<plane>-ran` | `n2-cell-1`, `n2-ran` |
+| Interface inside a pod | `<plane>`, `<plane>c<n>` for a cell, `<plane>ran` on the RAN bridge | `n3`, `n6c`, `n2c1`, `n2ran` |
+
+The names of the RAN attachment are declared in `ansible/group_vars/all.yml`
+(`nad_n2_ran_name`, `amf_n2_ran_interface`).
+
 ## Interface Map
 
 ```mermaid
@@ -21,25 +37,30 @@ graph LR
     UPF_C["UPF-Cloud
     10.203.0.101 N3
     10.204.0.101 N4"]
-    UPF_E["UPF-Edge
+    UPF_E["UPF-Edge (no sessions)
     10.203.0.102 N3
     10.204.0.102 N4"]
     DN_C["Internet (N6c)"]
-    DN_E["MEC (N6e)"]
+    DN_M["Edge apps (N6m)
+    10.208.0.0/24"]
+    DN_E["Edge-local DN (N6e, unused)"]
     NRF["NRF
     (SBI discovery)"]
 
     UE -->|"N1 NAS"| AMF
     GNB -->|"N2 NGAP / SCTP 38412"| AMF
     GNB -->|"N3 GTP-U / UDP 2152"| UPF_C
-    GNB -->|"N3 GTP-U / UDP 2152"| UPF_E
+    GNB -.->|"N3"| UPF_E
     SMF -->|"N4 PFCP / UDP 8805"| UPF_C
-    SMF -->|"N4 PFCP / UDP 8805"| UPF_E
-    UPF_C -->|"N6c"| DN_C
-    UPF_E -->|"N6e"| DN_E
+    SMF -.->|"N4"| UPF_E
+    UPF_C -->|"N6c, NAT"| DN_C
+    UPF_C -->|"N6m, routed"| DN_M
+    UPF_E -.->|"N6e"| DN_E
     AMF <-->|"SBI HTTP/2"| NRF
     SMF <-->|"SBI HTTP/2"| NRF
 ```
+
+Dashed: configured, but serving no session (UPF-Edge is disabled; see [Data Networks](#data-networks)).
 
 ---
 
@@ -83,7 +104,7 @@ sudo k3s kubectl -n 5g get net-attach-def n1-net
 
 **Key messages**: NG Setup, Initial UE Message, PDU Session Resource Setup, Handover.
 
-**Physical RAN note**: when a physical gNB is connected via `br-ran`, the AMF also gets a secondary IP on the RAN subnet (`192.168.6.150`) via an additional Multus interface (`n2phy`). See [Physical RAN Integration](../deployment/physical-ran.md).
+**Physical RAN note**: when a physical gNB is connected via `br-ran`, the AMF also gets a secondary IP on the RAN subnet (`192.168.6.150`) via an additional Multus interface (`n2ran`). See [Physical RAN Integration](../deployment/physical-ran.md).
 
 **Verification**:
 ```bash

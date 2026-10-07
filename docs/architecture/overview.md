@@ -1,87 +1,137 @@
 # Architecture Overview
 
-This document describes what the system is, why it is built the way it is, and where each component runs. Read this before the other architecture documents.
+KELT runs a 5G network on one Linux host: an Open5GS core on Kubernetes, a
+radio access network that is either a physical gNB or UERANSIM, and an
+operations dashboard. This document describes the machines, where each
+component runs and how the deployment proceeds. The other architecture
+documents describe each layer in detail.
 
-## What This System Does
+## Components
 
-The testbed runs a complete 5G network stack, base station, user equipment, and 5G core, entirely on a single laptop. It is designed for:
+- **5G core**: the Open5GS network functions, with NGAP, PFCP and GTP-U
+  between them.
+- **RAN**: a physical gNB on the RAN transport network, or UERANSIM pods.
+- **Edge data network (N6m)**: application pods reached from the UE through the
+  UPF, without NAT.
+- **Edge node**: an optional KubeEdge node for workloads placed away from the
+  worker.
+- **Operations**: the dashboard, Keycloak for identity, and Prometheus, Loki and
+  Grafana for monitoring.
 
-- **5G protocol research**: real AMF/SMF/UPF/gNB interactions, not mocks
-- **Edge computing experiments**: workloads split between a cloud node and an edge node
-- **MEC (Multi-access Edge Computing)**: local traffic breakout via UPF-Edge
-- **Physical RAN integration**: swap UERANSIM for a real femtocell without changing the core
-
-Everything is automated via Ansible. A single `vagrant up` provisions 4 VMs, installs Kubernetes, deploys the 5G core, and starts the observability and control dashboard.
+`kelt up` provisions the VMs and runs the deployment phases with Ansible.
 
 ---
 
-## Infrastructure: Four VMs
+## Infrastructure: one host and its VMs
+
+The VMs run under VirtualBox and share a host-only management network. The
+`server` profile creates master, worker and ansible. The `laptop` profile, the
+default, also creates an edge VM, as does `EDGE_ENABLED=true` on a server.
+
+### Physical topology
 
 ```mermaid
-graph TB
-    subgraph MGMT["Management Network  192.168.56.0/24"]
-        direction LR
-        M["**MASTER**  192.168.56.10
-        ───────────────
-        K3s Server
-        API server · etcd
-        CoreDNS"]
-
-        W["**WORKER**  192.168.56.11
-        ───────────────
-        K3s Agent
-        CloudCore (KubeEdge)
-        Open5GS NFs
-        MongoDB · UPF-Cloud
-        OVS + Multus"]
-
-        E["**EDGE**  192.168.56.12
-        ───────────────
-        EdgeCore (KubeEdge)
-        gNB + UEs (UERANSIM)
-        or Physical RAN
-        OVS + Multus"]
-
-        A["**ANSIBLE**  192.168.56.13
-        ───────────────
-        Ansible Playbooks
-        Dashboard
-        (FastAPI + React)"]
-
-        M --- W
-        W --- E
-        W -. "VXLAN N2/N3/N4" .- E
+flowchart LR
+    UE["UE"]
+    GNB["gNB<br/>small cell"]
+    subgraph HOST["Host"]
+        NIC["NIC bridged<br/>into the worker"]
+        VMS["VMs on the<br/>host-only network"]
+        CFD["cloudflared"]
     end
+    NET(("Internet"))
+    CF["Cloudflare"]
+    BR["Browser"]
+
+    UE -- "NR radio" --- GNB
+    GNB -- "RAN transport<br/>N2, N3" --- NIC
+    NIC --- VMS
+    VMS -- "UE traffic" --> NET
+    CFD -- "tunnel" --> CF
+    BR --> CF
+    CFD -- "web surfaces" --> VMS
 ```
 
-| Node | IP | vCPU | RAM | Role |
-|------|-----|------|-----|------|
-| master | 192.168.56.10 | 4 | 4 GB | K3s control plane |
-| worker | 192.168.56.11 | 8 | 8 GB | K3s agent, CloudCore, 5G Core |
-| edge | 192.168.56.12 | 4 | 4 GB | KubeEdge EdgeCore, RAN workloads |
-| ansible | 192.168.56.13 | 2 | 1 GB | Ansible orchestration, Dashboard |
+The gNB reaches the core over the RAN transport network, the subnet set by
+`physical_ran_subnet`, for N2 and N3, without NAT. A host NIC is bridged into
+the worker VM on that segment; connecting a gNB is described in
+[Physical RAN](../deployment/physical-ran.md). UE traffic to the internet leaves
+the UPF on N6c, is translated by the UPF and by the worker, and exits through the
+host uplink ([5G Interfaces](5g-interfaces.md#data-networks)). `cloudflared` on
+the host keeps an outbound tunnel to Cloudflare, which carries the web surfaces
+to the front door on the worker
+([External tunnel](../deployment/external-tunnel.md)).
 
-The node addresses and the management subnet are declared as `node_ips` and
-`mgmt_subnet` in `ansible/group_vars/all.yml`. The Vagrantfile reads them to create
-the VMs and to generate the Ansible inventory, so roles take node addresses from the
-inventory rather than repeating them.
+### Inside the host
+
+```mermaid
+flowchart TB
+    GNB["gNB"]
+    subgraph HOST["Host-only network 192.168.56.0/24"]
+        M["master<br/>192.168.56.10"]
+        A["ansible<br/>192.168.56.13"]
+        subgraph W["worker 192.168.56.11"]
+            BRAN["br-ran"]
+            BN2["br-n2 (N2)"]
+            BN3["br-n3 (N3)"]
+            BN4["br-n4 (N4)"]
+            BN6C["br-n6c (N6c)"]
+            BN6M["br-n6m (N6m)"]
+            AMF["AMF"]
+            SMF["SMF"]
+            UPF["UPF"]
+            APP["Edge apps"]
+            NAT["NAT"]
+        end
+    end
+
+    GNB --- BRAN
+    BRAN -- "N2 (n2ran)" --- AMF
+    BRAN -- "N3, routed" --- BN3
+    BN2 --- AMF
+    BN3 --- UPF
+    SMF --- BN4 --- UPF
+    UPF --- BN6M --- APP
+    UPF --- BN6C --- NAT
+```
+
+The master runs the K3s server, CoreDNS and part of the monitoring agents. The
+worker runs the K3s agent and every other pod: the 5G network functions,
+identity, the exposure services, the edge apps, the front door and the
+dashboard frontend. The ansible VM runs the playbooks, the dashboard backend
+and its watchdog, and is not a Kubernetes node. The edge VM, when present, runs
+KubeEdge's EdgeCore; its maturity is recorded in [status](../status.md).
+
+Each `br-*` box is the OVS bridge of one plane. N1 and N6e are not drawn. The
+subnets and fixed addresses of the planes are in
+[5G Interfaces](5g-interfaces.md); the bridges are in
+[Network Topology](network-topology.md).
+
+| Node | IP | vCPU / RAM, `server` | vCPU / RAM, `laptop` |
+|------|-----|------|------|
+| master | 192.168.56.10 | 2 / 3 GB | 4 / 4 GB |
+| worker | 192.168.56.11 | 4 / 10 GB | 8 / 8 GB |
+| ansible | 192.168.56.13 | 1 / 1 GB | 2 / 1 GB |
+| edge | 192.168.56.12 | with `EDGE_ENABLED=true` | 4 / 4 GB |
+
+The addresses are `node_ips` and `mgmt_subnet` in `ansible/group_vars/all.yml`;
+the profiles are `TESTBED_PROFILE` in the Vagrantfile. The Vagrantfile creates
+the VMs and the Ansible inventory from those addresses, and the roles read node
+addresses from the inventory.
 
 ---
 
 ## Kubernetes Layer: K3s + KubeEdge
 
-The cluster uses two different control paths depending on the node:
+| Node | Kubernetes agent |
+|------|-----------------|
+| master | K3s server |
+| worker | K3s agent |
+| edge | KubeEdge EdgeCore, with its own containerd and no K3s agent |
 
-| Node | Kubernetes agent | Why |
-|------|-----------------|-----|
-| master | K3s server | Control plane |
-| worker | K3s agent (standard) | Full Kubernetes features available |
-| edge | KubeEdge EdgeCore only (no k3s-agent) | Avoids dual-kubelet conflict |
-
-**Why no k3s-agent on the edge node?**
-Running both k3s-agent and EdgeCore on the same node causes dual kubelet registration, competing CRI connections to containerd, and double pod management. The edge node runs standalone containerd + EdgeCore only. It appears as a standard Kubernetes Node in the API but is managed via the KubeEdge cloud-edge channel.
-
-**KubeEdge channel:**
+CloudCore runs as a pod in the `kubeedge` namespace on the worker. EdgeCore
+runs as a systemd service on the edge node and connects to CloudCore; the edge
+node then appears in the API as a schedulable node.
 
 ```mermaid
 graph LR
@@ -92,43 +142,45 @@ graph LR
     CC <-->|"WebSocket TCP/10000"| EC
 ```
 
-CloudCore runs on the **worker** node as a Kubernetes pod in the `kubeedge` namespace. EdgeCore runs as a systemd service on the edge node. Once connected, the edge node is schedulable like any other node.
+The edge node has known limitations, each with its workaround in
+[known-issues/](../known-issues/):
 
-**Known edge limitations** (documented with workarounds in [known-issues/](../known-issues/)):
-- No CoreDNS access → pods can't resolve service names
-- No automatic ConfigMap/Secret sync → inject values via env vars at deploy time
-- ServiceAccount token projection bugs → set `automountServiceAccountToken: false`
-- Multus env injection issue → use static conflist on edge instead of auto-mode
+- pods on it cannot resolve cluster service names (no CoreDNS);
+- ConfigMaps and Secrets are not synced, so values are injected as environment
+  variables at deploy time;
+- projected ServiceAccount tokens fail, so edge pods set
+  `automountServiceAccountToken: false`;
+- Multus runs with a static conflist instead of auto-mode.
 
 ---
 
 ## Networking Layer: Flannel + OVS + Multus
 
-The cluster uses two networking systems in parallel:
-
-| System | Scope | Purpose |
+| System | Scope | Provides |
 |--------|-------|---------|
-| Flannel (K3s default CNI) | All pods | Pod-to-pod connectivity, K8s services |
-| OVS + Multus (secondary CNI) | 5G pods only | Isolated per-interface 5G networks |
+| Flannel (K3s default CNI) | All pods | Pod-to-pod connectivity, Kubernetes services |
+| OVS + Multus (secondary CNI) | 5G pods and edge apps | One interface per plane, each on its own OVS bridge |
 
-**Why a secondary CNI?**
-Standard Kubernetes gives every pod one network interface (eth0 via Flannel). 5G network functions need multiple dedicated interfaces, one per N-reference-point (N1, N2, N3, N4, N6). Multus acts as a meta-CNI: it calls the primary CNI first (Flannel), then attaches additional interfaces as requested via `k8s.v1.cni.cncf.io/networks` annotations. Each secondary interface connects the pod to a dedicated OVS bridge, which is tunnelled to the peer node via VXLAN.
-
-See [Network Topology](network-topology.md) for the full OVS+VXLAN+Multus architecture.
+Every pod gets its first interface from Flannel. Multus adds the further
+interfaces a pod requests in its `k8s.v1.cni.cncf.io/networks` annotation, each
+attached to the OVS bridge of a plane. With an edge node, the bridges of the
+worker and of the edge are joined by VXLAN.
+[Network Topology](network-topology.md) describes the OVS, VXLAN and Multus
+layer.
 
 ---
 
 ## 5G Core Layer: Open5GS
 
-All 5G Core Network Functions run as Kubernetes pods on the **worker** node:
+The network functions run as pods on the worker:
 
 | NF | Function | Interface(s) |
 |----|----------|-------------|
 | NRF | Network Repository Function — service discovery | SBI (HTTP/2) |
 | AMF | Access & Mobility Management — UE registration | N1, N2, SBI |
 | SMF | Session Management — PDU session control | N4, SBI |
-| UPF-Cloud | User Plane Function — internet breakout | N3, N4, N6 |
-| UPF-Edge | User Plane Function — MEC local breakout | N3, N4, N6 |
+| UPF-Cloud | User Plane Function — the anchor of every session | N3, N4, N6c, N6m |
+| UPF-Edge | User Plane Function — configured, serves no session | N3, N4, N6e |
 | UDM | Unified Data Management | SBI |
 | UDR | Unified Data Repository | SBI |
 | AUSF | Authentication Server Function | SBI |
@@ -137,17 +189,21 @@ All 5G Core Network Functions run as Kubernetes pods on the **worker** node:
 | NSSF | Network Slice Selection Function | SBI |
 | MongoDB | Subscriber database (UDR backend) | — |
 
-NFs discover each other via NRF (Service-Based Interface over HTTP/2). Static IP assignments ensure NFs are reachable at predictable addresses on their respective N-interfaces, necessary because KubeEdge does not provide CoreDNS to edge pods.
+The network functions find each other through the NRF over the
+Service-Based Interface (HTTP/2). Fixed addresses are kept only where a peer
+needs the address in its configuration (the gNB needs the AMF, the SMF lists the
+UPF); [5G Interfaces](5g-interfaces.md) lists them.
 
 ---
 
 ## RAN Layer: Simulated or Physical
 
-The testbed supports two RAN modes, selectable at deploy time or via the dashboard:
-
 ### UERANSIM (Simulated)
 
-gNB and UE pods run on the edge node, scheduled via KubeEdge. They connect to AMF (N2) and UPF (N3) through the OVS overlay:
+The gNB and UE pods are placed on the edge node by default (`node_defaults` in
+`ansible/phases/06-ueransim-mec/vars/topology.yml`) and reach the AMF (N2) and the
+UPF (N3) through the overlay. Without an edge VM they need another node. Its
+maturity is recorded in [status](../status.md).
 
 ```mermaid
 graph LR
@@ -173,77 +229,113 @@ graph LR
     GNB -->|"N3 / GTP-U"| BR_N3_E --> VXLAN_N3 --> BR_N3_W --> UPF
 ```
 
-Topology is configurable in `ansible/phases/06-ueransim-mec/vars/topology.yml` (number of cells, UEs per cell, APN).
+The same file sets the number of cells, the UEs per cell and their DNN.
 
-### Physical RAN (Femtocell)
+### Physical RAN
 
-A real gNB (e.g. nCELL-F2240) connects to the worker VM via a bridged NIC. The worker acts as a transport router: OVS patch ports bridge the physical RAN subnet (`192.168.6.0/24`) into the N2 and N3 overlays, letting the physical gNB reach AMF and UPF through the same logical paths as UERANSIM.
+```mermaid
+graph LR
+    UE["UE"]
+    GNB["gNB"]
+    BRAN["br-ran
+    (worker)"]
+    BN3["br-n3
+    (worker)"]
+    AMF["AMF pod
+    n2ran"]
+    UPF["UPF-Cloud pod"]
 
-See [Physical RAN Integration](../deployment/physical-ran.md) for setup.
+    UE -->|"NR radio"| GNB
+    GNB -->|"RAN transport"| BRAN
+    BRAN -->|"N2 / NGAP"| AMF
+    BRAN -->|"N3 / GTP-U, routed"| BN3 --> UPF
+```
+
+A physical gNB is on the RAN transport network, bridged into the worker VM as
+`br-ran`. The AMF has an interface on `br-ran`, `n2ran`, where the gNB's NGAP
+association terminates. The worker routes GTP-U from `br-ran` to `br-n3` and the
+UPF. Connecting a gNB is described in
+[Physical RAN Integration](../deployment/physical-ran.md).
 
 ---
 
-## Control Plane: Out-of-Band Dashboard
+## Operations: the dashboard
 
-The dashboard is deployed out-of-band, separate from the 5G workloads, so a fault in the control surface cannot affect the data or control plane. This mirrors professional network management, where the OAM plane is isolated from the production data and control plane.
-
-Access URLs and the cluster-versus-dev frontend model: [Dashboard Overview](../dashboard/overview.md#access). Grafana and Prometheus URLs: [Phase 7](../deployment/phases.md).
+The dashboard backend runs on the ansible VM, outside the cluster; its frontend
+runs in the cluster, with an optional development frontend on the ansible VM.
+Access and the two frontends: [Dashboard Overview](../dashboard/overview.md#access).
+Grafana and Prometheus: [Phase 7](../deployment/phases.md).
 
 ---
 
 ## Deployment Flow
 
-Running `vagrant up` executes the following sequence automatically:
+`kelt up` runs the phases in this order; dashed phases are optional:
 
 ```mermaid
 flowchart TD
-    V["vagrant up"] --> P1
+    V["kelt up"] --> P1
     
-    P1["Phase 1 · Infrastructure ~2min
+    P1["Phase 1 · Infrastructure
     OVS, packages, kernel, time sync"]
     
-    P2["Phase 2 · Kubernetes ~3min
+    P2["Phase 2 · Kubernetes
     K3s server + agent"]
     
-    P3["Phase 3 · KubeEdge ~2min
+    P3["Phase 3 · KubeEdge
     CloudCore on worker, EdgeCore on edge"]
     
-    P4["Phase 4 · Overlay Network ~3min
+    P4["Phase 4 · Overlay Network
     OVS bridges + VXLAN + Multus + NADs"]
     
-    P5["Phase 5 · 5G Core ~5min
+    P5["Phase 5 · 5G Core
     Open5GS NFs + MongoDB + subscribers"]
     
-    P6["Phase 6 · UERANSIM ~3min
+    P6["Phase 6 · UERANSIM
     gNB + UE pods DEPLOY_MODE=full only"]
     
-    P7["Phase 7 · Observability ~3min
+    P7["Phase 7 · Observability
     Prometheus + Loki + Grafana"]
     
-    P8["Phase 8 · IAM ~2min
+    P8["Phase 8 · IAM
     Keycloak + PostgreSQL"]
 
-    P9["Phase 9 · Dashboard ~2min
-    FastAPI + React on ansible VM"]
+    P9["Phase 9 · Dashboard
+    backend on the ansible VM, frontend in the cluster"]
+
+    P10["Phase 10 · Northbound
+    CAMARA gateway, positioning (opt-in)"]
+
+    P11["Phase 11 · Front door
+    nginx edge for kelt-*.domain"]
+
+    P12["Phase 12 · Apps
+    local registry, edge apps (opt-in)"]
+
+    P13["Phase 13 · Network policies
+    declared flows per namespace"]
     DONE(["5G testbed ready"])
 
     P1 --> P2 --> P3 --> P4 --> P5
     P5 --> P6
     P5 --> P7
     P6 --> P7
-    P7 --> P8 --> P9 --> DONE
+    P7 --> P8 --> P9 --> P10 --> P11 --> P12 --> P13 --> DONE
 
     style P6 stroke-dasharray: 5 5
+    style P10 stroke-dasharray: 5 5
+    style P12 stroke-dasharray: 5 5
 ```
 
-After Phase 5 (without UERANSIM), the 5G core is running and waiting for a RAN to connect. UERANSIM can be added later or a physical gNB can be connected.
+After phase 5 the core is running and waits for a RAN: UERANSIM (phase 6) or a
+physical gNB. Each phase is described in [Deployment Phases](../deployment/phases.md).
 
 ---
 
 ## Related Documentation
 
-- [Virtualization Layers](virtualization-layers.md): how the 5 abstraction layers stack on top of each other
-- [Network Topology](network-topology.md): OVS, VXLAN, Multus, and NADs in depth
-- [5G Interfaces](5g-interfaces.md): N1, N2, N3, N4, N6 subnets, protocols, and IPs
-- [Deployment Phases](../deployment/phases.md): what each phase does and how to run it individually
+- [Virtualization Layers](virtualization-layers.md): the layers from host to network functions
+- [Network Topology](network-topology.md): OVS, VXLAN, Multus and NADs
+- [5G Interfaces](5g-interfaces.md): planes, subnets, fixed addresses, protocols
+- [Deployment Phases](../deployment/phases.md): each phase and how to run it alone
 - [Dashboard Overview](../dashboard/overview.md): dashboard architecture and modules

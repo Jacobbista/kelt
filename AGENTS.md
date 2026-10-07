@@ -1,7 +1,7 @@
 # AGENTS.md
 
-KELT is a reproducible 5G cloud-edge testbed: Vagrant provisions up to three VMs
-(master, worker, optional edge), Ansible deploys K3s, KubeEdge, an Open5GS 5G
+KELT is a reproducible 5G cloud-edge testbed: Vagrant provisions three or four
+VMs (master, worker, ansible, optional edge), Ansible deploys K3s, KubeEdge, an Open5GS 5G
 core, and an operations dashboard on top of per-interface VXLAN overlays.
 
 `kelt` drives everything. It carries two interfaces over one implementation: an
@@ -77,7 +77,13 @@ Breaking any of these breaks a deployment in a way that is slow to diagnose.
 Coding standards, phase layout, template rules, documentation tone, and the
 commit and release workflow live in
 [docs/development/contributing.md](docs/development/contributing.md). Read it
-before editing Ansible, the dashboard, or the CLI. Anything the dashboard changes
+before editing Ansible, the dashboard, the CLI, or any document.
+
+Documentation is descriptive, never justificatory: it says what a component is,
+where it runs and what it does, in plain full sentences, without arguing that
+the design is right. Each fact lives once, at its owner document; facts of one
+operator's site stay out of the repository. The full rules are in
+contributing.md, "Tone and format". Anything the dashboard changes
 on the testbed is a piece of the playbooks run by `ansible/tools/kelt-piece`
 (contributing.md, "Pieces"); nothing new calls `ansible-playbook` directly.
 Before changing the dashboard UI, read

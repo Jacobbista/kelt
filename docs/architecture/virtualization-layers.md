@@ -7,7 +7,7 @@ graph BT
     L1["Layer 1 · Physical Host
     VT-x/AMD-V · Linux/macOS/Windows"]
     L2["Layer 2 · Virtual Machines
-    Vagrant + VirtualBox · 4 VMs · 192.168.56.0/24"]
+    Vagrant + VirtualBox · 3 or 4 VMs · 192.168.56.0/24"]
     L3["Layer 3 · Kubernetes
     K3s + KubeEdge + Flannel · pod scheduling · services"]
     L4["Layer 4 · 5G Overlay Network
@@ -26,7 +26,7 @@ Read each section top-down to understand what each layer provides, how it is imp
 
 ### What it provides
 
-Hardware compute, storage, and the hypervisor entry point. All four VMs share this host's CPU, RAM, and NIC.
+Hardware compute, storage, and the hypervisor entry point. All the VMs share this host's CPU, RAM, and NIC.
 
 ### Requirements
 
@@ -311,7 +311,7 @@ The complete 5G SA (Standalone) core as defined by 3GPP Release 16, plus a simul
 - **Open5GS**: open-source 5G SA core (AMF, SMF, UPF, NRF, UDM, UDR, AUSF, PCF, BSF, NSSF)
 - **MongoDB**: persistent store for UDR (subscriber data, session contexts)
 - **UERANSIM**: 5G NR RAN + UE simulator
-- **Physical RAN**: femtocell (e.g. nCELL-F2240) connected via OVS bridging
+- **Physical RAN**: a femtocell or small cell connected via OVS bridging
 
 ### How NFs find each other
 

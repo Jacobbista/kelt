@@ -323,6 +323,19 @@ the edge deployment. Open investigations are tracked in [gaps.md](../gaps.md).
 - No em-dashes in prose. Use commas or restructure the sentence. Tables and code
   blocks are unaffected.
 - No editorial commentary ("Note that...", "Keep in mind...").
+- Descriptive, never justificatory. Say what a component is, where it runs and
+  what it does. Do not argue that a design is right, sell it, or defend it: no
+  "Why X?" sections, no "so that a fault cannot...", no "this mirrors
+  professional practice", no "real" or "full" as praise. A reason is stated
+  only when a reader needs it to operate the system, as a fact ("the gNB needs
+  the AMF address"), not as an argument.
+- Plain full sentences, not telegraphic fragments. Short, but whole.
+- Each fact once, at its owner document (map in [docs/README.md](../README.md));
+  everywhere else links to it and does not repeat the value.
+- Only what KELT sets. Facts of one operator's site (devices, models, their LAN
+  addresses, a router's role) belong in that operator's own notes, not here.
+- No claim that was not measured or checked (durations, rates, support for a
+  platform that was never run).
 - H1 for the title, H2 for major sections, code blocks with language hints,
   tables for structured data.
 
