@@ -268,7 +268,7 @@ Anchoring a DNN at a UPF on another site is a direction in the [roadmap](../road
 
 ## Per-Cell Network Configuration
 
-For multi-gNB deployments, each cell has its own dedicated N2/N3 subnet and VXLAN tunnel:
+With UERANSIM on, each simulated cell has its own N2 and N3 subnet, and its own VXLAN tunnel when an edge node exists:
 
 | Cell | N2 Subnet | N3 Subnet | VNI N2 | VNI N3 |
 |------|-----------|-----------|--------|--------|
@@ -276,7 +276,7 @@ For multi-gNB deployments, each cell has its own dedicated N2/N3 subnet and VXLA
 | Cell 2 | 10.202.2.0/24 | 10.203.2.0/24 | 1022 | 1032 |
 | Cell N | 10.202.N.0/24 | 10.203.N.0/24 | 102N | 103N |
 
-Driven by `ansible/phases/06-ueransim-mec/vars/topology.yml`.
+The cells are listed in `ansible/phases/06-ueransim-mec/vars/topology.yml`. They exist only while `ueransim_enabled` is true; how they are created and removed is in [Network Topology](network-topology.md).
 
 ---
 

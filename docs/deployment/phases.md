@@ -164,11 +164,11 @@ sudo k3s kubectl get nodes
 
 - Installs CNI binaries
 - Deploys Multus CNI DaemonSets
-- Creates OVS bridges (br-n1, br-n2, br-n3, br-n4, br-n6e, br-n6c, br-n6m)
+- Creates OVS bridges: br-n1, br-n2, br-n3, br-n4, br-n6c and br-n6m on the worker; br-n6e on the edge node, when there is one
 - Establishes VXLAN tunnels between worker and edge (when edge enabled)
 - Creates NetworkAttachmentDefinitions (NADs): a pool `<plane>-net` and a static `<plane>-static` per plane, including `n6m-net`/`n6m-static` in the `mec` namespace for MEC services (with the routes to the UE pools through the UPF) and `5g/n6m-static` for the UPF, and moves fixed-address attachments that still sit on a pool NAD to its static twin
 - Rolls every Deployment attached to an overlay NAD whose config changed (annotation `kelt.io/nad-config`), since a pod reads its NADs only when it is created
-- Creates per-cell networks
+- Creates the per-cell bridges and NADs of the active UERANSIM cells, only while `ueransim_enabled` is true
 
 ### Key files
 

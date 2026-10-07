@@ -42,7 +42,7 @@ The physical NIC is only involved when using **Physical RAN** mode: the host NIC
 
 ### Scaling limits
 
-A single host is the fundamental constraint. All four VMs compete for the same physical CPU and RAM. The worker node carries the heaviest load (8 vCPU, 8 GB RAM) because it runs all 5G Core NFs. On a host with fewer than 16 GB RAM total, the worker may OOM under load.
+A single host is the fundamental constraint. All the VMs share its CPU and RAM. The worker carries the heaviest load because it runs all the 5G core NFs; its size per profile is in [Overview](overview.md#inside-the-host). On a host with fewer than 16 GB RAM total, the worker may OOM under load.
 
 ### Production path
 
@@ -54,7 +54,7 @@ Replace VirtualBox with bare metal or a cloud hypervisor (KVM, ESXi, AWS/GCP). T
 
 ### What it provides
 
-Network isolation, resource limits, and OS-level separation between nodes. Each VM has its own kernel, network stack, and file system. The 192.168.56.0/24 management network connects all four VMs.
+Network isolation, resource limits, and OS-level separation between nodes. Each VM has its own kernel, network stack, and file system. The 192.168.56.0/24 management network connects all the VMs.
 
 ### Technology
 
@@ -274,7 +274,7 @@ Additionally, the Multus configuration differs:
 
 ### Per-cell network scaling
 
-For multi-gNB deployments, additional per-cell bridges are created:
+With UERANSIM on, each simulated cell gets its own bridges:
 
 | Bridge | VNI | Subnet | Purpose |
 |--------|-----|--------|---------|
@@ -283,7 +283,7 @@ For multi-gNB deployments, additional per-cell bridges are created:
 | br-n2-cell-N | 102N | 10.202.N.0/24 | Cell N dedicated N2 |
 | br-n3-cell-N | 103N | 10.203.N.0/24 | Cell N dedicated N3 |
 
-This is driven by `vars/topology.yml` in Phase 6.
+The cells are listed in `vars/topology.yml` of phase 6 and exist only while `ueransim_enabled` is true.
 
 ### Scaling limits and production evaluation
 
