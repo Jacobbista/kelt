@@ -110,7 +110,7 @@ export default function AppHeader({ runtime, serverTime }) {
   // runtime.mode when the frontend variable is unset (older bundles).
   const mode = (env("VITE_FRONTEND_MODE") || runtime.mode || "unknown").toLowerCase();
   const modeCls = mode === "dev" ? "bg-amber-600 text-amber-50" : mode === "prod" ? "bg-emerald-600 text-emerald-50" : "bg-slate-600 text-slate-100";
-  const modeBadge = <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${modeCls}`}>{mode}</span>;
+  const modeBadge = <span className={`inline-flex h-5 items-center rounded px-1.5 text-[10px] font-bold uppercase leading-none ${modeCls}`}>{mode}</span>;
   const badge = roleBadge(auth.roles);
   const signedIn = auth.enabled && auth.user;
 
@@ -164,7 +164,7 @@ export default function AppHeader({ runtime, serverTime }) {
         )}
 
         <span className="mx-1 h-5 w-px bg-slate-800" aria-hidden="true" />
-        <span title={`${mode === "dev" ? "Dev frontend (Vite)" : mode === "prod" ? "Cluster frontend" : "Frontend"}\nBackend code: ${runtime.runtime_source}`}>{modeBadge}</span>
+        <span className="flex items-center" title={`${mode === "dev" ? "Dev frontend (Vite)" : mode === "prod" ? "Cluster frontend" : "Frontend"}\nBackend code: ${runtime.runtime_source}`}>{modeBadge}</span>
         <button
           ref={syncRef}
           type="button"

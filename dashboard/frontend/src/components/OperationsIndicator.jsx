@@ -6,13 +6,11 @@ import useResource from "../data/useResource";
 import usePopover, { belowRight } from "../hooks/usePopover";
 import { headerSummary, progressOf, resultOf } from "../lib/operations";
 import SignalBars from "./SignalBars";
+import { shortWhen } from "../lib/when";
 
 const TONE = { run: "text-indigo-300", ok: "text-emerald-400", bad: "text-rose-400", muted: "text-slate-500" };
 const MARK = { ok: "✓", bad: "✗" };
-const hhmm = (iso) => {
-  const d = iso ? new Date(iso) : null;
-  return d && !Number.isNaN(d.getTime()) ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }) : "";
-};
+
 
 function Panel({ summary, pieces, onClose, anchorRef, onOpen }) {
   const { ref, style } = usePopover(anchorRef, onClose, belowRight);
@@ -32,7 +30,7 @@ function Panel({ summary, pieces, onClose, anchorRef, onOpen }) {
       className="fixed z-50 w-80 rounded-lg border border-slate-700 bg-slate-900 shadow-xl shadow-black/40">
       <div className="divide-y divide-slate-800">
         {summary.running.map((r) => line(r, progressOf(r, pieces), "run"))}
-        {last && line(last, `${MARK[lastRes.tone] || "·"} ${hhmm(last.ended || last.started)}`, lastRes.tone)}
+        {last && line(last, `${MARK[lastRes.tone] || "·"} ${shortWhen(last.ended || last.started)}`, lastRes.tone)}
         {!n && !last && <div className="px-3 py-3 text-xs text-slate-500">No operations yet.</div>}
       </div>
       <div className="flex items-center justify-between border-t border-slate-800 px-3 py-2 text-[11px] text-slate-500">

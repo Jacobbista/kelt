@@ -36,6 +36,9 @@ export default function AccountMenu({ onClose, anchorRef }) {
   // DevModeIndicator renders only for an admin on the prod frontend.
   const showDevSwitch = auth.roles.includes("dashboard-admin")
     && (env("VITE_FRONTEND_MODE") || "").toLowerCase() !== "dev";
+  // The account block already ends with a line: log out draws its own only
+  // when the dev frontend section sits between them.
+  const divider = showDevSwitch ? "mt-1 border-t border-slate-800" : "mt-1";
   // Which tenant's CAMARA assets the account sees: its own org, or all of them
   // when the token carries no org claim (operator).
   const scopeLabel = auth.org ? `tenant ${auth.org}` : "all tenants";
@@ -91,13 +94,13 @@ export default function AccountMenu({ onClose, anchorRef }) {
         <button
           type="button"
           onClick={() => setAsking(true)}
-          className="mt-1 flex w-full items-center rounded border-t border-slate-800 px-2 py-1.5 text-left text-slate-300 hover:bg-slate-800 hover:text-white"
+          className={`flex w-full items-center rounded px-2 py-1.5 text-left text-slate-300 hover:bg-slate-800 hover:text-white ${divider}`}
         >
           Log out
         </button>
       )}
       {auth.enabled && auth.user && asking && (
-        <div className="mt-1 border-t border-slate-800 px-2 pb-1 pt-2">
+        <div className={`px-2 pb-1 pt-2 ${divider}`}>
           <p className="text-slate-300">End this dashboard session?</p>
           <div className="mt-2 flex justify-end gap-2">
             <button type="button" className={btn.ghost} onClick={() => setAsking(false)} disabled={loggingOut}>Cancel</button>
