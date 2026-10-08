@@ -53,9 +53,12 @@ kubectl() {
     # carrying quotes/spaces (e.g. node InternalIP, the image range). The login
     # shell also prints the testbed banner ("[Testbed] Profile: ...") on stdout
     # ahead of the output, so strip it or it contaminates every parsed value.
-    local remote="sudo k3s kubectl" a
-    for a in "$@"; do remote+=" $(printf '%q' "$a")"; done
-    vagrant ssh master -c "$remote" 2>/dev/null < /dev/null | sed '/^\[Testbed\]/d'
+    # stdin reaches kubectl only when an argument is "-" (a manifest piped in, as
+    # in `apply -f -`); otherwise it is closed, so vagrant ssh cannot swallow the
+    # stdin of a calling `while read` loop.
+    local remote="sudo k3s kubectl" a stdin=/dev/null
+    for a in "$@"; do remote+=" $(printf '%q' "$a")"; [ "$a" != "-" ] || stdin=/dev/stdin; done
+    vagrant ssh master -c "$remote" 2>/dev/null <"$stdin" | sed '/^\[Testbed\]/d'
   fi
 }
 
