@@ -34,44 +34,68 @@ default, also creates an edge VM, as does `EDGE_ENABLED=true` on a server.
 flowchart LR
     UE["UE"]
     GNB["gNB<br/>small cell"]
+    SW["switch"]
     subgraph HOST["Host"]
-        NIC["NIC bridged<br/>into the worker"]
-        VMS["VMs on the<br/>host-only network"]
-        CFD["cloudflared"]
+        RNIC["RAN NIC<br/>PHYSICAL_RAN_BRIDGE"]
+        VMS["VMs<br/>host-only network"]
+        VNAT["VirtualBox NAT"]
+        CFD["cloudflared<br/>optional"]
+        LBR["Browser<br/>on the host"]
+        UNIC["uplink NIC"]
     end
     NET(("Internet"))
-    CF["Cloudflare"]
+    CF["Cloudflare<br/>optional"]
     BR["Browser"]
 
     UE -- "NR radio" --- GNB
-    GNB -- "RAN transport<br/>N2, N3" --- NIC
-    NIC --- VMS
-    VMS -- "UE traffic" --> NET
-    CFD -- "tunnel" --> CF
-    BR --> CF
-    CFD -- "web surfaces" --> VMS
+    GNB -- "RAN transport<br/>N2, N3" --- SW
+    SW --- RNIC
+    RNIC -- "bridged into<br/>the worker" --- VMS
+    VMS -- "UE traffic,<br/>VM egress" --> VNAT
+    VNAT --> UNIC
+    UNIC --- NET
+    LBR -- "web surfaces,<br/>host-only network" --> VMS
+    CFD -.-> UNIC
+    NET -.- CF
+    BR -.-> CF
+    CFD -. "web surfaces" .-> VMS
 ```
 
 The gNB reaches the core over the RAN transport network, the subnet set by
-`physical_ran_subnet`, for N2 and N3, without NAT. A host NIC is bridged into
-the worker VM on that segment; connecting a gNB is described in
-[Physical RAN](../deployment/physical-ran.md). UE traffic to the internet leaves
-the UPF on N6c, is translated by the UPF and by the worker, and exits through the
-host uplink ([5G Interfaces](5g-interfaces.md#data-networks)). `cloudflared` on
-the host keeps an outbound tunnel to Cloudflare, which carries the web surfaces
-to the front door on the worker
-([External tunnel](../deployment/external-tunnel.md)).
+`physical_ran_subnet`, for N2 and N3, without NAT. The gNB and a host NIC share
+that layer-2 segment, through a switch or a direct cable, and the NIC is bridged
+into the worker VM; connecting a gNB is described in
+[Physical RAN](../deployment/physical-ran.md).
+
+The VMs reach the internet through VirtualBox NAT and the host's uplink NIC. UE
+traffic to the internet leaves the UPF on N6c and is translated three times: by
+the UPF, by the worker on its egress interface, and by VirtualBox NAT
+([5G Interfaces](5g-interfaces.md#data-networks)). UE traffic to the edge apps
+leaves the UPF on N6m, is routed, and keeps the UE's address.
+
+The web surfaces are reached from the host over the host-only network, on the
+worker's NodePorts. A public domain is optional: with `EXTERNAL_BASE_DOMAIN`
+set, `cloudflared` on the host keeps an outbound tunnel to Cloudflare over the
+uplink, and the tunnel carries the web surfaces to the front door on the worker
+([External tunnel](../deployment/external-tunnel.md)). Dashed: present only
+with a domain. Signing in needs HTTPS: without a domain, the dashboard answers
+over HTTP and its sign-in page reports that HTTPS is required
+([External access](../security/external-access.md)).
 
 ### Inside the host
 
 ```mermaid
 flowchart TB
     GNB["gNB"]
+    VNAT["VirtualBox NAT"]
     subgraph HOST["Host-only network 192.168.56.0/24"]
         M["master<br/>192.168.56.10"]
         A["ansible<br/>192.168.56.13"]
         subgraph W["worker 192.168.56.11"]
+            RNIC["enp0s9<br/>bridged RAN NIC"]
+            ENIC["enp0s3<br/>egress, masquerade"]
             BRAN["br-ran"]
+            BN1["br-n1 (N1)"]
             BN2["br-n2 (N2)"]
             BN3["br-n3 (N3)"]
             BN4["br-n4 (N4)"]
@@ -79,20 +103,21 @@ flowchart TB
             BN6M["br-n6m (N6m)"]
             AMF["AMF"]
             SMF["SMF"]
-            UPF["UPF"]
+            UPF["UPF-Cloud"]
             APP["Edge apps"]
-            NAT["NAT"]
         end
     end
 
-    GNB --- BRAN
+    GNB --- RNIC --- BRAN
     BRAN -- "N2 (n2ran)" --- AMF
     BRAN -- "N3, routed" --- BN3
+    BN1 --- AMF
     BN2 --- AMF
     BN3 --- UPF
     SMF --- BN4 --- UPF
     UPF --- BN6M --- APP
-    UPF --- BN6C --- NAT
+    UPF --- BN6C -- "routed" --- ENIC
+    ENIC --> VNAT
 ```
 
 The master runs the K3s server, CoreDNS and part of the monitoring agents. The
@@ -102,7 +127,11 @@ dashboard frontend. The ansible VM runs the playbooks, the dashboard backend
 and its watchdog, and is not a Kubernetes node. The edge VM, when present, runs
 KubeEdge's EdgeCore; its maturity is recorded in [status](../status.md).
 
-Each `br-*` box is the OVS bridge of one plane. N1 and N6e are not drawn. The
+Each `br-*` box is the OVS bridge of one plane; the worker routes between them
+only where the arrows say "routed". `enp0s3`, `enp0s8` (host-only, not drawn)
+and `enp0s9` are the names VirtualBox gives the worker's three NICs. Not drawn:
+N6e and UPF-Edge, which serve no session, and the netshoot debug pod, which has
+an attachment on every plane. The
 subnets and fixed addresses of the planes are in
 [5G Interfaces](5g-interfaces.md); the bridges are in
 [Network Topology](network-topology.md).

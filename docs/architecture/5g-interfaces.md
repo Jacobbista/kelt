@@ -249,7 +249,7 @@ The testbed has one site and one anchor UPF (UPF-Cloud), which serves both DNNs.
 | DNN | Destination | Leaves on | Address seen by the far end |
 |-----|-------------|-----------|-----------------------------|
 | `internet` | an N6m app (`10.208.0.0/24`) | N6m, routed | the UE's own address |
-| `internet` | anything else | N6c, then the worker's egress | NATed (UPF, then worker) |
+| `internet` | anything else | N6c, then the worker's egress | NATed (UPF, worker, VirtualBox NAT) |
 | `mec` | an N6m app | N6m, routed | the UE's own address |
 | `mec` | anything else | nowhere (unreachable) | — |
 

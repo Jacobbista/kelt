@@ -39,6 +39,11 @@ testbed uses the per-service LAN NodePorts below (LAN-only operation). A single
 per-service `*_external_origin` override still wins over the derived value, for a
 deliberate one-off.
 
+The LAN NodePorts serve HTTP. Browsers give the PKCE sign-in its cryptography
+only on HTTPS or `localhost`, so on these origins the dashboard and the
+positioning demo cannot sign in; the dashboard's sign-in page says so. The
+NodePorts are on the host-only network, which only the host reaches.
+
 ## What needs an external entry point
 
 Four HTTP surfaces carry external traffic. Each is reached as a subdomain through
