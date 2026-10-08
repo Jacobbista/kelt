@@ -64,7 +64,8 @@ a measurement source itself: it polls the adapter that declared that
 source over `GET /measurement/{id}` and converts the answer to WGS84 with
 its blueprint. Adapters register with the engine when they start and keep
 a heartbeat, carrying their capabilities (source name, kinds, frame,
-precision class); a silent adapter is evicted and the rest keeps serving.
+precision class, how the source reports); a silent adapter is evicted and the
+rest keeps serving.
 With no adapter tracking an asset the gateway answers `422 UNABLE_TO_LOCATE`.
 
 The two real sources reach their adapters differently, and both cross the
@@ -101,7 +102,7 @@ without a testbed release.
 | `Service positioning-engine` | ClusterIP |
 | `Deployment/Service synthetic-adapter` | Standalone reference synthetic adapter (ClusterIP), source `synthetic`; the engine discovers it from its `devices` capability so the demo shows live movement out of the box |
 | `PVC positioning-blueprint` | Engine-owned blueprint store, RWO at `/app/data`; only the engine mounts it. The engine serves `GET/PUT /blueprint` |
-| `ConfigMap positioning-blueprint-seed` | Cold-start default room + `gps_origin`, read once via `BLUEPRINT_SEED_PATH` when the blueprint PVC is empty |
+| `ConfigMap positioning-blueprint-seed` | Cold-start blueprint (version 3: one floor plan with its georef, one room), read once via `BLUEPRINT_SEED_PATH` when the blueprint PVC is empty |
 | `Deployment/Service placement-editor` | Opt-in (`placement_editor_enabled`): geometry authoring UI, ClusterIP. A write-client that PUTs the authored blueprint to the engine (`POSITIONING_ENGINE_URL`); mounts no PVC |
 | `oauth2-proxy-placement` (Deployment/Service/Secret) | Opt-in: Keycloak gate in front of placement-editor on NodePort `31950`; admits only `g-dashboard-admins` (realm client `placement-editor-proxy`) |
 
@@ -202,19 +203,52 @@ operator owns and refuses to write a key the deployment provides elsewhere.
 Wiring and storage paths are shown read-only in the service's info panel.
 
 `ADAPTER_CAPABILITIES` is where a deployment states the traits of the source
-it is bound to (source, kinds, frame, z, accuracy_class, nominalAccuracy): since
-0.17.0 the generic vendor-adapter image bakes none of them. Adapters from 0.17.1
-declare the variable in their contract (`type: json`); for one still on 0.17.0
-the dashboard adds the entry itself (marked `declared by KELT`). Either way the
-form renders it as a guided editor pre-filled from what the adapter advertises
-in the engine registry and from its mounted schema (vendor, frame, height), and
-`accuracy_class` is offered from the gateway's published
-`/contracts/accuracy-class-vocabulary.json`, never from a list in the dashboard.
-An adapter with no source declared is dropped by the engine, so this is the
-first thing to confirm after deploying a vendor adapter from the catalog. The
-contract also reports `transports` (what the image implements) and `transport`
-(what the active schema chose); with one implemented transport the form states
-it as a fact, the schema's own `transport` field is where a choice would live.
+it is bound to: source, kinds, frame (`room`, `venue` or `wgs84`), z,
+accuracy_class, nominalAccuracy, nominalVerticalAccuracy, reporting
+(`on_request`, `periodic` or `on_motion`) and reportingInterval. The generic
+vendor-adapter image bakes none of them. The form renders the variable as a
+guided editor pre-filled from what the adapter advertises in the engine registry
+and from its mounted schema, and offers `accuracy_class` from the gateway's
+published `/contracts/accuracy-class-vocabulary.json`. It refuses to apply a
+declaration the engine would answer with 422: `periodic` or `on_motion` without
+a reportingInterval, or nominalVerticalAccuracy without `z`. An adapter with no
+source declared is dropped by the engine. The contract also reports
+`transports` (what the image implements) and `transport` (what the active
+schema chose).
+
+The MappingStudio edits a vendor-adapter schema. Its frame (`wgs84` or `venue`)
+and whether the source measures height are chosen at the top: they decide which
+mapping targets exist, and saving writes them into `ADAPTER_CAPABILITIES` too,
+since the adapter refuses a schema that contradicts its declaration. A schema
+written for an earlier release opens with the renamed fields listed. The
+dashboard reads an adapter's contract, mapping grammar and vendor sample from
+the newest running pod of its deployment, ready or not, so during an upgrade
+they come from the new image.
+
+### What KELT declares per source
+
+| Source | Frame | Height | Reporting | Set by |
+|--------|-------|--------|-----------|--------|
+| synthetic | `room` | measured | `on_request` | the image |
+| wifi | `room` | not measured | `periodic`, 2 s | the image |
+| wittra | `wgs84` | not declared as measured | not declared | `wittra-config`, through the dashboard |
+
+`maxAge=0` is served only for a position that is current by the source's
+declaration, and the gateway reports `altitude` only from a blueprint georef
+with a surveyed `altitude_m` (`floor_plan_altitude_m` for the seed); the rules
+are in the upstream [profile](https://jacobbista.github.io/5g-northbound/). With
+reporting undeclared, a Wittra asset answers `422 UNABLE_TO_FULFILL_MAX_AGE` to
+`maxAge=0`.
+
+A request can end at one of two caches: the gateway keeps the last position per
+positioning id and source for `LOCATION_CACHE_TTL_S` (5 s), and the
+vendor-adapter keeps the vendor's answer for the schema's `cacheTtl` (5 s).
+`maxAge=0` skips the first only, and nothing skips the second. Other consumers
+keep the vendor-adapter's cache warm: the engine's broadcast polls every
+advertised device about twice a second while a client is connected to the
+position stream, and the location-app's detail panel asks for the open asset
+every 4 s. From 0.19.2 the vendor-adapter's hop line on `GET /measurement/{id}`
+says `cache: hit` or `cache: miss`.
 
 ## Deployment view: the flows as they run in the testbed
 
