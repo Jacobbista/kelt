@@ -27,6 +27,13 @@ def expect_error(contract: dict, status: int, code: str) -> bool:
     return (status, code) in _declared(contract)
 
 
+def is_outage(r: dict, contract: dict) -> bool:
+    """A declared 422 or 5xx: what a request gets while the vendor is unreachable.
+    A 401 or 403 is about the caller, not the outage."""
+    st = r.get("status") or 0
+    return (st == 422 or st >= 500) and expect_error(contract, st, r.get("code") or "")
+
+
 def run_case(name: str, method: str, url: str, headers: dict, body, timeout: float = 15) -> dict:
     """One exchange. Never raises: a network error is recorded with status 0."""
     data = None if body is None else json.dumps(body).encode()
@@ -55,27 +62,58 @@ def _row(case, expected, actual, ok):
             "verdict": "observed" if ok is None else ("pass" if ok else "fail")}
 
 
-def check_data(api: dict, adapter: dict, source_class_upper: float, asset_kind: str) -> list[dict]:
+def _iso(epoch: float) -> str:
+    return datetime.datetime.fromtimestamp(int(epoch), datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def established(adapter: dict, reporting: str | None) -> float:
+    """The established time of a single-source fix (northbound 0.19): for a source
+    that reports on motion, the later of the fix time and the last communication;
+    otherwise the fix time."""
+    ts = float(adapter["timestamp"])
+    seen = adapter.get("lastSeen")
+    return max(ts, float(seen)) if reporting == "on_motion" and seen is not None else ts
+
+
+def maxage_zero_expected(reporting: str | None, interval: float | None, established_s: float, now_s: float) -> int:
+    """The status maxAge=0 must get (northbound 0.19): served only when the position
+    is current. on_request is always current; periodic and on_motion are current
+    within their reportingInterval; an undeclared source never is."""
+    if reporting == "on_request":
+        return 200
+    if reporting in ("periodic", "on_motion") and interval:
+        return 200 if now_s - established_s <= float(interval) else 422
+    return 422
+
+
+def check_data(api: dict, adapter: dict, assumed_accuracy: float, asset_kind: str,
+               georef_altitude: float | None = None, reporting: str | None = None) -> list[dict]:
     """The API answer against the adapter's measurement of the same fix.
 
-    Only a wgs84 adapter is compared (the venue transform of a local frame is
-    not reimplemented here). Altitude is recorded without a verdict until the
-    profile states its rule.
+    Only a wgs84 adapter is compared (the venue transform of a room frame is not
+    reimplemented here). `assumed_accuracy` is the source's nominalAccuracy, else the
+    upper bound of its accuracy class: the radius of a fix that carries none.
+    `altitude` is the georef's ellipsoidal height plus the measured z, absent when
+    either is missing.
     """
     c = api["area"]["center"]
-    ts = datetime.datetime.fromtimestamp(int(adapter["timestamp"]), datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    hacc = adapter.get("horizontalAccuracy", source_class_upper)
+    hacc = adapter["accuracy"] if adapter.get("accuracy") is not None else assumed_accuracy
+    z = adapter.get("z")
+    alt = georef_altitude + z if georef_altitude is not None and z is not None else None
     return [
         _row("coordinates", [adapter["latitude"], adapter["longitude"]], [c["latitude"], c["longitude"]],
              adapter.get("frame") == "wgs84" and abs(c["latitude"] - adapter["latitude"]) < 1e-9
              and abs(c["longitude"] - adapter["longitude"]) < 1e-9),
-        _row("timestamp", ts, api.get("lastLocationTime"), api.get("lastLocationTime") == ts),
+        _row("timestamp", _iso(established(adapter, reporting)), api.get("lastLocationTime"),
+             api.get("lastLocationTime") == _iso(established(adapter, reporting))),
         _row("source", adapter.get("source"), api.get("source"), api.get("source") == adapter.get("source")),
         _row("kind", asset_kind, api.get("kind"), api.get("kind") == asset_kind),
         _row("accuracy", hacc, api.get("horizontalAccuracy"), api.get("horizontalAccuracy") == hacc),
         _row("radius_floor", f"max({hacc}, 1)", api["area"].get("radius"),
              api["area"].get("radius") == max(float(hacc), 1.0)),
-        _row("altitude", adapter.get("y"), api.get("altitude"), None),
+        _row("altitude", alt, api.get("altitude"),
+             api.get("altitude") is None if alt is None else
+             api.get("altitude") is not None and abs(api["altitude"] - alt) < 1e-6),
     ]
 
 
@@ -175,7 +213,8 @@ def profile_cases(c: Campaign, contract: dict, asset: str, fix: dict) -> None:
                  f"matchRate={r['body'].get('matchRate')}" if want == "PARTIAL" and isinstance(r["body"], dict) else "")
 
 
-def data_cases(c: Campaign, asset: str, kind: str, adapter_app: str, class_upper: float) -> None:
+def data_cases(c: Campaign, asset: str, kind: str, adapter_app: str, assumed: float, decl: dict,
+               georef_altitude: float | None) -> None:
     r = c.call("data_retrieve", RETRIEVE, {"device": {"assetId": asset}})
     raw = _sh("kubectl", "exec", "-n", os.environ.get("KELT_POS_NS", "positioning"), "deploy/positioning-engine", "--",
               "python3", "-c",
@@ -187,16 +226,16 @@ def data_cases(c: Campaign, asset: str, kind: str, adapter_app: str, class_upper
     if r["status"] != 200:
         c.record("data", "retrieve", 200, _status_code(r), "fail")
         return
-    for row in check_data(r["body"], adapter, class_upper, kind):
-        c.record("data", row["case"], row["expected"], row["actual"], row["verdict"],
-                 "profile rework pending" if row["verdict"] == "observed" else "")
+    reporting, interval = decl.get("reporting"), decl.get("reportingInterval")
+    for row in check_data(r["body"], adapter, assumed, kind, georef_altitude, reporting):
+        c.record("data", row["case"], row["expected"], row["actual"], row["verdict"])
+    # maxAge=0 is served only when the position is current, by the source's own
+    # declaration (northbound 0.19). The row states the declaration in force.
+    est = established(adapter, reporting)
+    want = maxage_zero_expected(reporting, interval, est, time.time())
     r0 = c.call("maxage_zero", RETRIEVE, {"device": {"assetId": asset}, "maxAge": 0})
-    age = None
-    if isinstance(r0["body"], dict) and r0["body"].get("lastLocationTime"):
-        t = datetime.datetime.fromisoformat(r0["body"]["lastLocationTime"].replace("Z", "+00:00"))
-        age = round((datetime.datetime.now(datetime.timezone.utc) - t).total_seconds())
-    c.record("data", "maxage_zero", "fresh fix or 422 UNABLE_TO_FULFILL_MAX_AGE", _status_code(r0), "observed",
-             f"fix age {age} s; profile rework pending")
+    c.record("data", "maxage_zero", want, r0["status"], "pass" if r0["status"] == want else "fail",
+             f"reporting={reporting} reportingInterval={interval}; established {round(time.time() - est)} s ago")
 
 
 def _poll(fn, timeout_s: float, every: float = 0.5):
@@ -212,11 +251,14 @@ def _poll(fn, timeout_s: float, every: float = 0.5):
 
 def fault_cases(c: Campaign, contract: dict, asset: str, synthetic: str, adapter_app: str, deploy: str,
                 injections: int, timeout_s: float) -> None:
-    body = {"device": {"assetId": asset}, "maxAge": 0}
+    # maxAge absent: under 0.19 maxAge=0 is refused for a source whose position is
+    # not current, whatever the vendor's reachability, so it cannot show the outage.
+    # The gateway and adapter caches (5 s each) delay the first error; the poll waits.
+    body = {"device": {"assetId": asset}}
 
-    def declared_422():
+    def declared_error():
         r = run_case("poll", "POST", c.gw + RETRIEVE, {"Authorization": f"Bearer {c.token}"}, body)
-        return r if r["status"] == 422 and expect_error(contract, 422, r["code"] or "") else None
+        return r if is_outage(r, contract) else None
 
     def ok_200():
         r = run_case("poll", "POST", c.gw + RETRIEVE, {"Authorization": f"Bearer {c.token}"}, body)
@@ -226,15 +268,33 @@ def fault_cases(c: Campaign, contract: dict, asset: str, synthetic: str, adapter
         t0 = time.monotonic()
         _sh("fault_block_vendor", adapter_app)
         applied = round(time.monotonic() - t0, 2)
-        got, secs = _poll(declared_422, timeout_s)
+        got, secs = _poll(declared_error, timeout_s)
         _sh("fault_unblock_vendor")
-        c.record("fault", f"vendor_unreachable_{i}", "declared 422", got["code"] if got else "no 422",
+        c.record("fault", f"vendor_unreachable_{i}", "declared error", _status_code(got) if got else "no declared error",
                  "pass" if got else "fail", f"{secs} s after the policy was applied ({round(secs + applied, 2)} s from the apply call)")
         back, bsecs = _poll(ok_200, timeout_s)
         if not back:
             c.record("fault", f"vendor_recovered_{i}", 200, "no 200", "fail", f"after {bsecs} s")
             return
 
+    # The synthetic asset reports only once placed (SPAWN_REQUIRED). Place it only
+    # when it has no position, and take it off only if placed here, so a demo
+    # placement is left as found.
+    auth = {"Authorization": f"Bearer {c.token}"}
+    placed_here = False
+    probe = run_case("probe_synthetic", "POST", c.gw + RETRIEVE, auth, {"device": {"assetId": synthetic}})
+    if probe["status"] == 422 and probe["code"] and "UNABLE_TO_LOCATE" in probe["code"]:
+        placed_here = run_case("place_synthetic", "PUT", f"{c.gw}/assets/{synthetic}/placement",
+                               auth, {"x": 2.0, "y": 2.0})["status"] == 200
+        time.sleep(3)
+    try:
+        _synthetic_faults(c, synthetic, adapter_app, deploy, timeout_s)
+    finally:
+        if placed_here:
+            run_case("unplace_synthetic", "DELETE", f"{c.gw}/assets/{synthetic}/placement", auth, None)
+
+
+def _synthetic_faults(c: Campaign, synthetic: str, adapter_app: str, deploy: str, timeout_s: float) -> None:
     def adapter_state():
         a = c.get_json("/adapters")
         for x in a.get("adapters", []):
@@ -299,15 +359,19 @@ def main() -> int:
     if not vendor or not synthetic:
         print("need one asset of the vendor source and one synthetic asset", file=sys.stderr)
         return 2
-    caps = c.get_json("/capabilities")
-    klass = next((x["capabilities"].get("accuracy_class") for x in caps.get("adapters", []) if x.get("name") == a.adapter_app), None)
+    # The declaration in force (gateway GET /adapters: name, state, capabilities).
+    decl = next((x.get("capabilities") or {} for x in c.get_json("/adapters").get("adapters", [])
+                 if x.get("name") == a.adapter_app), {})
+    klass = decl.get("accuracy_class")
     upper = contracts["accuracy-class-vocabulary.json"]["classes"][klass]["upperBound"]
+    assumed = decl.get("nominalAccuracy") or upper
+    georef = ((c.get_json("/blueprint").get("floor_plans") or [{}])[0].get("georef") or {})
     fix = c.call("fix_for_areas", RETRIEVE, {"device": {"assetId": vendor["assetId"]}})
     if fix["status"] != 200:
         print(f"the vendor asset has no position ({fix['status']}): cannot build the verify areas", file=sys.stderr)
         return 2
     profile_cases(c, retrieval, vendor["assetId"], fix["body"])
-    data_cases(c, vendor["assetId"], vendor.get("kind"), a.adapter_app, float(upper))
+    data_cases(c, vendor["assetId"], vendor.get("kind"), a.adapter_app, float(assumed), decl, georef.get("altitude_m"))
     if not a.skip_faults:
         fault_cases(c, retrieval, vendor["assetId"], synthetic["assetId"], a.adapter_app, a.adapter_deploy,
                     a.injections, a.fault_timeout)

@@ -39,9 +39,11 @@ for a in items:
 }
 
 # One fresh retrieve: prints "<http status> <fix age s or ->".
+# One retrieve with the body a condition will send ($4; default: the asset, no
+# maxAge). Prints the status and the age of the position in seconds.
 retrieve_probe() {
-  local token="$1" gw="$2" asset="$3" body tmp status
-  tmp="$(mktemp)"; body="{\"device\":{\"assetId\":\"$asset\"},\"maxAge\":0}"
+  local token="$1" gw="$2" asset="$3" body="${4:-}" tmp status
+  tmp="$(mktemp)"; [ -n "$body" ] || body="{\"device\":{\"assetId\":\"$asset\"}}"
   status="$(curl -s --max-time 30 -o "$tmp" -w '%{http_code}' -X POST "$gw$(retrieve_path)" \
     -H "Authorization: Bearer $token" -H 'Content-Type: application/json' --data "$body")"
   python3 - "$status" "$tmp" <<'PY'
@@ -102,13 +104,24 @@ run_verification() {
 }
 
 # ── response-time: where the time of a location request goes ─────────────────
-#   hit    no maxAge: the gateway may answer from its cache
-#   fresh  the vendor asset, maxAge=0 (the adapter still keeps the vendor answer
-#          for cacheTtl s; the summary counts the requests that reached the vendor)
-#   local  the synthetic asset, maxAge=0: the stack with no external call
+#   hit    the vendor asset, no maxAge, at the default rate: mostly gateway and
+#          adapter cache hits
+#   fresh  the vendor asset, no maxAge, one request every 1/rate s with rate below
+#          1/5 s, past both 5 s caches. Close the asset's other consumers first
+#          (location-app map and detail panel, position-stream clients,
+#          dashboards): they keep the adapter's cache warm. Each request's hop
+#          line says cache hit or miss; the summary counts them. Under
+#          northbound 0.19 maxAge=0 is refused for a position that is not current
+#          by the source's declaration, so it cannot select the full path.
+#   local  the synthetic asset (reporting on_request, no adapter cache), maxAge=0:
+#          the stack with no external call; placed for the run if it has no
+#          position, and removed after only if placed here
+# The summary splits the traces by HTTP status and by where they were served
+# (gateway cache, adapter cache, vendor) from their hop lines.
 run_response_time() {
   local token gw run_dir cond asset body src
   local n="${KELT_LAT_COUNT:-1000}" rate="${KELT_LAT_RATE:-5}" warm="${KELT_LAT_WARMUP:-50}"
+  local fresh_n="${KELT_LAT_FRESH_COUNT:-300}" fresh_rate="${KELT_LAT_FRESH_RATE:-0.15}" cn cr
   token="$(camara_token)"; gw="$(gateway_url)"
   curl -s --max-time 10 -o /dev/null -w '%{http_code}' "$gw/health" | grep -q '^200$' || die "gateway $gw/health is not 200"
   run_dir="$(begin_run response-time "${KELT_LAT_CONDITIONS:-hit fresh local}")"
@@ -120,16 +133,30 @@ run_response_time() {
     esac
     asset="$(assets "$token" "$gw" | awk -v s="$src" '$2==s{print $1; exit}')"
     [ -n "$asset" ] || die "no asset with source $src for condition $cond"
+    cn="$n"; cr="$rate"
     case "$cond" in
-      hit) body="{\"device\":{\"assetId\":\"$asset\"}}" ;;
-      *)   body="{\"device\":{\"assetId\":\"$asset\"},\"maxAge\":0}" ;;
+      hit)   body="{\"device\":{\"assetId\":\"$asset\"}}" ;;
+      fresh) body="{\"device\":{\"assetId\":\"$asset\"}}"; cn="$fresh_n"; cr="$fresh_rate" ;;
+      local) body="{\"device\":{\"assetId\":\"$asset\"},\"maxAge\":0}"
+             # Placed only when it has no position, removed only if placed here
+             # (also on exit), so a demo placement is left as found.
+             read -r status _ < <(retrieve_probe "$token" "$gw" "$asset" "$body")
+             if [ "$status" = 422 ] && [ "$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' -X PUT \
+                  "$gw/assets/$asset/placement" -H "Authorization: Bearer $token" \
+                  -H 'Content-Type: application/json' -d '{"x":2.0,"y":2.0}')" = 200 ]; then
+               trap "curl -s --max-time 10 -o /dev/null -X DELETE '$gw/assets/$asset/placement' -H 'Authorization: Bearer $token'" EXIT
+               sleep 3
+             fi ;;
     esac
-    read -r status _ < <(retrieve_probe "$token" "$gw" "$asset")
-    [ "$status" = 200 ] || die "$cond: $asset answers $status, not 200 (synthetic asset not placed? place it first)"
+    read -r status _ < <(retrieve_probe "$token" "$gw" "$asset" "$body")
+    [ "$status" = 200 ] || die "$cond: $asset answers $status, not 200"
+    # The probe itself fills the gateway's 5 s cache: let it expire before a
+    # condition whose first request must not be served from it.
+    [ "$cond" != fresh ] || sleep 6
     mkdir -p "$run_dir/$cond"; echo "$body" >"$run_dir/$cond/body.json"
-    log "response-time $cond: $n requests at ${rate}/s on $asset"
+    log "response-time $cond: $cn requests at ${cr}/s on $asset"
     KELT_RUN_DIR="$run_dir/$cond" KELT_CAMARA_TOKEN="$token" KELT_RETRIEVE_BODY="$run_dir/$cond/body.json" \
-      "$EXP_ROOT/exposure/response_time_driver.sh" "$cond" "$n" "$rate"
+      "$EXP_ROOT/exposure/response_time_driver.sh" "$cond" "$cn" "$cr"
     python3 "$EXP_ROOT/exposure/hop_aggregate.py" "$run_dir/$cond" --warmup "$warm" \
       --json "$run_dir/$cond/stages.json" >"$run_dir/$cond/aggregate.txt"
     python3 "$EXP_ROOT/exposure/response_time_summary.py" "$run_dir/$cond" vendor >/dev/null

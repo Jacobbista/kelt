@@ -42,6 +42,10 @@
       "type": "number",
       "minimum": 0,
       "description": "t_emit - t_receive in milliseconds; this hop's own service time (includes time waited on downstream hops)."
+    },
+    "cache": {
+      "enum": ["hit", "miss"],
+      "description": "Present on a stage that keeps a cache of the source behind it, whose calls write no hop line of their own: the vendor-adapter's GET /measurement/{id}. `hit`: answered from the cache, the source was not called. `miss`: the source was called, whatever it answered."
     }
   }
 }

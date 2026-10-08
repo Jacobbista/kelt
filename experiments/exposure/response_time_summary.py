@@ -39,6 +39,47 @@ def summarise(rows: list[dict], vendor_col: str | None) -> dict:
     }
 
 
+def served_by(row: dict, vendor_col: str | None) -> str:
+    """Where a request was answered, from its hop lines (northbound 0.19): a gateway
+    cache hit leaves only the gateway's line (no engine span); an adapter cache hit
+    leaves the vendor-adapter's line without the vendor time: its `cache` field
+    says `hit` (0.19.2+), or, on an older line, its span is below MISS_MS. A
+    source with no vendor behind it is answered by its adapter."""
+    engine = next((float(v or 0) for k, v in row.items() if "engine" in k and k.endswith("_span_ms")), 0.0)
+    if engine <= 0:
+        return "gateway cache"
+    if not vendor_col:
+        return "adapter"  # a source with no vendor behind it (synthetic, wifi)
+    # vendor-adapter 0.19.2+ states it on its hop line; the span decides before that.
+    cache = row.get(vendor_col[: -len("_span_ms")] + "_cache")
+    if cache in ("hit", "miss"):
+        return "adapter cache" if cache == "hit" else "vendor"
+    span = float(row.get(vendor_col) or 0)
+    if span <= 0:
+        return "unknown"  # the vendor-adapter wrote no hop line for this trace
+    if span < MISS_MS:
+        return "adapter cache"
+    return "vendor"
+
+
+def by_status(rows: list[dict], status_of: dict[str, str], vendor_col: str | None) -> dict:
+    """summarise() per HTTP status of the request, with the served_by counts. A 422
+    under maxAge=0 still crosses the stack and writes hop lines; it is reported
+    apart from the 200s, never mixed in."""
+    groups: dict[str, list[dict]] = {}
+    for r in rows:
+        groups.setdefault(status_of.get(r.get("correlator", ""), "unknown"), []).append(r)
+    out = {}
+    for st, rs in sorted(groups.items()):
+        out[st] = summarise(rs, vendor_col)
+        counts: dict[str, int] = {}
+        for r in rs:
+            k = served_by(r, vendor_col)
+            counts[k] = counts.get(k, 0) + 1
+        out[st]["served_by"] = counts
+    return out
+
+
 def achieved_rate(requests: int, window: dict | None) -> float | None:
     """Requests per second over the measured window (the driver sleeps after each
     request, so this is below the nominal rate)."""
@@ -54,12 +95,13 @@ def main() -> int:
     with open(os.path.join(run_dir, "stages.csv")) as fh:
         rows = list(csv.DictReader(fh))
     col = next((c for c in (rows[0] if rows else {}) if vendor in c and c.endswith("_span_ms")), None)
-    s = summarise(rows, col)
-    s["vendor_column"] = col
+    with open(next(os.path.join(run_dir, f) for f in os.listdir(run_dir) if f.startswith("requests_"))) as fh:
+        reqs = list(csv.DictReader(fh))
+    sent = len(reqs)
+    status_of = {r.get("x_correlator") or r.get("correlator") or "": str(r.get("http_status") or "") for r in reqs}
+    s = {"by_status": by_status(rows, status_of, col), "vendor_column": col}
     from lib.runmeta import windows
     ws = windows(run_dir)
-    with open(next(os.path.join(run_dir, f) for f in os.listdir(run_dir) if f.startswith("requests_"))) as fh:
-        sent = sum(1 for _ in csv.DictReader(fh))
     s["requests_sent"] = sent
     s["achieved_rate_per_s"] = achieved_rate(sent, ws[0] if ws else None)
     with open(os.path.join(run_dir, "summary.json"), "w") as fh:

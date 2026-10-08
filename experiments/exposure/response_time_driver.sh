@@ -9,12 +9,12 @@
 #
 #   response_time_driver.sh <fresh|hit|local> [count] [rate_per_s]
 #
-# Conditions (agreed with northbound):
-#   fresh   maxAge=0 in the body → bypass cache → measures the real pipeline
-#           (for a wittra asset this includes the WAN; subtract the adapter→vendor
-#            span from the per-hop trace to get the WAN-free number — no mock deploy)
-#   hit     served from cache → ~0, a separate trivial number
-#   local   a local-source asset (wifi/mock) → pipeline with no external call
+# Conditions (agreed with northbound, revised for 0.19.1; run.sh sets the body):
+#   hit     vendor asset, no maxAge, default rate: mostly cache hits
+#   fresh   vendor asset, no maxAge, requests more than 5 s apart, with the
+#           asset's other consumers closed: both caches cold, each request's
+#           hop line says whether it reached the vendor
+#   local   synthetic asset (on_request), maxAge=0: the stack without a vendor
 # A deterministic WAN-free repro is a LOCAL `make demo` concern (vendor-adapter
 # repointed at the schema-driven mock-vendor via WITTRA_BASE_URL), NOT a cluster
 # component. 1000 requests at ~5/s by default.

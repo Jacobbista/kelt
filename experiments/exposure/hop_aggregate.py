@@ -200,18 +200,24 @@ def main() -> int:
     with open(csv_path, "w") as fh:
         fh.write("correlator,e2e_ms,wan_free_ms,"
                  + ",".join(f"{s}_self_ms" for s in services) + ","
-                 + ",".join(f"{s}_span_ms" for s in services) + "\n")
+                 + ",".join(f"{s}_span_ms" for s in services) + ","
+                 + ",".join(f"{s}_cache" for s in services) + "\n")
         for corr, trace in traces.items():
             self_ms, span_ms, e2e = _self_costs(trace)
             wan = sum(v for s, v in span_ms.items() if vendor in s)
+            # `cache` (hit|miss) on a stage that caches the source behind it
+            # (vendor-adapter 0.19.2+); empty where the line carries none.
+            cache = {h.get("service", "?"): h["cache"] for h in trace if h.get("cache") in ("hit", "miss")}
             row = {"correlator": corr, "e2e_ms": e2e, "wan_free_ms": max(0.0, e2e - wan)}
             for s in services:
                 row[f"{s}_self_ms"] = self_ms.get(s, 0.0)
                 row[f"{s}_span_ms"] = span_ms.get(s, 0.0)
+                row[f"{s}_cache"] = cache.get(s, "")
             rows.append(row)
             fh.write(f"{corr},{e2e:.3f},{row['wan_free_ms']:.3f},"
                      + ",".join(f"{self_ms.get(s, 0.0):.3f}" for s in services) + ","
-                     + ",".join(f"{span_ms.get(s, 0.0):.3f}" for s in services) + "\n")
+                     + ",".join(f"{span_ms.get(s, 0.0):.3f}" for s in services) + ","
+                     + ",".join(cache.get(s, "") for s in services) + "\n")
 
     def stat(key: str) -> str:
         xs = [r[key] for r in rows]

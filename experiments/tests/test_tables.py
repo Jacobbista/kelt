@@ -193,3 +193,22 @@ class MachineNoteTest(unittest.TestCase):
             json.dump(doc, fh)
         self.assertEqual(tables.machine_note([d]),
                          "Machines, as each reports itself: host 16 CPUs, 63960 MiB; worker 4 CPUs, 9941 MiB.")
+
+
+class ResponseTimeRowsTest(unittest.TestCase):
+    def test_one_block_per_status(self):
+        import json
+        import tempfile
+        q = {"n": 2, "median": 1.0, "p90": 2.0, "p99": 3.0}
+        empty = {"n": 0, "median": None, "p90": None, "p99": None}
+        per = {"traces": 2, "e2e_ms": q, "stack_ms": empty, "vendor_ms": empty,
+               "per_component": {"camara-gateway": q}, "served_by": {"vendor": 1, "adapter cache": 1}}
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "fresh"))
+            with open(os.path.join(d, "fresh", "summary.json"), "w") as fh:
+                json.dump({"by_status": {"200": per, "422": per}, "achieved_rate_per_s": 0.15}, fh)
+            rows = tables.response_time_rows([d])
+        self.assertEqual(sorted({r["status"] for r in rows}), ["200", "422"])
+        e2e = [r for r in rows if r["status"] == "200" and r["series"] == "end to end"][0]
+        self.assertEqual(e2e["median_ms"], 1.0)
+        self.assertEqual(e2e["served_by"], "adapter cache 1, vendor 1")

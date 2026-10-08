@@ -148,13 +148,18 @@ def response_time_rows(runs: list[str]) -> list[dict]:
             if not os.path.exists(p):
                 continue
             s = _load(p)
-            base = {"run": os.path.basename(d), "condition": cond, "rate_per_s": s.get("achieved_rate_per_s")}
-            series = [("end to end", s["e2e_ms"]), ("stack (reached vendor)", s["stack_ms"]),
-                      ("vendor call (adapter span)", s["vendor_ms"])]
-            series += [(f"{k} own", v) for k, v in s["per_component"].items()]
-            for name, q in series:
-                rows.append({**base, "series": name, "n": q["n"], "median_ms": q["median"],
-                             "p90_ms": q["p90"], "p99_ms": q["p99"]})
+            # One block per HTTP status: a 422 under maxAge=0 crosses the stack too
+            # and is reported apart from the 200s (northbound 0.19).
+            for st, b in sorted(s["by_status"].items()):
+                base = {"run": os.path.basename(d), "condition": cond, "status": st,
+                        "rate_per_s": s.get("achieved_rate_per_s"),
+                        "served_by": ", ".join(f"{k} {v}" for k, v in sorted(b.get("served_by", {}).items()))}
+                series = [("end to end", b["e2e_ms"]), ("stack (reached vendor)", b["stack_ms"]),
+                          ("vendor call (adapter span)", b["vendor_ms"])]
+                series += [(f"{k} own", v) for k, v in b["per_component"].items()]
+                for name, q in series:
+                    rows.append({**base, "series": name, "n": q["n"], "median_ms": q["median"],
+                                 "p90_ms": q["p90"], "p99_ms": q["p99"]})
     return rows
 
 

@@ -342,16 +342,19 @@ up, medians do not); and the distribution of the RTT at rest and under load, eac
   limited by its sender's congestion control: the server pod's for downlink, the
   UE's for uplink. A UE whose Ethernet sits on USB 2.0 cannot exceed about
   300 Mbit/s.
-- The vendor adapter keeps the vendor's answer for `cacheTtl` seconds
-  (default 5), and `maxAge=0` does not bypass that cache on the deployed
-  version. At 5 requests per second about one request in 25 reaches the vendor
-  cloud; the response-time summary counts them and computes the stack share on
-  those only.
+- The caches on a location request, and what `maxAge=0` skips, are in
+  [positioning adapters](../docs/architecture/positioning-adapters.md#what-kelt-declares-per-source).
+  A request reaches the vendor only with the adapter's cache cold: the
+  `fresh` condition needs the other consumers of the asset closed (the
+  location-app's map and detail panel, any position-stream client, any
+  dashboard polling it) and requests more than 5 s apart. The response-time
+  summary classifies each request from its hop lines (`cache: hit|miss` on the
+  vendor-adapter's line) and computes the stack share on the misses only.
 - There is no hop line for the adapter's own call to the vendor: the vendor
   share is the adapter's span, which includes the adapter's own processing
   (about 0.3 ms).
-- The gateway has no cache of its own on the deployed version: a request
-  without `maxAge` crosses the engine and the adapter like one with `maxAge=0`.
+- What `maxAge=0` returns per source follows the declarations in
+  [positioning adapters](../docs/architecture/positioning-adapters.md#what-kelt-declares-per-source).
 - Latency seen from the testbed host carries a VirtualBox artefact on requests
   larger than one segment
   ([known issue](../docs/known-issues/virtualbox-hostonly-tso.md)); the
