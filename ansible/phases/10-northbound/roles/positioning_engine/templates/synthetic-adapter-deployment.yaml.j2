@@ -43,12 +43,8 @@ spec:
               value: "synthetic"
             - name: ADAPTER_BASE_URL
               value: "http://synthetic-adapter.{{ positioning_namespace }}.svc.cluster.local:8080"
-            # v0.7.0 capabilities: the adapter advertises what it can locate so the
-            # gateway aggregates it into GET /capabilities. JSON form of the adapter's
-            # adapter.contract.yaml (kept in sync; `make positioning-check` asserts
-            # they agree). See docs/architecture/positioning-adapters.md.
-            - name: ADAPTER_CAPABILITIES
-              value: '{"source":"synthetic","kinds":["forklift","asset"],"frame":"local","streaming":false,"z":true,"devices":true,"placement":true,"accuracy_class":"metre"}'
+            # Capabilities (frame room, reporting on_request, devices, placement) are
+            # baked into the image's adapter.contract.yaml; nothing to override here.
             # v0.8.19 broadcast-from-capability: the engine derives the live broadcast set
             # (and each device's source) from the adapters' `devices` capability, not from
             # its own DEVICE_IDS (now seed-only, suppressed when any adapter advertises).

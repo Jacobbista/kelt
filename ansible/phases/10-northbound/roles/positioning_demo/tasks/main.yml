@@ -61,6 +61,28 @@
     - location_app_config_cm.resources | length > 0
     - "'VITE_KEYCLOAK_URL' in (location_app_config_cm.resources[0].data | default({}))"
 
+# location-app 0.19 reads the georeference from the blueprint, not from its own
+# configuration: strip the two variables it no longer reads from a seeded copy.
+- name: Strip the GPS origin variables location-app no longer reads
+  kubernetes.core.k8s:
+    state: present
+    merge_type: merge
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: location-app-config
+        namespace: "{{ apps_namespace }}"
+      data:
+        VITE_GPS_ORIGIN_LAT: null
+        VITE_GPS_ORIGIN_LON: null
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when:
+    - location_app_config_cm.resources | length > 0
+    - "'VITE_GPS_ORIGIN_LAT' in (location_app_config_cm.resources[0].data | default({})) or 'VITE_GPS_ORIGIN_LON' in (location_app_config_cm.resources[0].data | default({}))"
+
 # Seeded once: from then on the dashboard owns it (Configure form), so a re-run
 # must not put the operator's site parameters back to the defaults.
 - name: Seed location-app-config ConfigMap (operator-owned after the first run)

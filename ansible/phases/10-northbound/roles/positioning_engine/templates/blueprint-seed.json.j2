@@ -1,19 +1,34 @@
 {
-  "version": 1,
-  "gps_origin": { "latitude": {{ floor_plan_gps_lat }}, "longitude": {{ floor_plan_gps_lon }}, "azimuth_deg": {{ floor_plan_gps_azimuth }} },
-  "floors": [
+  "version": 3,
+  "floor_plans": [
     {
-      "id": 0,
+      "id": "fp-01",
       "label": "Ground Floor",
+      "image": null,
+      "georef": {
+        "latitude": {{ floor_plan_gps_lat }},
+        "longitude": {{ floor_plan_gps_lon }},
+        "azimuth_deg": {{ floor_plan_gps_azimuth }},
+        "altitude_m": {{ floor_plan_altitude_m if (floor_plan_altitude_m | string | length) else 'null' }},
+        "width_m": {{ floor_width_m }},
+        "depth_m": {{ floor_depth_m }}
+      }
+    }
+  ],
+  "rooms": [
+    {
+      "id": "room-01",
+      "label": "Room",
+      "floor_plan_id": "fp-01",
+      "x_m": 0,
+      "y_m": 0,
       "width_m": {{ floor_width_m }},
       "depth_m": {{ floor_depth_m }},
-      "height_m": {{ floor_height_m }},
-      "walls": [
-        {"x": 0,                    "z": 0,                    "w": {{ floor_width_m }}, "d": 0.2, "h": {{ floor_height_m }}},
-        {"x": 0,                    "z": {{ floor_depth_m }},  "w": {{ floor_width_m }}, "d": 0.2, "h": {{ floor_height_m }}},
-        {"x": 0,                    "z": 0,                    "w": 0.2, "d": {{ floor_depth_m }}, "h": {{ floor_height_m }}},
-        {"x": {{ floor_width_m }},  "z": 0,                    "w": 0.2, "d": {{ floor_depth_m }}, "h": {{ floor_height_m }}}
-      ]
+      "rotation_deg": 0,
+      "wall_height_m": {{ floor_height_m }},
+      "anchors": [],
+      "walls": [],
+      "perimeter_openings": []
     }
   ]
 }

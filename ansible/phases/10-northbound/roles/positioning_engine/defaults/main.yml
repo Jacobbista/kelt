@@ -57,15 +57,20 @@ floor_width_m: 20
 floor_depth_m: 30
 floor_height_m: 3
 
-# WGS84 georeference for the floor-plan local frame: without it the engine cannot
-# convert local x/z to lat/lon and returns 0,0 (the demo then can't place devices
-# in LAT/LON mode). azimuth_deg = bearing of the +z axis clockwise from true north
-# (0 = north-aligned). Defaults to the RISE/Kista area; override for the real
+# WGS84 georeference of the floor plan: latitude/longitude of its lower-left corner,
+# azimuth_deg the bearing of +y clockwise from true north (0 = north-aligned). The
+# engine uses it only when all three are present; without it a position cannot be
+# given in latitude/longitude and the gateway answers 503. Defaults to the RISE/Kista area; override for the real
 # building. Seeds the engine blueprint store on cold start (empty PVC); once the
 # placement-editor PUTs an authored blueprint (WORLD step), that takes over.
 floor_plan_gps_lat: "{{ lookup('ansible.builtin.env', 'FLOOR_PLAN_GPS_LAT') | default('59.40455', true) }}"
 floor_plan_gps_lon: "{{ lookup('ansible.builtin.env', 'FLOOR_PLAN_GPS_LON') | default('17.94754', true) }}"
 floor_plan_gps_azimuth: "{{ lookup('ansible.builtin.env', 'FLOOR_PLAN_GPS_AZIMUTH') | default('0', true) }}"
+# Height of the origin above the WGS84 ellipsoid (blueprint v3 georef.altitude_m).
+# Empty: not surveyed, and CAMARA `altitude` is absent. A height read from a map is
+# above mean sea level (in Sweden RH 2000) and takes the geoid undulation at the
+# origin (SWEN17_RH2000); a GNSS survey is ellipsoidal already.
+floor_plan_altitude_m: "{{ lookup('ansible.builtin.env', 'FLOOR_PLAN_ALTITUDE_M') | default('', true) }}"
 
 positioning_ready_retries: 6
 positioning_ready_delay: 10

@@ -17,6 +17,40 @@
   until: prepull_placement.rc == 0
   failed_when: false   # best-effort warm-up; Deployment pulls on demand (no hard-fail on a registry/DNS blip)
 
+# placement-editor-config is written by the dashboard when it binds adapters. Two
+# keys from earlier releases (REST_ADAPTER_URL, WIFI_POSITIONING_URL) are read by
+# no current image: strip them when present.
+- name: Look up placement-editor-config
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ConfigMap
+    name: placement-editor-config
+    namespace: "{{ positioning_namespace }}"
+    kubeconfig: "{{ kubeconfig_path }}"
+  register: placement_editor_config_cm
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+
+- name: Strip retired variables from placement-editor-config
+  kubernetes.core.k8s:
+    state: present
+    merge_type: merge
+    kubeconfig: "{{ kubeconfig_path }}"
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: placement-editor-config
+        namespace: "{{ positioning_namespace }}"
+      data:
+        REST_ADAPTER_URL: null
+        WIFI_POSITIONING_URL: null
+  delegate_to: "{{ groups['masters'][0] }}"
+  run_once: true
+  when:
+    - placement_editor_config_cm.resources | length > 0
+    - (placement_editor_config_cm.resources[0].data | default({})).keys() | intersect(['REST_ADAPTER_URL', 'WIFI_POSITIONING_URL']) | length > 0
+
 - name: Deploy placement-editor Deployment
   kubernetes.core.k8s:
     state: present
