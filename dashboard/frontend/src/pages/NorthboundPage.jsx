@@ -8,6 +8,7 @@ import { useConfirm } from "../context/ConfirmContext";
 import { env } from "../runtime-env";
 import LogViewer from "../components/LogViewer";
 import MappingStudio from "../components/MappingStudio";
+import { FRAMES, REPORTING, capsErrors } from "../lib/northboundCaps";
 import {
   getNorthboundServices,
   getNorthboundAdapters,
@@ -1502,7 +1503,7 @@ function FileFieldEditor({ service, entry, toast, onApplied, shadowedBy }) {
 // and are not asked twice. accuracy_class is offered from the gateway's published
 // vocabulary; the radius input appears only where the class needs it (coarse) or on
 // request. Any other key already in the value is preserved untouched.
-const BOUND_SOURCE_KEYS = ["source", "kinds", "frame", "z", "accuracy_class", "nominalAccuracy"];
+const BOUND_SOURCE_KEYS = ["source", "kinds", "frame", "z", "accuracy_class", "nominalAccuracy", "reporting", "reportingInterval", "nominalVerticalAccuracy"];
 function CapabilitiesField({ entry, value, onChange, hints }) {
   const raw = value !== undefined ? value : (entry.value ?? "");
   let caps = {};
@@ -1561,9 +1562,6 @@ function CapabilitiesField({ entry, value, onChange, hints }) {
       <div>
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="font-mono text-[12px] font-semibold text-slate-100">{entry.name}</span>
-          {entry.declared_by === "kelt" && (
-            <span className="text-[9.5px] text-slate-500" title="The adapter's own /contract does not declare this variable; KELT offers it because the registry model reads it.">declared by KELT</span>
-          )}
         </div>
         <p className={help}>What the engine and the CAMARA API are told about the source behind this adapter. The image is generic, so this is where the vendor's traits live; without a source name the engine drops its fixes.</p>
         {!entry.set && (advertised || schema) && (
@@ -1595,15 +1593,14 @@ function CapabilitiesField({ entry, value, onChange, hints }) {
         <div className={row}>
           <div>
             <div className={label}>Coordinates</div>
-            <p className={help}>The frame the vendor reports in. The engine inverts latitude/longitude to the floor plan.</p>
+            <p className={help}>The frame the source reports in: metres in a room of the blueprint, metres in the venue, or latitude/longitude.</p>
           </div>
           {schema?.frame ? (
             <div className="flex flex-col items-end gap-0.5"><span className="font-mono text-[12px] text-slate-200">{caps.frame || schema.frame}</span>{fromSchema}</div>
           ) : (
             <select className={inputCls} value={caps.frame || ""} onChange={(e) => set({ frame: e.target.value })}>
               <option value="">(not declared)</option>
-              <option value="local">floor-plan metres (local)</option>
-              <option value="wgs84">latitude / longitude (wgs84)</option>
+              {FRAMES.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
             </select>
           )}
         </div>
@@ -1617,7 +1614,7 @@ function CapabilitiesField({ entry, value, onChange, hints }) {
           ) : (
             <div className="inline-flex justify-self-end overflow-hidden rounded border border-slate-700">
               {[false, true].map((on) => (
-                <button key={String(on)} type="button" onClick={() => set({ z: on })}
+                <button key={String(on)} type="button" onClick={() => set(on ? { z: on } : { z: on, nominalVerticalAccuracy: undefined })}
                   className={`px-3 py-1 text-[11px] transition-colors ${(caps.z === true) === on ? "bg-sky-600 text-white" : "bg-slate-950 text-slate-400 hover:text-slate-200"}`}>
                   {on ? "Reported" : "Not reported"}
                 </button>
@@ -1625,6 +1622,36 @@ function CapabilitiesField({ entry, value, onChange, hints }) {
             </div>
           )}
         </div>
+        <div className={row}>
+          <div>
+            <div className={label}>Reporting</div>
+            <p className={help}>How the source produces fixes. It decides when a position counts as current, which <span className="font-mono">maxAge</span> relies on; undeclared, no position from this source is ever current.</p>
+          </div>
+          <select className={inputCls} value={caps.reporting || ""} onChange={(e) => set({ reporting: e.target.value })}>
+            <option value="">(not declared)</option>
+            {REPORTING.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+          </select>
+        </div>
+        {(caps.reporting === "periodic" || caps.reporting === "on_motion") && (
+          <div className={row}>
+            <div>
+              <div className={label}>Reporting interval (s)</div>
+              <p className={help}>The longest gap between two reports the source guarantees, transport included. A value from the vendor, not an estimate.</p>
+            </div>
+            <input className={inputCls} type="number" min="0" step="1" value={caps.reportingInterval ?? ""} placeholder="required"
+              onChange={(e) => set({ reportingInterval: e.target.value === "" ? undefined : Number(e.target.value) })} />
+          </div>
+        )}
+        {caps.z === true && (
+          <div className={row}>
+            <div>
+              <div className={label}>Height precision (m)</div>
+              <p className={help}>One-sigma error of the height, used for a fix that carries a height without its own error. Optional.</p>
+            </div>
+            <input className={inputCls} type="number" min="0" step="0.1" value={caps.nominalVerticalAccuracy ?? ""}
+              onChange={(e) => set({ nominalVerticalAccuracy: e.target.value === "" ? undefined : Number(e.target.value) })} />
+          </div>
+        )}
         <div className={row}>
           <div>
             <div className={label}>Nominal precision</div>
@@ -1662,6 +1689,7 @@ function CapabilitiesField({ entry, value, onChange, hints }) {
         )}
       </div>
       {openEnded && !(caps.nominalAccuracy > 0) && <p className="text-[11px] text-amber-300">Enter the radius to assume: {cls} alone resolves to no value.</p>}
+      {capsErrors(caps).map((m) => <p key={m} className="text-[11px] text-amber-300">{m}</p>)}
       {others.length > 0 && (
         <p className="text-[10px] text-slate-600">also declared, kept as is: <span className="font-mono">{others.map((k) => `${k}=${JSON.stringify(caps[k])}`).join("  ")}</span></p>
       )}
@@ -1937,6 +1965,10 @@ function ConfigureService({ service, services, bindings, toast, onClose, onAppli
   // typed blocks Apply; optional secrets and *_FILE documents (saved via their own
   // editor button) do not.
   const unfilled = connFields.filter((f) => f._req && !f.set && !((vals[f.name] ?? "").toString().trim()));
+  // The engine refuses an announcement that breaks the declaration rules (422), so a
+  // pending ADAPTER_CAPABILITIES that breaks them blocks Apply.
+  let capsProblems = [];
+  try { const c = vals.ADAPTER_CAPABILITIES ? JSON.parse(vals.ADAPTER_CAPABILITIES) : null; if (c && typeof c === "object") capsProblems = capsErrors(c); } catch { /* shown in the field */ }
   // Mapping targets the running adapter supports but the loaded schema leaves out
   // (position fields and discover fields are reported separately).
   const unmapped = [...(cfg?.mapping?.unmapped || []), ...(cfg?.discover_mapping?.unmapped || [])];
@@ -2043,11 +2075,14 @@ function ConfigureService({ service, services, bindings, toast, onClose, onAppli
 
           {settings.length > 0 && (
           <div className="flex items-center gap-3 pt-4">
-            <button type="button" disabled={busy || unfilled.length > 0} onClick={submit} className={btn.sky}>
+            <button type="button" disabled={busy || unfilled.length > 0 || capsProblems.length > 0} onClick={submit} className={btn.sky}>
               {busy ? "Applying…" : "Apply & restart"}
             </button>
             {unfilled.length > 0 && (
               <span className="text-[11px] text-rose-400">fill: {unfilled.map((f) => f.name).join(", ")}</span>
+            )}
+            {capsProblems.length > 0 && (
+              <span className="text-[11px] text-rose-400">ADAPTER_CAPABILITIES: {capsProblems.join("; ")}</span>
             )}
           </div>
           )}

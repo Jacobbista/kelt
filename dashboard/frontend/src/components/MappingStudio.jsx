@@ -19,6 +19,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { btn } from "./ui";
 import { useToast } from "../context/ToastContext";
+import { alignCapabilities, mappingLayout, migratedSchema, schemaFieldMigrations } from "../lib/northboundCaps";
 import {
   getNorthboundDiscoverRaw,
   getNorthboundContractSchema,
@@ -26,6 +27,7 @@ import {
   getNorthboundServiceConfig,
   getNorthboundServiceFile,
   applyNorthboundServiceFile,
+  applyNorthboundServiceConfig,
 } from "../api";
 
 // ---- generic path helpers ----
@@ -79,9 +81,11 @@ const MATCH = {
   accuracy:   { re: /(accuracy|hdop|precision|radius|error)/i, type: "number", exact: ["accuracy", "acc"] },
   confidence: { re: /(confidence|conf|quality|reliab)/i, type: "number", range: [0, 1], exact: ["confidence", "conf"] },
   y:          { re: /(local[._]?y|position[._]?y|pos[._]?y|coord\w*[._]?y)/i, type: "number", exact: ["y"] },
+  z:          { re: /(height|alt(itude)?|elev(ation)?|local[._]?z|position[._]?z)/i, type: "number", exact: ["z", "height"] },
   timestamp:  { re: /(time(stamp)?|[._]ts$|date)/i, iso: true, exact: ["timestamp", "time", "ts"], contextual: true },
   battery:    { re: /(batter|charge|percentage|[._]soc$)/i, type: "number", range: [0, 100], exact: ["percentage", "battery", "charge", "soc"] },
   lastSeen:   { re: /(last[._]?seen|last[._]?update|last[._]?contact|[._]seen$)/i, iso: true, exact: ["lastseen", "lastcontact"] },
+  lastCommunicationTime: { re: /(last[._]?(seen|comm|contact|update))/i, iso: true, exact: ["lastcommunicationtime", "lastseen", "lastcontact"] },
   moving:     { re: /(mov(ing|e)|motion|speed|velocity|activity)/i, exact: ["motion", "moving", "move"], contextual: true },
 };
 // A target the heuristics don't know about still matches on its own exact name.
@@ -241,6 +245,7 @@ export default function MappingStudio({ service, path, initial, onClose, onSaved
   const escRef = useRef(null);
 
   const [raw, setRaw] = useState(null);
+  const [rawErr, setRawErr] = useState(null); // vendor sample unavailable: the studio still opens
   const [grammar, setGrammar] = useState(null);
   const [vocab, setVocab] = useState(null);
   const [loadErr, setLoadErr] = useState(null);
@@ -261,6 +266,14 @@ export default function MappingStudio({ service, path, initial, onClose, onSaved
   // the service config (its *_FILE schema field) when launched from the service row.
   const [docPath, setDocPath] = useState(path || null);
   const [docText, setDocText] = useState(initial ?? null);
+  // What the stored schema needed to load on 0.19 (renamed in the editors below).
+  const [migrations, setMigrations] = useState([]);
+  // Frame and height are chosen at the top, not mapped as rows: they decide which
+  // targets exist (vendor-adapter 0.19 rules) and they are also declared in
+  // ADAPTER_CAPABILITIES, which Save keeps in agreement with the schema.
+  const [frameSel, setFrameSel] = useState("wgs84"); // wgs84 | venue | payload
+  const [height, setHeight] = useState(false);
+  const [capsRaw, setCapsRaw] = useState(null);      // current ADAPTER_CAPABILITIES, null = not declared by the contract
 
   useEffect(() => {
     let alive = true;
@@ -277,14 +290,21 @@ export default function MappingStudio({ service, path, initial, onClose, onSaved
           return p ? getNorthboundServiceFile(service, p).then((r) => ({ p, t: r.content || "" })) : { p: null, t: "" };
         });
     Promise.all([
-      getNorthboundDiscoverRaw(service),
+      // The vendor sample only helps to click paths: without it (no pod can reach
+      // the vendor yet) the grammar and the schema still load and paths are typed.
+      getNorthboundDiscoverRaw(service).catch((e) => ({ raw: [], error: e.message })),
       getNorthboundContractSchema(service),
       getNorthboundDiagnosticsVocabulary(),
       resolveDoc,
+      getNorthboundServiceConfig(service).catch(() => null),
     ])
-      .then(([d, g, v, doc]) => {
+      .then(([d, g, v, doc, cfg]) => {
         if (!alive) return;
+        const env = cfg?.env || {};
+        const capsEntry = [...(env.required || []), ...(env.recommended || []), ...(env.optional || [])].find((x) => x.name === "ADAPTER_CAPABILITIES");
+        setCapsRaw(capsEntry ? String(capsEntry.value ?? "") : null);
         setRaw(Array.isArray(d?.raw) ? d.raw : []);
+        setRawErr(d?.error || null);
         setGrammar(g);
         setVocab(v);
         setDocPath(doc.p);
@@ -304,7 +324,10 @@ export default function MappingStudio({ service, path, initial, onClose, onSaved
   const mapSchema = resolveRef(grammar, grammar?.properties?.mapping);
   const mapProps = mapSchema?.properties || {};
   const mapKeys = Object.keys(mapProps);
-  const requiredKeys = mapSchema?.required || [];
+  const layout = mappingLayout({ keys: mapKeys, required: mapSchema?.required || [], frame: frameSel, height });
+  // A frame read from the payload is a mapped field like any other.
+  const shownKeys = frameSel === "payload" ? ["frame", ...layout.visible] : layout.visible;
+  const requiredKeys = frameSel === "payload" ? ["frame", ...layout.required] : layout.required;
   const core = vocab?.core || {};
   const extBag = vocab?.extensionBag || "vendorSpecific";
   // Lay out a device that actually carries a position (see pickSampleIdx); fall back
@@ -319,7 +342,20 @@ export default function MappingStudio({ service, path, initial, onClose, onSaved
     seeded.current = true;
     let parsed = {};
     try { parsed = docText ? JSON.parse(docText) : {}; } catch { parsed = {}; }
+    // A schema written for 0.18 does not load on 0.19: open on the renamed copy and
+    // say what was renamed, so saving writes the 0.19 form.
+    const renamed = schemaFieldMigrations(parsed);
+    setMigrations(renamed);
+    parsed = migratedSchema(parsed);
     setDoc(parsed);
+    const fc = parsed?.mapping?.frame;
+    // A constant frame the mapper has no row set for (e.g. `room`) is kept as stored.
+    const fs = fc && "const" in fc ? String(fc.const) : fc?.path ? "payload" : "wgs84";
+    setFrameSel(fs);
+    let caps = null;
+    try { caps = capsRaw ? JSON.parse(capsRaw) : null; } catch { caps = null; }
+    const hs = typeof caps?.z === "boolean" ? caps.z : !!parsed?.mapping?.z;
+    setHeight(hs);
     const b = {};
     for (const k of mapKeys) b[k] = specToState(parsed?.mapping?.[k]);
     const diag = parsed?.diagnostics || {};
@@ -331,14 +367,15 @@ export default function MappingStudio({ service, path, initial, onClose, onSaved
     for (const [k, val] of Object.entries(stream)) if (!(k in core)) xr.push({ key: k, tier: "stream", state: specToState(val) });
     for (const [k, val] of Object.entries(onDemand)) if (!(k in core)) xr.push({ key: k, tier: "onDemand", state: specToState(val) });
     setXrows(xr);
-    const snap = JSON.stringify({ binds: b, xrows: xr });
-    setSaved(snap);
+    const snap = JSON.stringify({ binds: b, xrows: xr, frameSel: fs, height: hs });
+    // Renamed fields are a change to save, even before any edit.
+    setSaved(renamed.length ? "" : snap);
     // Nothing pre-selected: a value clicked before the operator has picked a
     // target would silently overwrite whatever landed here first. They choose a
     // target (a field on the right, or + add field), then click a value.
-  }, [grammar, vocab, docText]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [grammar, vocab, docText, capsRaw]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const snapshot = () => JSON.stringify({ binds, xrows });
+  const snapshot = () => JSON.stringify({ binds, xrows, frameSel, height });
   const dirty = () => snapshot() !== saved;
 
   const flash = (key) => { setFlashKey(key); setTimeout(() => setFlashKey((k) => (k === key ? null : k)), 1100); };
@@ -437,7 +474,8 @@ export default function MappingStudio({ service, path, initial, onClose, onSaved
     next.mapping = {};
     // Write every mapped field; omit an unset optional one so the adapter defaults it (0),
     // instead of stuffing an empty path. Required fields are always set (Save is gated).
-    for (const k of mapKeys) if (isSet(binds[k])) next.mapping[k] = stateToSpec(binds[k]);
+    if (frameSel !== "payload") next.mapping.frame = { const: frameSel };
+    for (const k of shownKeys) if (isSet(binds[k])) next.mapping[k] = stateToSpec(binds[k]);
     const stream = {}, demand = {};
     for (const k of Object.keys(core)) {
       if (!isSet(binds[k])) continue;
@@ -473,14 +511,25 @@ export default function MappingStudio({ service, path, initial, onClose, onSaved
   function saveNow() {
     setBusy(true);
     const content = JSON.stringify(assemble(), null, 2);
-    applyNorthboundServiceFile(service, docPath, content)
+    // The adapter refuses a schema that contradicts its declared frame or height, so
+    // ADAPTER_CAPABILITIES is aligned first; the schema write then restarts the
+    // adapter with both in place.
+    const caps = capsRaw == null ? null : alignCapabilities(capsRaw, { frame: frameSel === "payload" ? null : frameSel, height });
+    let capsWritten = false;
+    (caps ? applyNorthboundServiceConfig(service, { ADAPTER_CAPABILITIES: caps }).then(() => { capsWritten = true; }) : Promise.resolve())
+      .then(() => applyNorthboundServiceFile(service, docPath, content))
       .then(() => {
         onSaved?.(content);   // parent refreshes cache, activates the file, shows the rollout, toasts
         onClose();            // close on success, the expected outcome; the rollout shows in the list
       })
-      .catch((e) => { toast.error(`Could not save: ${e.message}`); setBusy(false); });
+      .catch((e) => {
+        toast.error(capsWritten
+          ? `Capabilities saved, schema not saved (${e.message}). The adapter runs the new declaration with the old schema: save again.`
+          : `Could not save: ${e.message}`);
+        setBusy(false);
+      });
   }
-  const restoreSnap = (snap) => { const s = JSON.parse(snap); setBinds(s.binds); setXrows(s.xrows); setPending(null); };
+  const restoreSnap = (snap) => { const s = JSON.parse(snap); setBinds(s.binds); setXrows(s.xrows); setFrameSel(s.frameSel); setHeight(s.height); setPending(null); };
   function doSave() {
     const unmapped = Object.keys(core).filter((k) => !isSet(binds[k]));
     const body = unmapped.length
@@ -551,7 +600,11 @@ export default function MappingStudio({ service, path, initial, onClose, onSaved
               {/* source pane */}
               <div className="overflow-y-auto border-b border-slate-800 bg-slate-950/60 px-4 py-3 md:border-b-0 md:border-r">
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Vendor sample</p>
-                <p className="mb-2 text-[11px] text-slate-600">device {sampleIdx + 1} of {(raw || []).length}, from the live discover</p>
+                {rawErr ? (
+                  <p className="mb-2 text-[11px] text-amber-300">No vendor sample ({rawErr}). Type the paths in the targets on the right.</p>
+                ) : (
+                  <p className="mb-2 text-[11px] text-slate-600">device {sampleIdx + 1} of {(raw || []).length}, from the live discover</p>
+                )}
                 <div className="font-mono text-[11.5px] leading-relaxed">
                   <Tree obj={sample} focused={focused} focusedName={focused ? matchNameFor(focused) : null} focusedState={focused ? stateFor(focused) : null} binds={binds}
                     usedBy={(p) => [...mapKeys, ...diagKeys].find((k) => binds[k]?.mode === "path" && binds[k].path === p)
@@ -562,9 +615,44 @@ export default function MappingStudio({ service, path, initial, onClose, onSaved
               <div className="overflow-y-auto px-4 py-3">
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Targets</p>
                 <p className="mb-3 text-[11px] text-slate-600">Required location fields from the adapter contract; diagnostics from the gateway vocabulary.</p>
+                {migrations.length > 0 && (
+                  <div className="mb-3 rounded border border-amber-500/30 bg-amber-950/20 px-3 py-2 text-[11px] text-amber-200">
+                    <p>The stored schema was written for an earlier northbound release and does not load on this one. Renamed here; save to apply:</p>
+                    <ul className="mt-1 font-mono text-[10.5px] text-amber-300/90">
+                      {migrations.map((m) => <li key={m.path}>{m.path}: {m.from} → {m.to}</li>)}
+                    </ul>
+                  </div>
+                )}
+
+                <div className="mb-3 grid grid-cols-1 gap-2 rounded border border-slate-800 bg-slate-950/50 p-3 sm:grid-cols-2">
+                  <label className="flex flex-col gap-1 text-[11px] text-slate-400">
+                    <span className="font-medium text-slate-200">Coordinates</span>
+                    <select value={frameSel} onChange={(e) => setFrameSel(e.target.value)}
+                      className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-[12px] text-slate-100">
+                      <option value="wgs84">latitude / longitude (wgs84)</option>
+                      <option value="venue">metres in the venue (x, y)</option>
+                      <option value="payload">read from each record (frame field)</option>
+                      {!["wgs84", "venue", "payload"].includes(frameSel) && (
+                        <option value={frameSel}>{frameSel} (stored; not a frame this adapter maps)</option>
+                      )}
+                    </select>
+                  </label>
+                  <div className="flex flex-col gap-1 text-[11px] text-slate-400">
+                    <span className="font-medium text-slate-200">Height</span>
+                    <div className="inline-flex w-fit overflow-hidden rounded border border-slate-700">
+                      {[false, true].map((on) => (
+                        <button key={String(on)} type="button" onClick={() => setHeight(on)}
+                          className={`px-3 py-1 text-[11px] transition-colors ${height === on ? "bg-sky-600 text-white" : "bg-slate-950 text-slate-400 hover:text-slate-200"}`}>
+                          {on ? "Measured" : "Not measured"}
+                        </button>
+                      ))}
+                    </div>
+                    <span className="text-[10px] text-slate-500">Measured only if the source computes it; a fixed 0 is not a measurement.</span>
+                  </div>
+                </div>
 
                 <Group title="Location fix" done={locDone} total={requiredKeys.length}>
-                  {mapKeys.map((k) => (
+                  {shownKeys.map((k) => (
                     <Row key={k} tkey={k} required={requiredKeys.includes(k)} help={mapProps[k]?.description} state={binds[k]} sample={sample} binds={binds} leaves={leaves}
                       focused={focused === k} flash={flashKey === k} advOpen={advOpen.has(k)} pending={pending?.key === k ? pending : null}
                       onFocus={() => { setFocused(k); setPending(null); }} onSrc={() => { setFocused(k); if (binds[k]?.mode === "const") toggleAdv(k); }}
@@ -813,7 +901,7 @@ function SourceEditor({ tkey, state, onChange, val }) {
         <>
           <div className="flex items-center gap-2">
             <span className="w-12 shrink-0 text-[9.5px] font-semibold uppercase tracking-wide text-slate-500">Value</span>
-            <input autoFocus className={`${inp} flex-1`} value={s.value} placeholder="e.g. wgs84, or 0" onChange={(e) => up({ value: e.target.value })} />
+            <input autoFocus className={`${inp} flex-1`} value={s.value} placeholder="e.g. wgs84, venue, room" onChange={(e) => up({ value: e.target.value })} />
           </div>
           <p className="text-[10px] text-slate-500">A fixed value, written as-is. Use it for a field the vendor's data doesn't carry.</p>
         </>

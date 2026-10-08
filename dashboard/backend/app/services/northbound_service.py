@@ -154,41 +154,57 @@ KELT_WIRED_ENV = ("POSITIONING_ENGINE_URL", "ADAPTER_NAME", "ADAPTER_BASE_URL")
 # so the contract validator does not flag a dead variable.
 _RETIRED_ADAPTER_ENV = ("ADAPTER_KIND",)
 
-# Env the northbound adapter model reads but an adapter's own /contract does not
-# declare. vendor-adapter 0.17.0 documented ADAPTER_CAPABILITIES as the deploy-time
-# channel for the bound source's traits without listing it in env.contract.yaml;
-# 0.17.1 declares it (type: json), at which point this entry is skipped because
-# _kelt_declared_env only adds what the contract lacks. Kept for an adapter still
-# on 0.17.0, marked `declared_by: kelt`, adapter role only. Drop once none remains.
-_KELT_DECLARED_ENV: dict[str, list[dict[str, Any]]] = {
-    "adapter": [{
-        "name": "ADAPTER_CAPABILITIES",
-        "type": "json",
-        "default": "",
-        "sensitive": False,
-        "writable": True,
-        "declared_by": "kelt",
-        "description": (
-            "Traits of the source this adapter is bound to, as JSON, merged over the "
-            "image's baked adapter.contract.yaml and sent to the engine on every "
-            "heartbeat: source, kinds, frame, z, accuracy_class (band the technology "
-            "nominally delivers) and nominalAccuracy (metres; used when a fix reports "
-            "no radius). A generic image such as vendor-adapter holds none of these, so "
-            "without this an adapter reports no source and its fixes are dropped."
-        ),
-    }],
-}
+# 0.19 removed the `local` frame. A vendor-adapter bound to floor-plan metres now
+# declares `venue`; an image that bakes its own frame (wifi-adapter, synthetic: `room`)
+# keeps it, so an override still saying `local` is dropped. The engine answers 422 to
+# an announcement with an unknown frame.
+_IMAGES_WITH_BAKED_FRAME = ("wifi-adapter", "synthetic-adapter")
 
 
-def _kelt_declared_env(role: str, contract: dict[str, Any]) -> list[dict[str, Any]]:
-    """KELT-declared entries for this role that the service's /contract does not
-    already name. Empty for every non-adapter role."""
-    declared = {
-        e.get("name")
-        for grp in ("required", "recommended", "optional")
-        for e in (contract.get("env", {}).get(grp) or [])
+def migrate_capabilities(caps_json: str, image_basename: str) -> str | None:
+    """ADAPTER_CAPABILITIES rewritten for 0.19, or None when it needs no change or
+    is not a JSON object."""
+    try:
+        caps = json.loads(caps_json) if caps_json else None
+    except ValueError:
+        return None
+    if not isinstance(caps, dict) or caps.get("frame") != "local":
+        return None
+    if image_basename in _IMAGES_WITH_BAKED_FRAME:
+        caps.pop("frame")
+    else:
+        caps["frame"] = "venue"
+    return json.dumps(caps, separators=(",", ":"))
+
+
+def schema_hints(doc: dict) -> dict[str, Any]:
+    """What a vendor-adapter schema states about its source: the vendor name, the
+    constant frame it maps, and whether it maps a height (`z` since 0.19; `y` is
+    the horizontal venue coordinate)."""
+    mapping = doc.get("mapping") or {}
+    return {
+        "vendor": doc.get("vendor"),
+        "frame": (mapping.get("frame") or {}).get("const"),
+        "z": "z" in mapping,
     }
-    return [dict(e) for e in _KELT_DECLARED_ENV.get(role, []) if e["name"] not in declared]
+
+
+def running_pods(pods: list, deployment: str) -> list:
+    """The deployment's pods that run a container, newest first. A pod whose
+    container is waiting (crash loop, image pull) or that is terminating serves
+    nothing."""
+    live = [p for p in pods if p.deployment == deployment and p.phase == "Running" and not p.waiting_reason]
+    return sorted(live, key=lambda p: p.start_time or "", reverse=True)
+
+
+def contract_pod(pods: list, deployment: str):
+    """The pod an adapter's /contract, mapping grammar and discover are read from:
+    the newest running pod of the deployment, ready or not. During an upgrade the
+    Service reaches only the old ready pod, so reading through it shows the old
+    grammar; and a new pod held unready by its schema is exactly the one whose
+    contract the operator needs to fix that schema."""
+    live = running_pods(pods, deployment)
+    return live[0] if live else None
 
 
 def _image_basename(image: str | None) -> str:
@@ -359,12 +375,13 @@ _IMAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-/:@]{0,255}$")
 _LOG_ERROR_RE = re.compile(r"error|exception|traceback", re.IGNORECASE)
 
 # The static adapter HTTP contract surfaced in the UI's guidance panel.
+# 0.19 measurement contract (5g-northbound schema/adapter-measurement.schema.json):
+# x, y horizontal in the declared frame, z only when measured, timestamp required.
 MEASUREMENT_SCHEMA = {
     "source": "wifi",
-    "frame": "local",
+    "frame": "room",
     "x": 11.5,
-    "y": 0.0,
-    "z": 10.3,
+    "y": 10.3,
     "accuracy": 6.6,
     "confidence": 0.85,
     "timestamp": 1700000000.0,
@@ -376,11 +393,13 @@ from typing import Optional
 
 class Measurement(BaseModel):
     source: str = "my-source"
-    frame: str = "local"
-    x: float; y: float = 0.0; z: float
-    accuracy: float
-    confidence: float
-    timestamp: Optional[float] = None
+    frame: str = "room"
+    x: float
+    y: float
+    z: Optional[float] = None
+    accuracy: Optional[float] = None
+    confidence: Optional[float] = None
+    timestamp: float
 
 app = FastAPI()
 _cache: dict[str, Measurement] = {}
@@ -701,6 +720,9 @@ class NorthboundService:
         retired = [k for k in _RETIRED_ADAPTER_ENV if k in data]
         for k in retired:
             data.pop(k)
+        migrated = migrate_capabilities(data.get("ADAPTER_CAPABILITIES", ""), _image_basename(image))
+        if migrated is not None:
+            data["ADAPTER_CAPABILITIES"] = migrated
         self.k8s.apply_configmap(POSITIONING_NS, cm_name, data)
         if retired:
             self.k8s.unset_configmap_keys(POSITIONING_NS, cm_name, retired)
@@ -1027,12 +1049,39 @@ class NorthboundService:
         }
 
     # ── Live per-service contract (served by each service's /contract) ──────────
+    def _adapter_get(self, ns: str, name: str, svc_obj: Any, path: str,
+                     query: list[tuple[str, str]] | None = None, pod: Any = None) -> str:
+        """GET `path` on the deployment's contract_pod through the API-server pod
+        proxy, as text. `path` is literal in the URL template: a `{path}` parameter
+        would encode its `/` to %2F and the proxy would 404. _preload_content=False
+        reads raw bytes; the client otherwise turns a JSON body into a Python repr.
+        Raises LookupError when no pod runs."""
+        pod = pod or contract_pod(self.k8s.list_pods(ns), name)
+        if pod is None:
+            raise LookupError(f"no running pod for {name}")
+        sp = (svc_obj.spec.ports or [None])[0]
+        tp = getattr(sp, "target_port", None)
+        port = tp if isinstance(tp, int) else (int(tp) if isinstance(tp, str) and tp.isdigit() else getattr(sp, "port", ADAPTER_PORT))
+        resp = self.k8s.core.api_client.call_api(
+            f"/api/v1/namespaces/{{namespace}}/pods/{{name}}/proxy/{path}",
+            "GET",
+            path_params={"namespace": ns, "name": f"{pod.name}:{port}"},
+            query_params=query or [],
+            header_params={"Accept": "application/json"},
+            auth_settings=["BearerToken"],
+            _preload_content=False,
+            _return_http_data_only=True,
+        )
+        http = resp[0] if isinstance(resp, tuple) else resp
+        body = http.data
+        return body.decode("utf-8") if isinstance(body, (bytes, bytearray)) else body
+
     def service_contract(self, name: str) -> dict[str, Any]:
-        """Fetch a service's own /contract through the API-server service proxy.
+        """Fetch a service's own /contract from its contract_pod (API-server pod proxy).
 
         The dashboard backend runs OUTSIDE the cluster (ansible VM), so it cannot
-        resolve *.svc.cluster.local. The proxy subresource reaches ClusterIP and
-        NodePort services alike via the kube API. /contract is metadata (kind,
+        resolve *.svc.cluster.local; the proxy subresource reaches the pod via the
+        kube API. /contract is metadata (kind,
         external_origin var, required/recommended/optional env) served by a
         degraded-bootable, auth-exempt endpoint; it carries no config VALUES.
         Returns {available: False, ...} when a service has no /contract yet, so
@@ -1068,7 +1117,7 @@ class NorthboundService:
             if desired == 0:
                 return {"available": False, "service": name, "namespace": ns,
                         "error": "stopped (scaled to 0 replicas)"}
-            if ready == 0:
+            if ready == 0 and contract_pod(self.k8s.list_pods(ns), name) is None:
                 reason = next(
                     (p.waiting_reason for p in self.k8s.list_pods(ns)
                      if p.deployment == name and p.waiting_reason),
@@ -1078,21 +1127,8 @@ class NorthboundService:
                         "error": f"not ready ({reason})" if reason else "not ready (starting up)"}
         except Exception:
             pass  # Deployment lookup itself failed; fall through and let the proxy call try anyway.
-        # The service-proxy needs the port spelled out: the portless form defaults
-        # to :80 and reports "no endpoints" when the service listens elsewhere.
-        port = next((p.port for p in (svc_obj.spec.ports or [])), None)
-        proxy_name = f"{name}:{port}" if port else name
         try:
-            # _preload_content=False returns the raw HTTP response. WITHOUT it the
-            # client coerces an application/json body into a single-quoted Python
-            # dict repr (invalid JSON), so json.loads fails. Read the raw bytes.
-            resp = self.k8s.core.connect_get_namespaced_service_proxy_with_path(
-                name=proxy_name, namespace=ns, path="contract", _preload_content=False,
-            )
-            body = resp.data
-            if isinstance(body, (bytes, bytearray)):
-                body = body.decode("utf-8")
-            data = json.loads(body)
+            data = json.loads(self._adapter_get(ns, name, svc_obj, "contract"))
             return {"available": True, "service": name, "namespace": ns, "contract": data}
         except ApiException as e:  # sanitized: exc.status/.reason, never the raw response dump
             return {"available": False, "service": name, "namespace": ns,
@@ -1111,12 +1147,8 @@ class NorthboundService:
         carry network secrets (radio network ids, keys). It is returned to
         the admin UI but NEVER logged and never persisted here.
 
-        Reached through the API-server service proxy like service_contract (the backend
-        is off-cluster so it cannot resolve *.svc). The `?raw=1` query cannot go through
-        connect_get_namespaced_service_proxy_with_path (it URL-encodes the `?` into the
-        path -> 404), so call_api carries it as a real query param. _preload_content=False
-        reads raw bytes: the client otherwise coerces the JSON body into a single-quoted
-        Python dict repr that json.loads rejects (same footgun as service_contract).
+        Read from the contract_pod like service_contract, with `raw=1` as a real query
+        parameter (see _adapter_get).
         """
         _validate_name(name)
         svc_obj, ns = None, None
@@ -1132,24 +1164,17 @@ class NorthboundService:
                 break
         if ns is None:
             raise GatewayError(404, f"service {name!r} not found")
-        port = next((p.port for p in (svc_obj.spec.ports or [])), None)
-        proxy_name = f"{name}:{port}" if port else name
+        # The vendor's raw records do not depend on the adapter release, and a new pod
+        # without a loaded schema cannot fetch them (503): try the running pods newest
+        # first, so a rollout held by its schema still shows the vendor sample.
         try:
-            resp = self.k8s.core.api_client.call_api(
-                "/api/v1/namespaces/{namespace}/services/{name}/proxy/{path}",
-                "GET",
-                path_params={"namespace": ns, "name": proxy_name, "path": "discover"},
-                query_params=[("raw", "1")],
-                header_params={"Accept": "application/json"},
-                auth_settings=["BearerToken"],
-                _preload_content=False,
-                _return_http_data_only=True,
-            )
-            http = resp[0] if isinstance(resp, tuple) else resp
-            body = http.data
-            if isinstance(body, (bytes, bytearray)):
-                body = body.decode("utf-8")
-            return json.loads(body)
+            last: Exception | None = None
+            for pod in running_pods(self.k8s.list_pods(ns), name):
+                try:
+                    return json.loads(self._adapter_get(ns, name, svc_obj, "discover", [("raw", "1")], pod=pod))
+                except Exception as e:  # noqa: PERF203 - one attempt per pod
+                    last = e
+            raise last or LookupError(f"no running pod for {name}")
         except GatewayError:
             raise
         except Exception as e:
@@ -1162,9 +1187,8 @@ class NorthboundService:
         adapter), so the guided mapping builder reads the grammar (PathSpec/ConstSpec,
         the transform union, DiagnosticsBlock) at runtime instead of hardcoding it.
 
-        Reached through the API-server service proxy like discover_raw. The `/schema`
-        subpath must survive: it is baked into the proxy path template LITERALLY, because
-        a `{path}` param URL-encodes the `/` to %2F and the proxy 404s on it."""
+        Read from the contract_pod like service_contract, so an upgrade shows the new
+        image's grammar (see _adapter_get)."""
         _validate_name(name)
         svc_obj, ns = None, None
         for cand in NORTHBOUND_NAMESPACES:
@@ -1179,23 +1203,8 @@ class NorthboundService:
                 break
         if ns is None:
             raise GatewayError(404, f"service {name!r} not found")
-        port = next((p.port for p in (svc_obj.spec.ports or [])), None)
-        proxy_name = f"{name}:{port}" if port else name
         try:
-            resp = self.k8s.core.api_client.call_api(
-                "/api/v1/namespaces/{namespace}/services/{name}/proxy/contract/schema",
-                "GET",
-                path_params={"namespace": ns, "name": proxy_name},
-                header_params={"Accept": "application/json"},
-                auth_settings=["BearerToken"],
-                _preload_content=False,
-                _return_http_data_only=True,
-            )
-            http = resp[0] if isinstance(resp, tuple) else resp
-            body = http.data
-            if isinstance(body, (bytes, bytearray)):
-                body = body.decode("utf-8")
-            return json.loads(body)
+            return json.loads(self._adapter_get(ns, name, svc_obj, "contract/schema"))
         except GatewayError:
             raise
         except Exception as e:
@@ -1418,10 +1427,6 @@ class NorthboundService:
             return out
 
         env = dict(contract.get("env", {}))
-        role = _role_of(name, (dep.metadata.labels if dep is not None else None) or {})
-        extra = _kelt_declared_env(role, contract)
-        if extra:
-            env["optional"] = list(env.get("optional") or []) + extra
         annotated = {grp: annotate(env.get(grp)) for grp in ("required", "recommended", "optional")}
         hints = None
         if any(e.get("name") == "ADAPTER_CAPABILITIES" for grp in annotated.values() for e in grp):
@@ -1476,13 +1481,7 @@ class NorthboundService:
                 break
         if schema_path:
             try:
-                doc = json.loads(self.get_service_file(name, schema_path).get("content") or "")
-                mapping = doc.get("mapping") or {}
-                out["schema"] = {
-                    "vendor": doc.get("vendor"),
-                    "frame": (mapping.get("frame") or {}).get("const"),
-                    "z": "y" in mapping,
-                }
+                out["schema"] = schema_hints(json.loads(self.get_service_file(name, schema_path).get("content") or ""))
             except Exception:
                 pass
         return out
@@ -1508,13 +1507,10 @@ class NorthboundService:
             dep = self.k8s.apps.read_namespaced_deployment(name=name, namespace=ns)
         except Exception:
             pass
-        role = _role_of(name, (dep.metadata.labels if dep is not None else None) or {})
         sensitive: dict[str, bool] = {}
         for grp in ("required", "recommended", "optional"):
             for e in (contract.get("env", {}).get(grp) or []):
                 sensitive[e["name"]] = bool(e.get("sensitive"))
-        for e in _kelt_declared_env(role, contract):
-            sensitive[e["name"]] = bool(e.get("sensitive"))
         unknown = [k for k in values if k not in sensitive]
         if unknown:
             raise ValueError(f"vars not in {name} contract: {sorted(unknown)}")
@@ -1523,7 +1519,7 @@ class NorthboundService:
         # baked base) and the operator would only notice as a source that never shows up.
         json_typed = {
             e["name"] for grp in ("required", "recommended", "optional")
-            for e in (contract.get("env", {}).get(grp) or []) + _kelt_declared_env(role, contract)
+            for e in (contract.get("env", {}).get(grp) or [])
             if str(e.get("type") or "").lower() == "json"
         }
         for k in json_typed:

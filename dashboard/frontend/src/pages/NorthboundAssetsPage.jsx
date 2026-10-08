@@ -438,10 +438,10 @@ function CandidateRow({ c, onOnboard }) {
           {c.deviceType && <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[9px] text-slate-400" title="vendor-native device type">{c.deviceType}</span>}
           {rb && <span className={`rounded px-1.5 py-0.5 text-[9px] ${rb.cls}`}>{rb.label}</span>}
         </div>
-        {(sub || c.lastSeen) && (
+        {(sub || c.lastCommunicationTime) && (
           <div className="mt-0.5 flex items-center gap-2 text-[10px] text-slate-600">
             {sub && <span>{sub}</span>}
-            {c.lastSeen && <span>seen {c.lastSeen}</span>}
+            {c.lastCommunicationTime && <span title="last communication with the vendor">seen {c.lastCommunicationTime}</span>}
           </div>
         )}
       </div>
