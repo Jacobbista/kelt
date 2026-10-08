@@ -191,7 +191,7 @@ class CamaraTestSuite:
             p = requests.put(
                 f"{self.gw}/assets/{self.demo_asset_id}/placement",
                 headers={**self._bearer(tok), "Content-Type": "application/json"},
-                json={"x": 1.0, "z": 1.0},
+                json={"x": 1.0, "y": 1.0},  # room metres, x along the width, y along the depth
                 timeout=self.timeout,
             )
             if p.status_code != 200:
