@@ -174,6 +174,25 @@ json.dump(doc, open(path, "w"), indent=1)
 PY
 }
 
+# The QoS of the session holding the UE's address (network/ue_qos.py) into
+# ue.json under <key>: SMF /pdu-info and AMF /ue-info, and the Session-AMBR from
+# the subscriber record (its AMBR and slice fields only).
+ue_qos_record() {
+  local run_dir="$1" key="$2" address="$3" tmp supi
+  tmp="$(mktemp -d)"
+  nf_api_items smf pdu-info > "$tmp/pdu.json"
+  nf_api_items amf ue-info > "$tmp/ue.json"
+  supi="$(cd "$EXP_ROOT" && python3 -m network.ue_qos supi "$address" "$tmp/pdu.json")"
+  if [ -n "$supi" ]; then
+    kubectl exec -n "$CORE_NS" deploy/mongodb -- mongosh open5gs --quiet --eval \
+      "JSON.stringify(db.subscribers.findOne({imsi: '$supi'}, {_id: 0, imsi: 1, ambr: 1, 'slice.sst': 1, 'slice.sd': 1, 'slice.session.name': 1, 'slice.session.ambr': 1}))" \
+      > "$tmp/subscriber.json"
+  fi
+  (cd "$EXP_ROOT" && python3 -m network.ue_qos "$run_dir/ue.json" "$key" "$address" \
+    "$tmp/pdu.json" "$tmp/ue.json" "$tmp/subscriber.json")
+  rm -rf "$tmp"
+}
+
 ran_nic() { worker_sh "sudo ovs-vsctl list-ports br-ran | grep -v '^patch-\|^veth' | head -1" | tr -d '\r'; }
 
 # Worker files of one attempt: /tmp/kelt-<what>-<stamp>-<attempt>.<ext>, each
@@ -328,7 +347,7 @@ mark_unfinished() {
 # and, when capture_s > 0, the worker's br-ran capture for that long.
 net_attempt() {
   local run_dir="$1" sched="$2" capture_s="$3" link="$4" slug stamp attempt job expected deadline server nic
-  local points="" pt iface
+  local points="" pt iface address
   slug="$(basename "$(dirname "$run_dir")")"; stamp="$(basename "$run_dir")"
   attempt="$(next_attempt "$run_dir")"; job="$(job_name "$slug" "$stamp" "$attempt")"
   expected="$(schedule_seconds "$NET_PAUSE_S" <<< "$sched")"
@@ -338,15 +357,17 @@ net_attempt() {
   nic="$(ran_nic)"; [ -n "$nic" ] || die "no RAN NIC on br-ran (is the RAN attached?)"
   # rtt: the echoes at every point of the core, for the whole job (idle and load).
   if [ "$(rtt_points_wanted "$slug")" = yes ]; then points="$(capture_points "$server")" || exit 1; fi
+  address="$(ue_ssh "ip -4 -o addr show $link | awk '{print \$4}' | head -1")"
   ue_json "$run_dir" "attempt_${attempt}_start" \
     "ue_ssh=$KELT_UE_SSH" "target=$NET_TARGET" "ue_link=$link" \
-    "ue_address=$(ue_ssh "ip -4 -o addr show $link | awk '{print \$4}' | head -1")" \
-    "mode=$(ue_mode "$(ue_ssh "ip -4 -o addr show $link | awk '{print \$4}' | head -1")" "$(plan_value ue_internet_subnet)")" \
+    "ue_address=$address" \
+    "mode=$(ue_mode "$address" "$(plan_value ue_internet_subnet)")" \
     "ue_tcp_cc=$(ue_ssh 'cat /proc/sys/net/ipv4/tcp_congestion_control')" \
     "server_pod=$server" "server_tcp_cc=$(kubectl exec -n "$APPS_NS" "$server" -- cat /proc/sys/net/ipv4/tcp_congestion_control | tr -d '\r')" \
     "ran_nic=$nic" "attempts=$attempt" "capture=${KELT_CAPTURE:-1}" "capture_points=$(paste -sd, <<< "$points")" \
     "attempt_${attempt}_sessions_start=$(prom_value 'sum(fivegs_smffunction_sm_sessionnbr)')" \
     "attempt_${attempt}_ran_ue_start=$(prom_value 'sum(ran_ue)')"
+  ue_qos_record "$run_dir" "attempt_${attempt}_qos_start" "$address"
   footprint_start "$stamp-$attempt" "$((deadline + 120))" "$run_dir/raw/footprint/$attempt"
   [ "$capture_s" -gt 0 ] && worker_capture_start "/tmp/kelt-br-ran-$stamp-$attempt.pcap" "$capture_s"
   points_start "$stamp-$attempt" "$((deadline + 120))" <<< "$points"
@@ -361,6 +382,7 @@ net_attempt() {
   ue_json "$run_dir" "attempt_${attempt}_end" \
     "attempt_${attempt}_sessions_end=$(prom_value 'sum(fivegs_smffunction_sm_sessionnbr)')" \
     "attempt_${attempt}_ran_ue_end=$(prom_value 'sum(ran_ue)')"
+  ue_qos_record "$run_dir" "attempt_${attempt}_qos_end" "$address"
   mark_unfinished "$run_dir" "$attempt"
 }
 

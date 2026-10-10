@@ -276,7 +276,7 @@ iperf3 -c <server> -t 30 -i 1 -R -P 4       # downlink, four streams
 | `window.json` | the measured windows (UTC and local) and what was discarded, with the reason |
 | `summary.json`, `summary.md` | the numbers of the run |
 | `raw/` | tool output as produced |
-| `ue.json` | network campaigns: the UE, its link and mode, the TCP congestion control of both senders, PDU sessions and gNB UEs at the start and end of each attempt |
+| `ue.json` | network campaigns: the UE, its link and mode, the TCP congestion control of both senders, PDU sessions and gNB UEs at the start and end of each attempt, and the QoS of the UE's session at the start and end of each attempt (`attempt_<n>_qos_start`, `attempt_<n>_qos_end`) |
 | `schedule.txt`, `job/<attempt>/` | network campaigns: the full list of runs, and what each attempt ran |
 | `raw/ue/<attempt>/` | per run the tool output and a `.meta` line (start, end, exit code, link counters); the UE's CPU; the job's status and manifest |
 | `raw/worker/<attempt>/` | the full `br-ran` capture (`br-ran.pcap.gz`), and for rtt the echoes at the five points (`points/<point>.pcap.gz`) |
@@ -288,7 +288,7 @@ iperf3 -c <server> -t 30 -i 1 -R -P 4       # downlink, four streams
 Every campaign ends with `validation/check_run.py`: every planned run has a
 result or a failure reason; every counted throughput run has its 1 s windows
 to the end; iperf3's bytes against the capture; every paired echo has all its
-parts and a non-negative access; the other UEs' traffic on the cell inside
+parts and a non-negative access; the QoS of the UE's session recorded at the start and end of every attempt, every value known and unchanged within the attempt (not applicable in mode `nat`); the other UEs' traffic on the cell inside
 each run, from the full `br-ran` capture, reported, not judged (other devices
 stay attached: a cell carries some background; it is measured, not removed);
 one
@@ -342,6 +342,17 @@ up, medians do not); and the distribution of the RTT at rest and under load, eac
   limited by its sender's congestion control: the server pod's for downlink, the
   UE's for uplink. A UE whose Ethernet sits on USB 2.0 cannot exceed about
   300 Mbit/s.
+- **The session's QoS** is recorded in `ue.json` (`network/ue_qos.py`). The
+  session is the one holding the UE's address in the SMF's `/pdu-info`, the
+  management API the dashboard reads; it gives the SUPI, the DNN, the 5QI and
+  the session state. The UE-AMBR is the AMF's value in force (`/ue-info`). The
+  Session-AMBR is in neither API: it is the subscriber record's value for the
+  session's slice and DNN at the time of the run (`session_ambr_source`), which
+  is the value the SMF applies only if the record has not changed since the
+  session was established. The value in force is visible in the PFCP Session
+  Establishment (MBR of the QER) and the NGAP PDU Session Resource Setup.
+  In mode `nat` the UE's address is not a PDU session address and every field
+  is `unknown`.
 - The caches on a location request, and what `maxAge=0` skips, are in
   [positioning adapters](../docs/architecture/positioning-adapters.md#what-kelt-declares-per-source).
   A request reaches the vendor only with the adapter's cache cold: the

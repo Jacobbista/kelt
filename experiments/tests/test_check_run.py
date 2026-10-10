@@ -20,5 +20,48 @@ class CoveredTest(unittest.TestCase):
         self.assertEqual([r for r, _, _ in check_run.covered(wins, 0.0, 30.0)], ["1", "2"])
 
 
+QOS = {"supi": "imsi-001010000000001", "dnn": "internet", "five_qi": 9, "pdu_state": "active",
+       "ue_ambr_dl_mbit": 500, "ue_ambr_ul_mbit": 500, "session_ambr_dl_mbit": 500,
+       "session_ambr_ul_mbit": 500, "session_ambr_source": "subscriber_record"}
+
+
+class QosTest(unittest.TestCase):
+    def run_dir(self, doc):
+        import json
+        import tempfile
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "ue.json"), "w") as fh:
+            json.dump(doc, fh)
+        return d
+
+    def test_recorded_and_unchanged(self):
+        ok, msg = check_run.check_qos(self.run_dir({"mode": "direct", "attempts": "1",
+                                                     "attempt_1_qos_start": QOS, "attempt_1_qos_end": QOS}))
+        self.assertTrue(ok, msg)
+        self.assertIn("500", msg)
+
+    def test_an_unknown_value_fails(self):
+        q = dict(QOS, session_ambr_dl_mbit="unknown")
+        ok, msg = check_run.check_qos(self.run_dir({"mode": "direct", "attempts": "1",
+                                                     "attempt_1_qos_start": q, "attempt_1_qos_end": q}))
+        self.assertFalse(ok)
+        self.assertIn("session_ambr_dl_mbit", msg)
+
+    def test_a_change_during_the_attempt_fails(self):
+        ok, msg = check_run.check_qos(self.run_dir({"mode": "direct", "attempts": "1", "attempt_1_qos_start": QOS,
+                                                     "attempt_1_qos_end": dict(QOS, session_ambr_dl_mbit=100)}))
+        self.assertFalse(ok)
+
+    def test_a_missing_record_fails(self):
+        ok, _ = check_run.check_qos(self.run_dir({"mode": "direct", "attempts": "2",
+                                                   "attempt_1_qos_start": QOS, "attempt_1_qos_end": QOS}))
+        self.assertFalse(ok)
+
+    def test_nat_mode_is_not_applicable(self):
+        ok, msg = check_run.check_qos(self.run_dir({"mode": "nat", "attempts": "1"}))
+        self.assertTrue(ok)
+        self.assertIn("nat", msg)
+
+
 if __name__ == "__main__":
     unittest.main()

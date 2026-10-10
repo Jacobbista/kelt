@@ -13,6 +13,9 @@ A failed check flags the run, it does not remove it. Checks by campaign:
   all its parts; access is never negative.
 - throughput and rtt: the other UEs' traffic on the cell inside each run, from
   the full br-ran capture (rtt: the idle runs), reported (part of the scenario).
+- throughput and rtt: the QoS of the UE's session (network/ue_qos.py) recorded at
+  the start and the end of every attempt, every value known, unchanged within
+  the attempt; not applicable when the UE is behind a router (mode nat).
 - every campaign with a footprint: one sample per second from each machine and
   each pod inside the measured windows (no gap over 2 s); every pod named.
 
@@ -137,6 +140,33 @@ def check_cell(run_dir: str) -> tuple[bool, str]:
                   f"(mean {sum(values) / len(values):.0f}), {len(rates)} run(s) covered")
 
 
+def check_qos(run_dir: str) -> tuple[bool, str]:
+    try:
+        with open(os.path.join(run_dir, "ue.json")) as fh:
+            ue = json.load(fh)
+    except (OSError, ValueError):
+        return False, "no ue.json"
+    if ue.get("mode") == "nat":
+        return True, "not applicable: the UE is behind a router (mode nat)"
+    problems, seen = [], []
+    for n in range(1, int(ue.get("attempts", 1)) + 1):
+        start, end = ue.get(f"attempt_{n}_qos_start"), ue.get(f"attempt_{n}_qos_end")
+        if not start or not end:
+            problems.append(f"attempt {n}: not recorded at {'start' if not start else 'end'}")
+            continue
+        unknown = sorted(k for k, v in start.items() if v == "unknown")
+        if unknown:
+            problems.append(f"attempt {n}: unknown {', '.join(unknown)}")
+        if start != end:
+            problems.append(f"attempt {n}: changed within the attempt")
+        seen.append(start)
+    if problems:
+        return False, "; ".join(problems)
+    q = seen[-1]
+    return True, (f"{q['supi']} 5QI {q['five_qi']}, UE-AMBR {q['ue_ambr_dl_mbit']}/{q['ue_ambr_ul_mbit']}, "
+                  f"Session-AMBR {q['session_ambr_dl_mbit']}/{q['session_ambr_ul_mbit']} Mbit/s (record)")
+
+
 def check_footprint(run_dir: str) -> tuple[bool, str]:
     path = os.path.join(run_dir, "footprint.json")
     if not os.path.exists(path):
@@ -181,10 +211,11 @@ def main() -> int:
     checks = []
     if campaign == "throughput":
         checks = [("schedule", lambda: check_schedule(run_dir)), ("windows", lambda: check_windows(run_dir)),
-                  ("bytes", lambda: check_bytes(run_dir)), ("cell", lambda: check_cell(run_dir))]
+                  ("bytes", lambda: check_bytes(run_dir)), ("cell", lambda: check_cell(run_dir)),
+                  ("qos", lambda: check_qos(run_dir))]
     elif campaign == "rtt":
         checks = [("schedule", lambda: check_schedule(run_dir)), ("echoes", lambda: check_echoes(run_dir)),
-                  ("cell", lambda: check_cell(run_dir))]
+                  ("cell", lambda: check_cell(run_dir)), ("qos", lambda: check_qos(run_dir))]
     if glob.glob(os.path.join(run_dir, "raw", "footprint", "*")):
         checks.append(("footprint", lambda: check_footprint(run_dir)))
     if not checks:

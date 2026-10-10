@@ -62,6 +62,35 @@ kubectl() {
   fi
 }
 
+# Items of an Open5GS management list (/pdu-info, /ue-info) as the dashboard
+# reads them (k8s_service.nf_api_get): through the API server's proxy to the
+# running pod of <app> in the core namespace, on its port named "metrics", page
+# by page. Prints {"items": [...]}, empty when there is no such pod or port.
+nf_api_items() {
+  local app="$1" path="$2" size="${NF_API_PAGE_SIZE:-100}" pod port page=0 body all='{"items": []}'
+  pod="$(kubectl get pod -n "$CORE_NS" -l app="$app" --field-selector=status.phase=Running \
+    -o jsonpath='{.items[0].metadata.name}' | tr -d '\r')"
+  [ -n "$pod" ] && port="$(kubectl get pod -n "$CORE_NS" "$pod" \
+    -o jsonpath='{.spec.containers[*].ports[?(@.name=="metrics")].containerPort}' | tr -d '\r' | awk '{print $1}')"
+  if [ -z "$pod" ] || [ -z "${port:-}" ]; then echo "$all"; return; fi
+  while :; do
+    body="$(kubectl get --raw "/api/v1/namespaces/$CORE_NS/pods/$pod:$port/proxy/$path?page=$page&page_size=$size")"
+    all="$(python3 -c '
+import json, sys
+acc, size = json.loads(sys.argv[1]), int(sys.argv[3])
+try:
+    page = json.loads(sys.argv[2])
+except ValueError:
+    page = {}
+batch = page.get("items") or []
+acc["items"] += batch
+done = not batch or len(batch) < size or len(acc["items"]) >= (page.get("pager") or {}).get("count", 0)
+print(json.dumps(acc) + ("\ndone" if done else ""))' "$all" "$body" "$size")"
+    if [ "$(tail -n1 <<< "$all")" = done ]; then head -n1 <<< "$all"; return; fi
+    page=$((page + 1))
+  done
+}
+
 # First reachable node IP (NodePort services answer on any node).
 node_ip() {
   kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' \
