@@ -1750,6 +1750,17 @@ interactive_menu() {
 # ─── CLI mode ──────────────────────────────────────────────────────────
 ONBOARD_MARKER="${HOME}/.config/5g-testbed/onboarded"
 AUTOSTART_UNIT="/etc/systemd/system/5g-testbed.service"
+AUTOSTART_NEEDRESTART_CONF="/etc/needrestart/conf.d/5g-testbed.conf"
+
+# needrestart (run by apt after library upgrades) restarts every service whose
+# processes use an upgraded library. The VMs run in the unit's cgroup, so a
+# restart is a `vagrant halt` and `vagrant up` of the whole testbed.
+autostart_needrestart_conf() {
+  cat <<'EOF'
+# Installed by `kelt autostart on`: library upgrades do not restart the testbed.
+$nrconf{override_rc}{qr(^5g-testbed\.service$)} = 0;
+EOF
+}
 
 is_onboarded() { [[ -f "$ONBOARD_MARKER" ]]; }
 mark_onboarded() {
@@ -1925,6 +1936,10 @@ WantedBy=multi-user.target
 EOF
       sudo systemctl daemon-reload
       sudo systemctl enable 5g-testbed.service
+      if [ -d "$(dirname "$AUTOSTART_NEEDRESTART_CONF")" ]; then
+        autostart_needrestart_conf | sudo tee "$AUTOSTART_NEEDRESTART_CONF" >/dev/null
+        echo "needrestart rule installed at $AUTOSTART_NEEDRESTART_CONF"
+      fi
       echo ""
       echo "Autostart enabled. Cluster will start on next boot."
       echo "Follow logs with: journalctl -u 5g-testbed.service -f"
@@ -1932,7 +1947,7 @@ EOF
     off|disable)
       if [ -f "$AUTOSTART_UNIT" ]; then
         sudo systemctl disable 5g-testbed.service 2>/dev/null || true
-        sudo rm -f "$AUTOSTART_UNIT"
+        sudo rm -f "$AUTOSTART_UNIT" "$AUTOSTART_NEEDRESTART_CONF"
         sudo systemctl daemon-reload
         echo "Autostart disabled and unit removed."
       else
@@ -1942,6 +1957,7 @@ EOF
     status|"")
       echo "Autostart: $(autostart_status)"
       [ -f "$AUTOSTART_UNIT" ] && echo "Unit file:  $AUTOSTART_UNIT"
+      if [ -f "$AUTOSTART_NEEDRESTART_CONF" ]; then echo "needrestart: $AUTOSTART_NEEDRESTART_CONF"; fi
       ;;
     *)
       echo "Usage: testbed-config autostart [on|off|status]"

@@ -138,6 +138,13 @@ Stop semantics: `systemctl stop 5g-testbed.service` runs
 "active" state reflects the cluster having been brought up, not a
 long-running process.
 
+The VMs run in the unit's cgroup. On hosts with needrestart, which apt runs
+after library upgrades, `kelt autostart on` also installs
+`/etc/needrestart/conf.d/5g-testbed.conf`, which keeps the unit out of
+automatic restarts; without it, an unattended upgrade of a library the VMs use
+restarts the unit, that is, halts and starts the testbed. `kelt autostart off`
+removes the file.
+
 ---
 
 ## 4. External access (tunnels, public domains)
