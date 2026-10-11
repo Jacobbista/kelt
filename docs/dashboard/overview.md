@@ -21,13 +21,13 @@ graph LR
         DB_F["Dashboard Frontend (dev, opt-in)
         Vite · port 31573"]
     end
-    Grafana["Grafana
-    192.168.56.11:30300"]
+    Prom["Prometheus
+    NodePort 30090"]
 
     DB_B -->|"kubectl + kubeconfig / SSH to worker for OVS"| W
     DB_B -->|"kubectl + kubeconfig"| E
     DB_F -->|"REST + WebSocket"| DB_B
-    DB_B -->|"PromQL queries"| Grafana
+    DB_B -->|"PromQL queries"| Prom
 ```
 
 **Reasons for this design**:
@@ -94,7 +94,7 @@ Authentication uses the Keycloak realm from phase 08. The backend validates the 
 
 WebSocket upgrades carry the token as a `?access_token=<jwt>` query parameter. Enforcement is applied at router-include time in `dashboard/backend/app/main.py`.
 
-Auth is controlled by the single switch `dashboard_auth_enabled`. While disabled (the default until the realm is wired into production, `skip_auth=true`), the backend runs a break-glass bypass that treats every request as a synthetic admin. Every route requires a role unless it is on the short public list; the watchdog, which restarts a dead backend, uses the generated `DASHBOARD_ADMIN_TOKEN` instead (see [security/iam.md](../security/iam.md#default-deny)).
+Auth is controlled by the single switch `dashboard_auth_enabled`, `true` by default: the frontend signs in through Keycloak and the backend validates the token. Set to `false` (`skip_auth=true`), the backend runs a break-glass bypass that treats every request as a synthetic admin. Every route requires a role unless it is on the short public list; the watchdog, which restarts a dead backend, uses the generated `DASHBOARD_ADMIN_TOKEN` instead (see [security/iam.md](../security/iam.md#default-deny)).
 
 All mutating actions are audit-logged in NDJSON format to `backend/logs/audit.log` in the backend's working copy on the ansible VM (`/home/vagrant/dashboard-work`); re-running phase 09 syncs the source but leaves the log in place. OVS shell operations run through an allowlist (`ovs-vsctl list-br`, `ovs-vsctl list-ports <bridge>`, `ovs-ofctl dump-flows <bridge>`) with size-capped, time-bounded output.
 

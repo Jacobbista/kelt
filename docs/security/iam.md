@@ -177,8 +177,8 @@ unrelated to the dashboard backend.
 
 ## Phased rollout
 
-Dashboard auth now uses a single switch, `dashboard_auth_enabled`.
-When true, frontend OIDC login is enabled and backend JWT validation is
+Dashboard auth now uses a single switch, `dashboard_auth_enabled`, `true`
+by default. When true, frontend OIDC login is enabled and backend JWT validation is
 enforced. When false, frontend login is disabled and backend auth bypass
 is enabled as a temporary break-glass fallback. With backend bypass active,
 every request is treated as if issued by a synthetic principal that holds
@@ -195,7 +195,7 @@ Three checkpoints must clear before enforcing auth in production, in order:
 3. **External origin variables aligned**: the realm's redirect URIs and
    the frontend's `VITE_KEYCLOAK_AUTHORITY` must agree on the dashboard
    origin. Under the single-base model they all derive from
-   `external_base_domain` (dashboard at `kelt.<base>`, Keycloak under `/auth`);
+   `external_base_domain` (dashboard at `kelt-dashboard.<base>`, Keycloak under `/auth`);
    in LAN mode they fall back to the worker NodePorts. See
    [external-access.md](external-access.md).
 
