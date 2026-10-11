@@ -1785,7 +1785,7 @@ do_onboarding() {
   echo "  5G K3s KubeEdge Testbed — Onboarding"
   echo "════════════════════════════════════════════════════════════"
   echo ""
-  echo "Tested on Ubuntu 22.04 / 24.04. Auto-fixes use apt; on other"
+  echo "Tested on Ubuntu 24.04. Auto-fixes use apt; on other"
   echo "distros install the missing packages with your package manager."
   echo ""
   echo "Required:"
