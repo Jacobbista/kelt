@@ -21,8 +21,9 @@ first 10 s of each run.
   about 130 Mbit/s in one step, after 2 to 35 s; one run stayed at the low
   level for 35 of its 60 s. One TCP stream and four behave the same.
 - The UE's CPU stays under 13% at 130 Mbit/s.
-- With the modem in the measuring computer (`direct` mode, 2026-10-10) the
-  downlink has one level, about 130 Mbit/s, in every run.
+- With the modem in the measuring computer (`direct` mode, 2026-10-10 and 11)
+  the downlink stays at about 130 Mbit/s in 19 of 20 runs; one run starts at
+  the low level and moves to the high one after 17 s of its measured part.
 
 A Session-AMBR below the radio capacity caps the downlink instead: at
 100 Mbit/s it stays near 95 Mbit/s of TCP payload. The session's QoS is in
