@@ -72,7 +72,7 @@ Tested on: Intel NUC11TNHi5 (i5-1135G7, 4c/8t, 64 GB RAM).
 
 ## OS Setup
 
-Install Ubuntu Server 22.04 LTS (minimal, no desktop), then VirtualBox and Vagrant:
+Install Ubuntu Server 24.04 LTS (minimal, no desktop), then VirtualBox and Vagrant:
 
 ```bash
 # VirtualBox
