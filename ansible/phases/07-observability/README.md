@@ -6,26 +6,32 @@ Deploys Prometheus, Loki, and Grafana for comprehensive monitoring and logging o
 
 | Component | Purpose | Access |
 |-----------|---------|--------|
-| Prometheus | Metrics collection | http://192.168.56.11:30090 |
+| Prometheus | Metrics collection, scraped every 15 s | http://192.168.56.11:30090 |
 | Loki | Log aggregation | Internal only |
-| Grafana | Visualization | http://192.168.56.11:30300 |
+| Grafana | Visualization of Prometheus metrics and Loki logs | http://192.168.56.11:30300 |
 | Node Exporter | Node metrics | DaemonSet on all nodes |
-| Promtail | Log shipping | DaemonSet on all nodes |
+| cAdvisor | Container CPU and memory, part of the kubelet | Scraped on every node |
 | Kube State Metrics | K8s object metrics | Master node |
+| Open5GS metrics | Per-NF counters (sessions, registered UEs, gNBs) on the pod port `metrics` | Scraped for amf, smf, upf-cloud, upf-edge, pcf |
+| Promtail | Log shipping | DaemonSet on all nodes |
 | Traffic Capture | PCAP capture | Optional, DaemonSet |
+
+## Who reads what
+
+- The dashboard queries Prometheus directly with PromQL; it reads logs from the
+  Kubernetes API and uses neither Loki nor Grafana.
+- Grafana reads Prometheus and Loki; it is the only consumer of Loki.
+- The experiments read a few Prometheus values (PDU sessions and gNB UEs at
+  the start and end of a run). Their CPU and memory footprint uses their own
+  1 s sampler, not Prometheus ([experiments/README.md](../../../experiments/README.md)).
 
 ## Deployment
 
 ```bash
-# From Vagrant host
-vagrant ssh ansible
+kelt run-phase 07-observability
 
-# Deploy observability stack
-cd /vagrant/ansible
-ansible-playbook phases/07-observability/playbook.yml
-
-# Or with traffic capture enabled
-ansible-playbook phases/07-observability/playbook.yml -e deploy_traffic_capture=true
+# With traffic capture enabled
+kelt run-phase 07-observability deploy_traffic_capture=true
 ```
 
 ## Grafana Access
