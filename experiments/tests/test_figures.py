@@ -30,5 +30,27 @@ class PartMeansTest(unittest.TestCase):
         self.assertEqual(got["load"], {"access_ms": 100.0, "worker": 0.0, "upf": 0.1})
 
 
+class PooledWindowsTest(unittest.TestCase):
+    def test_every_runs_windows_per_combination_as_the_table_uses(self):
+        import json
+        import tempfile
+        runs = []
+        for i, (dl1, ul4) in enumerate((([130.0, 129.0], [35.0]), ([20.0], [36.0, 35.5]))):
+            d = tempfile.mkdtemp()
+            with open(os.path.join(d, "summary.json"), "w") as fh:
+                json.dump({"combinations": {"dl1": {"windows": dl1}, "ul4": {"windows": ul4}}}, fh)
+            runs.append(d)
+        got = figures.pooled_windows(runs)
+        self.assertEqual(got["dl1"], [130.0, 129.0, 20.0])
+        self.assertEqual(got["ul4"], [35.0, 36.0, 35.5])
+        self.assertEqual(got["dl4"], [])
+
+    def test_markers_are_the_tables_percentiles(self):
+        from lib.stats import summary
+        xs = [float(x) for x in (12, 130, 131, 129, 133, 90, 165, 128, 134, 127, 140)]
+        st = summary(xs)
+        self.assertEqual(figures.markers(xs), {"median": st["median"], "p90": st["p90"]})
+
+
 if __name__ == "__main__":
     unittest.main()
