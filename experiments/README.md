@@ -352,7 +352,9 @@ up, medians do not); and the distribution of the RTT at rest and under load, eac
   session was established. The value in force is visible in the PFCP Session
   Establishment (MBR of the QER) and the NGAP PDU Session Resource Setup.
   In mode `nat` the UE's address is not a PDU session address and every field
-  is `unknown`.
+  is `unknown`. The Open5GS UPF does not enforce the Session-AMBR; the RAN
+  receives it and can, so a Session-AMBR below the radio capacity limits the
+  downlink.
 - The caches on a location request, and what `maxAge=0` skips, are in
   [positioning adapters](../docs/architecture/positioning-adapters.md#what-kelt-declares-per-source).
   A request reaches the vendor only with the adapter's cache cold: the
