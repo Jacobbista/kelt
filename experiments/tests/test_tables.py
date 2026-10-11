@@ -130,13 +130,34 @@ class NetworkRowsTest(unittest.TestCase):
             {"index": 1, "loss": 0.0, "foreign_packets": 40, "foreign_bytes_per_s": 44.0},
             {"index": 2, "loss": 0.0, "foreign_packets": 900, "foreign_bytes_per_s": 2500.0}], "total": st}}}
         d = mk_net(root, "rtt", "20260930T100000Z", doc)
-        self.assertEqual(tables.rtt_notes([d]),
-                         [f"Idle runs over the foreign traffic limit ({tables.FOREIGN_LIMIT_B_S} B/s): "
-                          "20260930T100000Z run 2 (2500.0 B/s)."])
+        self.assertEqual(tables.rtt_notes([d])[0],
+                         f"Idle runs over the foreign traffic limit ({tables.FOREIGN_LIMIT_B_S} B/s): "
+                         "20260930T100000Z run 2 (2500.0 B/s).")
         doc["conditions"]["idle"]["runs"].pop()
         d = mk_net(root, "rtt", "20260930T110000Z", doc)
-        self.assertEqual(tables.rtt_notes([d]),
-                         [f"Idle runs over the foreign traffic limit ({tables.FOREIGN_LIMIT_B_S} B/s): none."])
+        self.assertEqual(tables.rtt_notes([d])[0],
+                         f"Idle runs over the foreign traffic limit ({tables.FOREIGN_LIMIT_B_S} B/s): none.")
+
+
+class RttOverTest(unittest.TestCase):
+    def test_echoes_above_the_rest_cut_are_counted_across_sessions(self):
+        root = tempfile.mkdtemp()
+        runs = []
+        for stamp, totals in (("20261010T100000Z", [13.0, 41.0, 39.9]), ("20261011T100000Z", [55.0, 40.0])):
+            d = mk_net(root, "rtt", stamp, {"conditions": {}})
+            with open(os.path.join(d, "rtt-samples.csv"), "w") as fh:
+                fh.write("condition,run,seq,total_ms\n")
+                fh.writelines(f"idle,1,{i},{t}\n" for i, t in enumerate(totals))
+                fh.write("load,1,9,120.0\n")
+            runs.append(d)
+        self.assertEqual(tables.rtt_over(runs, "idle", 40.0), 2)
+
+    def test_note_names_the_count(self):
+        root = tempfile.mkdtemp()
+        d = mk_net(root, "rtt", "20261010T100000Z", {"conditions": {}})
+        with open(os.path.join(d, "rtt-samples.csv"), "w") as fh:
+            fh.write("condition,run,seq,total_ms\nidle,1,1,45.0\n")
+        self.assertIn(f"At rest, echoes above {tables.REST_CUT_MS:g} ms: 1.", tables.rtt_notes([d]))
 
 
 class FootprintRowsTest(unittest.TestCase):

@@ -264,11 +264,28 @@ RTT_SAMPLE_PARTS = [("total_ms", "total"), ("core_ms", "core"), ("access_ms", "a
     [(n, f"core: {n}") for n in ("worker", "ovs_n3", "upf", "ovs_n6m", "server")]
 
 
+# The at-rest panel of figures.py's rtt-distribution.pdf ends here; the echoes
+# beyond it are counted in the rtt notes.
+REST_CUT_MS = 40.0
+
+
+def rtt_over(runs: list[str], cond: str, ms: float) -> int:
+    n = 0
+    for d in runs:
+        try:
+            with open(os.path.join(d, "rtt-samples.csv")) as fh:
+                n += sum(1 for r in csv.DictReader(fh) if r["condition"] == cond and float(r["total_ms"]) > ms)
+        except FileNotFoundError:
+            pass
+    return n
+
+
 def rtt_notes(runs: list[str]) -> list[str]:
     over = [f"{os.path.basename(d)} run {r.get('index')} ({r['foreign_bytes_per_s']} B/s)"
             for d in runs for r in _idle_runs(d) if (r.get("foreign_bytes_per_s") or 0) > FOREIGN_LIMIT_B_S]
     return [f"Idle runs over the foreign traffic limit ({FOREIGN_LIMIT_B_S} B/s): "
-            + ("; ".join(over) if over else "none") + "."]
+            + ("; ".join(over) if over else "none") + ".",
+            f"At rest, echoes above {REST_CUT_MS:g} ms: {rtt_over(runs, 'idle', REST_CUT_MS)}."]
 
 
 def check_note(runs: list[str]) -> str:
