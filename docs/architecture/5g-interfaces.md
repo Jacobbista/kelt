@@ -47,7 +47,7 @@ graph LR
     NRF["NRF
     (SBI discovery)"]
 
-    UE -->|"N1 NAS"| AMF
+    UE -.->|"N1 NAS, inside NGAP"| AMF
     GNB -->|"N2 NGAP / SCTP 38412"| AMF
     GNB -->|"N3 GTP-U / UDP 2152"| UPF_C
     GNB -.->|"N3"| UPF_E
@@ -69,13 +69,19 @@ Dashed: configured, but serving no session (UPF-Edge is disabled; see [Data Netw
 | Property | Value |
 |----------|-------|
 | Purpose | Non-Access Stratum signaling (registration, authentication, PDU session) |
-| Protocol | NAS over SCTP |
+| Protocol | NAS, carried inside NGAP on N2; no traffic on this overlay |
 | Subnet | 10.201.0.0/24 |
 | Gateway | 10.201.0.1 |
 | AMF static IP | 10.201.0.100 |
 | OVS bridge | br-n1 |
 | VXLAN VNI | 101 |
 | NADs | `5g/n1-net` (pool), `5g/n1-static` (fixed endpoints) |
+
+N1 is a logical reference point (TS 23.501): NAS travels inside RRC over the air
+and inside NGAP from the gNB to the AMF, so the UE's NAS reaches the AMF over the
+N2 association, with the physical gNB and with UERANSIM alike. The overlay gives the
+AMF an address on N1; the AMF's configuration does not use it, and nothing sends
+on `br-n1`. The netshoot diagnostic pod also attaches to it.
 
 **IPAM note**: `n1-net` excludes `10.201.0.100/32` from the Whereabouts dynamic range so AMF's static IP is never reassigned.
 
