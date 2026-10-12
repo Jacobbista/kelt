@@ -310,7 +310,8 @@ thesis style (`thesis.mplstyle`: the thesis text width, Arial, its palette; it
 needs matplotlib, `python3 -m venv experiments/.venv && experiments/.venv/bin/pip install matplotlib`,
 and the Arial font): per direction, 1 and 4 streams in 1 s windows over the whole run (the run whose
 mean is closest to the median of all sessions' run means, the discarded start
-shaded, the cell's theoretical maximum dashed); the mean of each part of the core per condition, stacked (means add
+shaded, the cell's theoretical maximum dashed); the distribution of all runs' 1 s windows per combination, the
+windows the table uses, with median and p90 marked; the mean of each part of the core per condition, stacked (means add
 up, medians do not); and the distribution of the RTT at rest and under load, each on its own scale.
 
 ## Reading the numbers

@@ -52,5 +52,15 @@ class PooledWindowsTest(unittest.TestCase):
         self.assertEqual(figures.markers(xs), {"median": st["median"], "p90": st["p90"]})
 
 
+class LabelEdgeTest(unittest.TestCase):
+    def test_leftmost_point_of_any_curve_inside_the_band(self):
+        a = [10.0, 20.0, 30.0, 40.0]           # CDF 0.25, 0.5, 0.75, 1.0
+        b = [12.0, 14.0, 16.0, 18.0, 50.0]     # CDF 0.2 ... 1.0
+        # A step CDF touches a band with its horizontal and its vertical segments.
+        self.assertEqual(figures.left_edge([a, b], 0.7, 0.85), 18.0)
+        self.assertEqual(figures.left_edge([a, b], 0.9, 0.95), 40.0)
+        self.assertEqual(figures.left_edge([a, b], 1.01, 1.05), float("inf"))
+
+
 if __name__ == "__main__":
     unittest.main()

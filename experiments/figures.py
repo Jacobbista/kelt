@@ -15,10 +15,10 @@ runs/_figures/*.pdf (runs/ is not committed):
                          the mean RTT under each bar
   rtt-distribution.pdf   fig:res:latency: distribution of the RTT, at rest and
                          under load, each on its own scale
-  throughput-distribution-box.pdf, throughput-distribution-cdf.pdf
-                         the 1 s windows of every run of every session per
-                         combination (the windows the table uses), as box
-                         plots or CDFs, median and p90 marked
+  throughput-distribution.pdf
+                         CDF of the 1 s windows of every run of every session
+                         per combination (the windows the table uses), median
+                         and p90 marked
 
 Needs matplotlib: python3 -m venv .venv && .venv/bin/pip install matplotlib.
 Owner: experiments/README.md.
@@ -180,9 +180,6 @@ def rtt_distribution(rows: list[dict], out: str) -> None:
     plt.close(fig)
 
 
-BOX_POS = [1.0, 2.6]
-
-
 def pooled_windows(runs: list[str]) -> dict[str, list[float]]:
     """The 1 s windows of every run per combination, in run order: the windows
     tables.py pools for its "all" rows."""
@@ -195,68 +192,56 @@ def pooled_windows(runs: list[str]) -> dict[str, list[float]]:
     return out
 
 
+def left_edge(curves: list[list[float]], ylo: float, yhi: float) -> float:
+    """Leftmost x where any step CDF (sorted values, drawn where="post") is
+    inside the band ylo..yhi: a label right of it would overlap a curve."""
+    edge = float("inf")
+    for xs in curves:
+        n = len(xs)
+        for i, x in enumerate(xs):
+            below, level = i / n, (i + 1) / n   # the step at x rises from below to level
+            if level >= ylo and below <= yhi:
+                edge = min(edge, x)
+                break
+    return edge
+
+
 def markers(xs: list[float]) -> dict[str, float]:
     return {"median": percentile(xs, 0.5), "p90": percentile(xs, 0.9)}
 
 
-def _cap(ax, direction: str, vertical: bool) -> None:
-    cap = CAPACITY[direction]
-    label = f"Theoretical max. {cap:g} Mbit/s"
-    if vertical:
-        ax.axvline(cap, color=GREY, linestyle="--", linewidth=1)
-        ax.text(cap - YMAX[direction] * 0.015, 0.04, label, ha="right", va="bottom", rotation=90, fontsize=7, color=GREY)
-    else:
-        ax.axhline(cap, color=GREY, linestyle="--", linewidth=1)
-        ax.text(3.55, cap + YMAX[direction] * 0.015, label, ha="right", va="bottom", fontsize=7, color=GREY)
-
-
-def throughput_distribution(runs: list[str], out: str, kind: str) -> None:
-    """kind "box": per stream count, box p25-p75, median line, whiskers p10-p90,
-    points beyond. kind "cdf": empirical CDF. Median and p90 marked and labelled
-    in both; every percentile is nearest rank, as in the tables."""
+def throughput_distribution(runs: list[str], out: str) -> None:
+    """Empirical CDF of the 1 s windows per combination, median and p90 marked
+    and labelled (nearest rank, as in the tables), the theoretical maximum
+    dashed."""
     plt = _style()
     pooled = pooled_windows(runs)
     fig, axes = plt.subplots(1, 2, figsize=(WIDTH, 2.6), constrained_layout=True)
     for ax, (direction, title), tag in zip(axes, DIRECTIONS, "ab"):
-        for pos, (streams, label, color) in zip(BOX_POS, STREAMS):
-            xs = sorted(pooled[direction + streams])
+        curves = [sorted(pooled[direction + n]) for n, _, _ in STREAMS]
+        for xs, (_, label, color) in zip(curves, STREAMS):
+            ax.step(xs, [(i + 1) / len(xs) for i in range(len(xs))], where="post", color=color, label=label, zorder=3)
+        # Labels left of every curve at their height, the first stream's above its point, the second's below.
+        for xs, (_, _, color), sign in zip(curves, STREAMS, (1, -1)):
             m = markers(xs)
-            if kind == "box":
-                stats = {"med": m["median"], "q1": percentile(xs, 0.25), "q3": percentile(xs, 0.75),
-                         "whislo": percentile(xs, 0.1), "whishi": m["p90"],
-                         "fliers": [x for x in xs if x < percentile(xs, 0.1) or x > m["p90"]]}
-                ax.bxp([stats], positions=[pos], widths=0.5, showfliers=True,
-                       boxprops={"color": color}, whiskerprops={"color": color}, capprops={"color": color},
-                       medianprops={"color": color, "linewidth": 1.5},
-                       flierprops={"marker": ".", "markersize": 2, "markerfacecolor": color, "markeredgecolor": color})
-                # Labels right of the box, at least a line apart when p50 and p90 are close.
-                gap = YMAX[direction] * 0.06
-                y90 = max(m["p90"], m["median"] + gap / 2)
-                ax.text(pos + 0.3, y90, f"p90 {m['p90']:.1f}", ha="left", va="center", fontsize=7)
-                ax.text(pos + 0.3, min(m["median"], y90 - gap), f"p50 {m['median']:.1f}", ha="left", va="center", fontsize=7)
-            else:
-                ax.step(xs, [(i + 1) / len(xs) for i in range(len(xs))], where="post", color=color, label=label, zorder=3)
-                for q, name in ((0.5, "median"), (0.9, "p90")):
-                    v = m[name]
-                    ax.plot([v], [q], marker="o", markersize=3, color=color, zorder=4)
-                    first = streams == STREAMS[0][0]
-                    ax.text(v - YMAX[direction] * 0.02, q + (0.03 if first else -0.03),
-                            f"{'p50' if name == 'median' else name} {v:.1f}", ha="right",
-                            va="bottom" if first else "top", fontsize=7, color=color)
-        _cap(ax, direction, vertical=(kind == "cdf"))
+            for q, name in ((0.5, "median"), (0.9, "p90")):
+                v = m[name]
+                ax.plot([v], [q], marker="o", markersize=3, color=color, zorder=4)
+                y = q + sign * 0.03
+                band = (y, y + 0.07) if sign > 0 else (y - 0.07, y)
+                right = min(v, left_edge(curves, *band)) - YMAX[direction] * 0.02
+                ax.text(right, y, f"{'p50' if name == 'median' else name} {v:.1f}", ha="right",
+                        va="bottom" if sign > 0 else "top", fontsize=7, color=color)
+        cap = CAPACITY[direction]
+        ax.axvline(cap, color=GREY, linestyle="--", linewidth=1)
+        ax.text(cap - YMAX[direction] * 0.015, 0.04, f"Theoretical max. {cap:g} Mbit/s", ha="right", va="bottom",
+                rotation=90, fontsize=7, color=GREY)
         ax.set_title(f"({tag}) {title}")
-        if kind == "box":
-            ax.set_xticks(BOX_POS, [label for _, label, _ in STREAMS])
-            ax.set_xlim(0.4, 3.6)
-            ax.set_ylim(0, YMAX[direction])
-            ax.set_ylabel("Throughput (Mbit/s)")
-        else:
-            ax.set_xlim(0, YMAX[direction])
-            ax.set_ylim(0, 1.02)
-            ax.set_xlabel("Throughput (Mbit/s)")
-    if kind == "cdf":
-        axes[0].set_ylabel("Cumulative probability")
-        axes[1].legend(loc="lower left")
+        ax.set_xlim(0, YMAX[direction])
+        ax.set_ylim(0, 1.02)
+        ax.set_xlabel("Throughput (Mbit/s)")
+    axes[0].set_ylabel("Cumulative probability")
+    axes[1].legend(loc="lower left")
     fig.savefig(out)
     plt.close(fig)
 
@@ -268,8 +253,7 @@ def main() -> None:
     os.makedirs(out, exist_ok=True)
     tp = select_runs(runs_dir, "throughput", listed)
     throughput_series(tp, os.path.join(out, "throughput-series.pdf"))
-    for kind in ("box", "cdf"):
-        throughput_distribution(tp, os.path.join(out, f"throughput-distribution-{kind}.pdf"), kind)
+    throughput_distribution(tp, os.path.join(out, "throughput-distribution.pdf"))
     rows = _rtt_rows(select_runs(runs_dir, "rtt", listed))
     rtt_parts(rows, os.path.join(out, "rtt-parts.pdf"))
     rtt_distribution(rows, os.path.join(out, "rtt-distribution.pdf"))
