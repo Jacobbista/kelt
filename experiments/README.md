@@ -295,6 +295,10 @@ one
 footprint sample per second from every machine and pod, every pod named. A failed check flags the run, which stays;
 the tables name it.
 
+`tables.py retransmissions` gives, from the throughput runs, the TCP segments
+seen on `br-ran` in the data direction and the retransmitted ones, per
+combination.
+
 `runs/_tables/` holds what `tables.py` builds: every non-pilot run of a
 campaign, or only the runs listed in `runs/thesis-runs.txt` when that file
 exists (it lives with the data it lists).

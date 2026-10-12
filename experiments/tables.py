@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the thesis tables of one campaign from its runs.
 
-  tables.py <resource-use|verification|response-time|throughput|rtt>
+  tables.py <resource-use|verification|response-time|throughput|rtt|retransmissions>
 
 Uses every non-pilot run of the campaign, or only the runs listed in
 runs/thesis-runs.txt when that file exists (one "<slug>/<stamp>" per
@@ -315,11 +315,34 @@ def cell_note(runs: list[str]) -> list[str]:
     return out
 
 
+def retransmission_rows(runs: list[str]) -> list[dict]:
+    """TCP segments in the data direction (dl: server to UE, ul: UE to server)
+    seen on br-ran over each throughput run, and those carrying data already
+    seen on their flow (network/throughput.py br_ran); one row per session and
+    combination, then "all" rows over the sessions together."""
+    rows, pool = [], {}
+    for d in runs:
+        for name, c in sorted(_load(os.path.join(d, "summary.json")).get("combinations", {}).items()):
+            direction = name[:2]
+            seg = sum((r.get("br_ran") or {}).get(direction, {}).get("segments", 0) for r in c.get("runs", []))
+            ret = sum((r.get("br_ran") or {}).get(direction, {}).get("retransmitted", 0) for r in c.get("runs", []))
+            rows.append({"run": os.path.basename(d), "combination": name, "direction": direction,
+                         "segments": seg, "retransmitted": ret})
+            p = pool.setdefault(name, {"run": "all", "combination": name, "direction": direction,
+                                       "segments": 0, "retransmitted": 0})
+            p["segments"] += seg
+            p["retransmitted"] += ret
+    rows += [pool[k] for k in sorted(pool)]
+    for r in rows:
+        r["share_pct"] = round(100 * r["retransmitted"] / r["segments"], 4) if r["segments"] else None
+    return rows
+
+
 NOTES = {"rtt": rtt_notes}
 
 BUILDERS = {"resource-use": footprint_rows, "verification": verification_rows,
             "response-time": response_time_rows,
-            "throughput": throughput_rows, "rtt": rtt_rows}
+            "throughput": throughput_rows, "rtt": rtt_rows, "retransmissions": retransmission_rows}
 
 
 def main() -> int:
@@ -328,7 +351,7 @@ def main() -> int:
         return 2
     slug = sys.argv[1]
     runs_dir = os.environ.get("KELT_EXP_RUNS_DIR", os.path.join(EXP, "runs"))
-    campaigns = FOOTPRINT_CAMPAIGNS if slug == "resource-use" else (slug,)
+    campaigns = {"resource-use": FOOTPRINT_CAMPAIGNS, "retransmissions": ("throughput",)}.get(slug, (slug,))
     runs = [d for c in campaigns for d in select_runs(runs_dir, c, _listed(runs_dir))]
     if slug == "resource-use":
         runs = [d for d in runs if os.path.exists(os.path.join(d, "footprint.json"))]

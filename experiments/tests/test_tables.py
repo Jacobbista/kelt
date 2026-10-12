@@ -160,6 +160,25 @@ class RttOverTest(unittest.TestCase):
         self.assertIn(f"At rest, echoes above {tables.REST_CUT_MS:g} ms: 1.", tables.rtt_notes([d]))
 
 
+class RetransmissionRowsTest(unittest.TestCase):
+    def test_data_direction_per_session_and_all(self):
+        root = tempfile.mkdtemp()
+        def run(dl_seg, dl_re, ul_seg, ul_re):
+            return {"index": 1, "br_ran": {"dl": {"segments": dl_seg, "retransmitted": dl_re},
+                                           "ul": {"segments": ul_seg, "retransmitted": ul_re}}}
+        runs = []
+        for stamp, dl1, ul1 in (("20261010T100000Z", run(1000, 10, 50, 0), run(40, 0, 2000, 2)),
+                                ("20261011T100000Z", run(3000, 5, 60, 1), run(30, 0, 1000, 0))):
+            runs.append(mk_net(root, "throughput", stamp,
+                               {"combinations": {"dl1": {"runs": [dl1]}, "ul1": {"runs": [ul1]}}}))
+        rows = tables.retransmission_rows(runs)
+        got = {(r["run"], r["combination"]): (r["direction"], r["segments"], r["retransmitted"], r["share_pct"]) for r in rows}
+        self.assertEqual(got[("20261010T100000Z", "dl1")], ("dl", 1000, 10, 1.0))
+        self.assertEqual(got[("20261010T100000Z", "ul1")], ("ul", 2000, 2, 0.1))
+        self.assertEqual(got[("all", "dl1")], ("dl", 4000, 15, 0.375))
+        self.assertEqual(got[("all", "ul1")], ("ul", 3000, 2, 0.0667))
+
+
 class FootprintRowsTest(unittest.TestCase):
     def test_machines_groups_and_pods_per_condition_from_every_campaign(self):
         root = tempfile.mkdtemp()
