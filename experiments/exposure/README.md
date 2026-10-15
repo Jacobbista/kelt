@@ -34,7 +34,8 @@ takes seconds).
 
 ## response-time
 
-`run.sh response-time`: `response_time_driver.sh` sends the requests paced on a
+`run.sh response-time`: for every condition but `local50`,
+`response_time_driver.sh` sends the requests one after the other, paced on a
 schedule (request *i* at t0 + *i*/rate) and keeps the `x-correlator` of each;
 `hop_aggregate.py` joins the hop lines the services log (schema:
 `hop-log.schema.json`, vendored from 5g-northbound) into one trace per request,
@@ -48,9 +49,41 @@ vendor, or an adapter with no vendor behind it.
 
 | Condition | Request |
 |---|---|
+| `rest` | nothing sent for `KELT_RESOURCE_S` (default 300 s): the footprint at rest. The WiFi adapter's `/devices` is read at the start and the end, and the check reports whether a scan arrived inside the window |
 | `hit` | the Wittra asset, no `maxAge`, at `KELT_LAT_RATE` (default 5/s) |
-| `fresh` | the Wittra asset, no `maxAge`, `KELT_LAT_FRESH_COUNT` (default 300) at `KELT_LAT_FRESH_RATE` (default 0.15/s), with the asset's other consumers closed |
+| `fresh` | the Wittra asset, no `maxAge`, `KELT_LAT_FRESH_COUNT` (default 300) at `KELT_LAT_FRESH_RATE` (default 0.15/s) |
 | `local` | the synthetic asset, `maxAge=0`: no external call; placed for the run when it has no position, and removed after only if placed there |
+| `local50` | `KELT_LAT_LOAD_ASSETS` (default 50) synthetic assets, each asked once a second with `maxAge=0` (`KELT_LAT_LOAD_RATE`, default one request per asset per second), for `KELT_LAT_LOAD_WARMUP_S` (10 s, discarded) and `KELT_LAT_LOAD_S` (60 s) |
+
+The vendor asset's other consumers (location-app map and detail panel,
+position-stream clients, dashboards) are closed for the whole campaign: they
+keep the adapter's cache warm and they load the stack. `KELT_LAT_CONDITIONS`
+selects and orders the conditions; a token is minted for each, since a token
+lives one hour and the campaign is longer.
+
+`local50` is sent open loop by `response_time_load.py`: request *i* starts at
+t0 + *i*/rate on its own thread, whatever the earlier requests are doing, each
+on its own connection. The requests file adds the send time and the delay
+behind the schedule of each request; `load.json` keeps the nominal rate. The
+load assets come from `load_fixture.sh`: one asset per id (`kelt-load-01` to
+`kelt-load-50`, prefix `KELT_LOAD_PREFIX`) is added to the gateway's map with
+the operator token (`camara-gateway` client), each with one `synthetic`
+capability whose `positioningId` is the asset id, and each is placed on a grid
+over the room through `PUT /assets/{id}/placement`. Placing an id the
+synthetic adapter does not declare in `DEVICE_IDS` creates that device
+(northbound 0.19.3). After the condition, and on exit, the placements are
+removed, which ends the devices, and the assets are taken off the map. The
+synthetic adapter keeps placements in memory, so it runs as one replica and is
+not restarted during the run. The campaign refuses to start while a load asset
+is left in the map or a load device in the adapter, or while the adapter has
+more than one replica.
+
+The footprint samplers (`../README.md`, Footprint) run from the first
+condition to the last; each condition's window starts after its warm-up.
+`check_run.py` checks every run: each request answered and traced, every hop
+present, every `maxAge=0` request on the synthetic source answered 200 by the adapter,
+the open-loop rate at no less than 98% of the nominal and 99% of its requests
+within one period of their schedule, and the footprint samples.
 
 The vendor share is the adapter's span on the requests that reached the vendor;
 the stack share is the request's total minus that span, on the same requests.

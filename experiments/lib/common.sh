@@ -126,17 +126,40 @@ new_run_dir() {
 # to bring your own. Owner of the client: docs/security/iam.md.
 camara_token() {
   if [ -n "${KELT_CAMARA_TOKEN:-}" ]; then echo "$KELT_CAMARA_TOKEN"; return; fi
-  local secret kc realm
-  secret="$(grep '^CAMARA_API_DEMO_SECRET' "$REPO_ROOT/.testbed.secrets" 2>/dev/null | cut -d= -f2- | tr -d '"'"'"' ')"
-  [ -n "$secret" ] || die "CAMARA_API_DEMO_SECRET not in .testbed.secrets"
+  client_token camara-api-demo CAMARA_API_DEMO_SECRET
+}
+
+# The operator token (the org-less `camara-gateway` client): sees and edits the
+# asset store of every org. Used only to add and remove the response-time
+# campaign's load assets.
+camara_operator_token() { client_token camara-gateway CAMARA_CLIENT_SECRET; }
+
+# client_token <client id> <secret key in .testbed.secrets>
+client_token() {
+  local client="$1" key="$2" secret kc realm
+  secret="$(grep "^$key" "$REPO_ROOT/.testbed.secrets" 2>/dev/null | cut -d= -f2- | tr -d '"'"'"' ')"
+  [ -n "$secret" ] || die "$key not in .testbed.secrets"
   kc="${KELT_KC_URL:-http://$(node_ip):$(plan_value keycloak_nodeport)/auth}"
   realm="${KELT_KC_REALM:-5g-testbed}"
   curl -s --max-time 15 \
-    -d grant_type=client_credentials -d client_id=camara-api-demo \
+    -d grant_type=client_credentials -d client_id="$client" \
     --data-urlencode "client_secret=$secret" \
     "$kc/realms/$realm/protocol/openid-connect/token" \
     | python3 -c 'import json,sys; print(json.load(sys.stdin).get("access_token",""))' 2>/dev/null \
-    | grep . || die "token mint failed (check KELT_KC_URL=$kc / realm $realm)"
+    | grep . || die "token mint failed for $client (check KELT_KC_URL=$kc / realm $realm)"
+}
+
+# hoplog_snapshot <dir> <condition>: the pod logs of the gateway and of every
+# Deployment in the positioning namespace (engine and adapters) for the last
+# hour, as hoplog_<deployment>_<condition>.txt; hop_aggregate.py joins their hop
+# lines by x-correlator.
+hoplog_snapshot() {
+  local dir="$1" cond="$2" pos_ns="${KELT_POS_NS:-$(plan_value positioning_namespace)}" dep
+  kubectl logs -n "$CAMARA_NS" "deploy/${KELT_CAMARA_SVC:-camara-gateway}" --since=1h \
+    >"$dir/hoplog_gateway_${cond}.txt" 2>/dev/null || true
+  for dep in $(kubectl get deploy -n "$pos_ns" -o name 2>/dev/null | tr -d '\r'); do
+    kubectl logs -n "$pos_ns" "$dep" --since=1h >"$dir/hoplog_${dep##*/}_${cond}.txt" 2>/dev/null || true
+  done
 }
 
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%SZ)" "$*" >&2; }

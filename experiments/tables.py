@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the thesis tables of one campaign from its runs.
 
-  tables.py <resource-use|verification|response-time|throughput|rtt|retransmissions>
+  tables.py <resource-use|verification|response-time|exposure-resource-use|throughput|rtt|retransmissions>
 
 Uses every non-pilot run of the campaign, or only the runs listed in
 runs/thesis-runs.txt when that file exists (one "<slug>/<stamp>" per
@@ -161,6 +161,54 @@ def response_time_rows(runs: list[str]) -> list[dict]:
                     rows.append({**base, "series": name, "n": q["n"], "median_ms": q["median"],
                                  "p90_ms": q["p90"], "p99_ms": q["p99"]})
     return rows
+
+
+# The exposure stack per Deployment under each response-time condition (thesis
+# 5.11.3): the footprint the response-time campaign records, its pods summed by
+# Deployment (a pod restarted during the run keeps its Deployment).
+EXPOSURE_COLS = ("rest", "hit", "fresh", "local", "local50")
+
+
+def deployment_of(pod: str) -> str:
+    """The Deployment of a pod name: the ReplicaSet and pod suffixes removed."""
+    parts = pod.split("-")
+    return "-".join(parts[:-2]) if len(parts) > 2 else pod
+
+
+def exposure_rows(runs: list[str]) -> list[dict]:
+    rows = []
+    for d in runs:
+        for cond, c in _load(os.path.join(d, "footprint.json")).items():
+            g = c["groups"].get("exposure")
+            items = [("group", "exposure", g)] if g else []
+            items += [("deployment", deployment_of(p["pod"]), p) for p in c["pods"] if p["group"] == "exposure"]
+            for level, name, x in items:
+                rows.append({"run": os.path.basename(d), "condition": cond, "level": level, "name": name,
+                             "cpu_mean_m": x["cpu_mcores"]["mean"], "cpu_peak_m": x["cpu_mcores"]["max"],
+                             "mem_mean_mib": x["mem_mib"]["mean"], "mem_peak_mib": x["mem_mib"]["max"],
+                             "samples": x["cpu_mcores"]["n"]})
+    return rows
+
+
+def exposure_pivot(rows: list[dict]) -> list[str]:
+    """CPU (millicores) and memory (MiB) as "mean / peak" per Deployment and
+    condition. Several runs: the mean of their means, the highest of their peaks."""
+    names = [("group", "exposure")] + sorted({(r["level"], r["name"]) for r in rows if r["level"] == "deployment"},
+                                             key=lambda x: x[1])
+    md = []
+    for what, mean_k, peak_k in (("CPU, millicores", "cpu_mean_m", "cpu_peak_m"),
+                                 ("Memory, MiB", "mem_mean_mib", "mem_peak_mib")):
+        md += ["", f"{what}: mean / 1 s peak", "", "| what | " + " | ".join(EXPOSURE_COLS) + " |",
+               "|" + "---|" * (len(EXPOSURE_COLS) + 1)]
+        for level, name in names:
+            cells = []
+            for cond in EXPOSURE_COLS:
+                hit = [r for r in rows if (r["condition"], r["level"], r["name"]) == (cond, level, name)
+                       and r[mean_k] is not None]
+                cells.append(f"{sum(r[mean_k] for r in hit) / len(hit):.0f} / {max(r[peak_k] for r in hit):.0f}"
+                             if hit else "—")
+            md.append(f"| {'exposure, all pods' if level == 'group' else name} | " + " | ".join(cells) + " |")
+    return md
 
 
 def _ue(d: str) -> dict:
@@ -338,10 +386,25 @@ def retransmission_rows(runs: list[str]) -> list[dict]:
     return rows
 
 
-NOTES = {"rtt": rtt_notes}
+def check_lines(runs: list[str], name: str, label: str) -> list[str]:
+    """One check's line from each run's checks.txt, as a note under the table."""
+    out = []
+    for d in runs:
+        try:
+            with open(os.path.join(d, "checks.txt")) as fh:
+                out += [f"{label}, {os.path.basename(d)}: {ln.split(':', 1)[1].strip()}."
+                        for ln in fh if ln[5:].startswith(f"{name}:")]
+        except OSError:
+            pass
+    return out
+
+
+NOTES = {"rtt": rtt_notes,
+         "response-time": lambda runs: check_lines(runs, "load", "Open-loop load"),
+         "exposure-resource-use": lambda runs: check_lines(runs, "wifi", "WiFi adapter at rest")}
 
 BUILDERS = {"resource-use": footprint_rows, "verification": verification_rows,
-            "response-time": response_time_rows,
+            "response-time": response_time_rows, "exposure-resource-use": exposure_rows,
             "throughput": throughput_rows, "rtt": rtt_rows, "retransmissions": retransmission_rows}
 
 
@@ -351,9 +414,10 @@ def main() -> int:
         return 2
     slug = sys.argv[1]
     runs_dir = os.environ.get("KELT_EXP_RUNS_DIR", os.path.join(EXP, "runs"))
-    campaigns = {"resource-use": FOOTPRINT_CAMPAIGNS, "retransmissions": ("throughput",)}.get(slug, (slug,))
+    campaigns = {"resource-use": FOOTPRINT_CAMPAIGNS, "retransmissions": ("throughput",),
+                 "exposure-resource-use": ("response-time",)}.get(slug, (slug,))
     runs = [d for c in campaigns for d in select_runs(runs_dir, c, _listed(runs_dir))]
-    if slug == "resource-use":
+    if slug in ("resource-use", "exposure-resource-use"):
         runs = [d for d in runs if os.path.exists(os.path.join(d, "footprint.json"))]
     if not runs:
         print(f"no non-pilot runs of {slug}", file=sys.stderr)
@@ -373,6 +437,8 @@ def main() -> int:
     md += [check_note(runs)] + cell_note(runs)
     if slug == "resource-use":
         md += footprint_pivot(rows) + ["", machine_note(runs), "", "Every level and pod:"]
+    if slug == "exposure-resource-use":
+        md += exposure_pivot(rows) + ["", machine_note(runs), "", "Every run and condition:"]
     md += ["", "| " + " | ".join(cols) + " |", "|" + "---|" * len(cols)]
     md += ["| " + " | ".join(str(r[c]) for c in cols) + " |" for r in rows]
     with open(os.path.join(out, f"{slug}.md"), "w") as fh:

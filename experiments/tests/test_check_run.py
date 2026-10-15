@@ -65,3 +65,111 @@ class QosTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ResponseTimeChecksTest(unittest.TestCase):
+    def cond(self, root, name, served, without=0, statuses=None, load=None, starts=None, late=None):
+        import json
+        d = os.path.join(root, name)
+        os.makedirs(d)
+        with open(os.path.join(d, "stages.json"), "w") as fh:
+            json.dump({"traces": sum(served.values()), "without_trace": without}, fh)
+        with open(os.path.join(d, "summary.json"), "w") as fh:
+            json.dump({"by_status": {"200": {"served_by": served}}}, fh)
+        statuses = statuses or ["200"] * 3
+        starts = starts or [100.0 + i for i in range(len(statuses))]
+        late = late or [0.001] * len(statuses)
+        with open(os.path.join(d, f"requests_{name}.csv"), "w") as fh:
+            fh.write("i,http_status,x_correlator,start_epoch,late_s\n")
+            for i, (s, t, lt) in enumerate(zip(statuses, starts, late)):
+                fh.write(f"{i + 1},{s},c{i},{t},{lt}\n")
+        if load:
+            with open(os.path.join(d, "load.json"), "w") as fh:
+                json.dump({"rate_per_s": load}, fh)
+
+    def test_traced_and_routed(self):
+        import tempfile
+        root = tempfile.mkdtemp()
+        self.cond(root, "hit", {"gateway cache": 2, "adapter cache": 1})
+        self.cond(root, "local", {"adapter": 3})
+        ok, msg = check_run.check_traces(root)
+        self.assertTrue(ok, msg)
+
+    def test_missing_trace_unanswered_and_wrong_route_fail(self):
+        import tempfile
+        root = tempfile.mkdtemp()
+        self.cond(root, "fresh", {"vendor": 2, "unknown": 1}, without=1)
+        self.cond(root, "local50", {"adapter": 2, "gateway cache": 1}, statuses=["200", "0", "200"])
+        ok, msg = check_run.check_traces(root)
+        self.assertFalse(ok)
+        for part in ("fresh: 1 request(s) without a trace", "fresh: 1 trace(s) with a missing hop",
+                     "local50: 1 request(s) without an HTTP answer", "local50: 200s not answered by the adapter"):
+            self.assertIn(part, msg)
+
+    def test_synthetic_condition_answers_only_200(self):
+        import tempfile
+        root = tempfile.mkdtemp()
+        self.cond(root, "local50", {"adapter": 2}, statuses=["200", "422", "200"])
+        ok, msg = check_run.check_traces(root)
+        self.assertFalse(ok)
+        self.assertIn("local50: 1 request(s) answered other than 200", msg)
+
+    def test_open_loop_rate_and_lateness(self):
+        import tempfile
+        root = tempfile.mkdtemp()
+        n = 101
+        self.cond(root, "local50", {"adapter": n}, statuses=["200"] * n,
+                  load=50, starts=[i / 50 for i in range(n)], late=[0.002] * n)
+        ok, msg = check_run.check_load(root)
+        self.assertTrue(ok, msg)
+        root = tempfile.mkdtemp()
+        self.cond(root, "local50", {"adapter": n}, statuses=["200"] * n,
+                  load=50, starts=[i / 40 for i in range(n)], late=[0.05] * n)
+        ok, msg = check_run.check_load(root)
+        self.assertFalse(ok)
+        self.assertIn("sent 40.0/s of 50/s", msg)
+
+    def test_wifi_scans_inside_the_rest_window(self):
+        import json
+        import tempfile
+        root = tempfile.mkdtemp()
+        d = os.path.join(root, "rest")
+        os.makedirs(d)
+        with open(os.path.join(d, "window.json"), "w") as fh:
+            json.dump({"windows": [{"label": "rest", "start_utc": "2026-10-15T10:00:00Z",
+                                    "end_utc": "2026-10-15T10:05:00Z"}]}, fh)
+        with open(os.path.join(d, "wifi-devices-end.json"), "w") as fh:
+            json.dump([{"id": "robot", "lastSeen": 1792058500.0}], fh)   # 10:01:40Z
+        self.assertEqual(check_run.check_wifi(root), (True, "WiFi scans received at rest from 1 device(s)"))
+        with open(os.path.join(d, "wifi-devices-end.json"), "w") as fh:
+            json.dump([], fh)
+        self.assertEqual(check_run.check_wifi(root), (True, "no WiFi scan received at rest"))
+
+
+class FootprintCheckTest(unittest.TestCase):
+    def run_with(self, pods, names):
+        import json
+        import tempfile
+        from unittest import mock
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "footprint.json"), "w") as fh:
+            json.dump({"rest": {"windows": [[0, 10]]}, "local50": {"windows": [[100, 110]]}}, fh)
+        node = [(float(t),) for t in list(range(0, 11)) + list(range(100, 111))]
+        loaded = ({"worker": (node, {uid: [(float(t),) for t in ts] for uid, ts in pods.items()})}, names, {})
+        with mock.patch.object(check_run.footprint, "_load", return_value=loaded):
+            return check_run.check_footprint(d)
+
+    def test_a_pod_replaced_between_conditions_is_not_a_gap(self):
+        ok, msg = self.run_with({"old": range(0, 11), "new": range(100, 111)},
+                                {"old": ("positioning", "synthetic-adapter-a-1"), "new": ("positioning", "synthetic-adapter-b-2")})
+        self.assertTrue(ok, msg)
+
+    def test_a_pod_that_stops_inside_a_window_is_a_gap(self):
+        ok, msg = self.run_with({"old": range(0, 5)}, {"old": ("positioning", "synthetic-adapter-a-1")})
+        self.assertFalse(ok)
+        self.assertIn("synthetic-adapter-a-1", msg)
+
+    def test_a_pod_without_a_name_fails(self):
+        ok, msg = self.run_with({"new": range(100, 111)}, {})
+        self.assertFalse(ok)
+        self.assertIn("pods without a name: 1", msg)

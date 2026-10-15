@@ -252,3 +252,28 @@ class ResponseTimeRowsTest(unittest.TestCase):
         e2e = [r for r in rows if r["status"] == "200" and r["series"] == "end to end"][0]
         self.assertEqual(e2e["median_ms"], 1.0)
         self.assertEqual(e2e["served_by"], "adapter cache 1, vendor 1")
+
+
+class ExposureRowsTest(unittest.TestCase):
+    def test_deployment_of_a_pod(self):
+        self.assertEqual(tables.deployment_of("camara-gateway-88895f5bc-m9np6"), "camara-gateway")
+        self.assertEqual(tables.deployment_of("wittra-558578f9fb-vztnc"), "wittra")
+
+    def test_exposure_group_and_its_pods_per_condition(self):
+        root = tempfile.mkdtemp()
+        st = lambda m, p: {"mean": m, "max": p, "n": 60}
+        pod = lambda name, group, m: {"node": "worker", "namespace": "positioning", "pod": name, "group": group,
+                                      "cpu_mcores": st(m, 2 * m), "mem_mib": st(100.0, 101.0)}
+        doc = {"local50": {"nodes": {}, "groups": {"exposure": {"cpu_mcores": st(300.0, 400.0), "mem_mib": st(500.0, 510.0)}},
+                           "pods": [pod("synthetic-adapter-6c9d8f7b5-abcde", "exposure", 120.0),
+                                    pod("upf-cloud-0-x-y", "core", 9.0)]}}
+        d = mk(root, "response-time", "20261015T100000Z")
+        with open(os.path.join(d, "footprint.json"), "w") as fh:
+            json.dump(doc, fh)
+        rows = tables.exposure_rows([d])
+        self.assertEqual([(r["condition"], r["level"], r["name"]) for r in rows],
+                         [("local50", "group", "exposure"), ("local50", "deployment", "synthetic-adapter")])
+        md = tables.exposure_pivot(rows)
+        self.assertIn("| what | rest | hit | fresh | local | local50 |", md)
+        self.assertIn("| synthetic-adapter | — | — | — | — | 120 / 240 |", md)
+        self.assertIn("| exposure, all pods | — | — | — | — | 300 / 400 |", md)

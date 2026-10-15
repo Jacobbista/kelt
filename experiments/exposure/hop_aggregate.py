@@ -167,6 +167,7 @@ def main() -> int:
         print(f"correlators: restricting to the {len(wanted)} recorded in {os.path.basename(corr_file)}", file=sys.stderr)
 
     traces: dict[str, list[dict]] = {}
+    missing = 0
     for h in hops:
         if wanted is not None and h["correlator"] not in wanted:
             continue
@@ -238,6 +239,7 @@ def main() -> int:
             return {"median": round(median(xs), 3), "p90": round(_percentile(xs, 0.90), 3),
                     "p99": round(_percentile(xs, 0.99), 3), "n": len(xs)}
         out = {"traces": len(rows), "warmup_dropped": warmup, "vendor_match": vendor,
+               "recorded": len(wanted) if wanted is not None else None, "without_trace": missing,
                "e2e_ms": q("e2e_ms"), "wan_free_ms": q("wan_free_ms"),
                "self_ms": {s: q(s + "_self_ms") for s in services},
                "span_ms": {s: q(s + "_span_ms") for s in services}}

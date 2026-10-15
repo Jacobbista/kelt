@@ -158,8 +158,9 @@ iperf3 and ping. Nothing is installed on it.
 ## Footprint
 
 The CPU and memory the testbed takes: at rest (`resource-use`, 300 s with
-nothing running, `KELT_RESOURCE_S`), and during every network condition
-(`dl1` to `ul4`, `idle`, `load`), recorded by the campaign that produces it. A
+nothing running, `KELT_RESOURCE_S`), during every network condition (`dl1` to
+`ul4`, `idle`, `load`) and every response-time condition (`rest` to
+`local50`), recorded by the campaign that produces it. A
 condition's windows are its runs' measured time: for throughput each run after
 its first 10 s, for rtt each ping from its first to its last reply (the load
 starts before the ping and ends after it).
@@ -211,8 +212,10 @@ refreshes. The sampler takes about 20 millicores on the worker.
   the gateway itself serves (`GET /contracts/<name>`): identifiers and
   authorisation, data carried from the adapter, faults (vendor unreachable,
   adapter removed).
-- `response-time`: 1000 requests per condition at 5 per second; every service
-  logs one hop line per request, joined by `x-correlator`.
+- `response-time`: the exposure stack at rest, then 1000 requests per
+  condition at 5 per second, and 50 synthetic assets asked once a second each
+  (50 per second, open loop); every service logs one hop line per request,
+  joined by `x-correlator`. The footprint samplers run throughout.
 
 `exposure/README.md` has the details of the two exposure campaigns.
 
@@ -294,6 +297,11 @@ stay attached: a cell carries some background; it is measured, not removed);
 one
 footprint sample per second from every machine and pod, every pod named. A failed check flags the run, which stays;
 the tables name it.
+
+`tables.py exposure-resource-use` gives, from the response-time runs, the CPU
+and memory of the exposure stack per Deployment (pods summed, so a restarted
+pod keeps its row) and in total, with the conditions as columns, mean and 1 s
+peak.
 
 `tables.py retransmissions` gives, from the throughput runs, the TCP segments
 seen on `br-ran` in the data direction and the retransmitted ones, per
@@ -398,7 +406,7 @@ network/pcap.py        reading the worker's captures (GTP-U and plain)
 resource-use/          footprint.py: CPU and memory per condition from the 1 s samples
 validation/            check_run.py (every run), throughput_bytes.py, footprint_cadvisor.py
 lib/footprint-sampler.sh  the 1 s sampler (VMs and host)
-exposure/              verification cases, fault injections, response-time driver and aggregation
+exposure/              verification cases, fault injections, response-time drivers (paced and open loop), load assets, aggregation
 tests/                 unit tests: python3 -m unittest discover -s experiments/tests -t experiments
                        and bash experiments/tests/{network,lib}/*.test.sh
 runs/                  one directory per run, never overwritten, not committed

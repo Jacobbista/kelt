@@ -28,7 +28,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib/common.sh"
 COND="${1:?usage: response_time_driver.sh <fresh|hit|local> [count] [rate]}"
 COUNT="${2:-1000}"
 RATE="${3:-5}"
-GW="$(gateway_url)"
+GW="$(gateway_url)"   # KELT_GATEWAY_URL if set
 TOKEN="$(camara_token)"   # KELT_CAMARA_TOKEN if set, else minted from .testbed.secrets
 RETRIEVE_PATH="${KELT_RETRIEVE_PATH:-/location-retrieval/v0.5/retrieve}"  # gateway serves v0.5; confirm via /docs
 BODY_FILE="${KELT_RETRIEVE_BODY:?set KELT_RETRIEVE_BODY to a JSON body (asset + maxAge for this condition)}"
@@ -64,17 +64,8 @@ for i in $(seq 1 "$COUNT"); do
 done
 window close "$RUN_DIR" "$COND"
 
-# Per-hop aggregation is KELT's job, keyed by x-correlator. northbound emits the
-# per-hop "hop" log line from v0.9.0 (gateway, engine, and every adapter). Snapshot
-# the pod logs for the run window so hop_aggregate.py can join them later; the
-# x-correlator column above is the join key. Capture the gateway AND every
-# deployment in the positioning namespace (engine + all adapters), so the
-# adapter->vendor (WAN) span is present and WAN-free can be subtracted.
-kubectl logs -n "$CAMARA_NS" "deploy/${KELT_CAMARA_SVC:-camara-gateway}" --since=1h \
-  >"$RUN_DIR/hoplog_gateway_${COND}.txt" 2>/dev/null || true
-POS_NS="${KELT_POS_NS:-positioning}"
-for dep in $(kubectl get deploy -n "$POS_NS" -o name 2>/dev/null); do
-  name="${dep##*/}"
-  kubectl logs -n "$POS_NS" "$dep" --since=1h >"$RUN_DIR/hoplog_${name}_${COND}.txt" 2>/dev/null || true
-done
+# Per-hop aggregation is KELT's job, keyed by x-correlator: snapshot the logs of
+# the gateway and of every positioning Deployment (engine and adapters, so the
+# adapter->vendor span is present) for hop_aggregate.py.
+hoplog_snapshot "$RUN_DIR" "$COND"
 log "done → $RUN_DIR (end-to-end + x-correlator in $CSV; per-hop logs snapshotted — aggregate with hop_aggregate.py)"

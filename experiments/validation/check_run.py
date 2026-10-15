@@ -16,8 +16,16 @@ A failed check flags the run, it does not remove it. Checks by campaign:
 - throughput and rtt: the QoS of the UE's session (network/ue_qos.py) recorded at
   the start and the end of every attempt, every value known, unchanged within
   the attempt; not applicable when the UE is behind a router (mode nat).
+- response-time: every request with an HTTP answer has its trace (hop lines
+  joined by x-correlator); every request answered; no trace with a missing hop
+  (served by "unknown"); for maxAge=0 on the synthetic source (local,
+  local50) every request answered 200, by the adapter. Open-loop conditions (load.json):
+  sent at no less than 98% of the nominal rate, 99% of the requests sent
+  within one period of their schedule. The rest condition: whether the WiFi
+  adapter received scans inside its window (reported, not judged).
 - every campaign with a footprint: one sample per second from each machine and
-  each pod inside the measured windows (no gap over 2 s); every pod named.
+  each pod inside the measured windows it exists in (no gap over 2 s); every
+  pod named.
 
 Owner: experiments/README.md.
 """
@@ -25,6 +33,7 @@ from __future__ import annotations
 
 import collections
 import csv
+import datetime
 import glob
 import json
 import os
@@ -38,6 +47,8 @@ sys.path.insert(0, os.path.join(HERE, "..", "resource-use"))
 import footprint  # noqa: E402
 from network import throughput  # noqa: E402
 from network.pcap import addr, captures, gtpu_inner, read_pcap  # noqa: E402
+from lib.stats import percentile  # noqa: E402
+from lib.runmeta import windows as run_windows  # noqa: E402
 
 MAX_GAP_S = 2.0
 
@@ -167,6 +178,97 @@ def check_qos(run_dir: str) -> tuple[bool, str]:
                   f"Session-AMBR {q['session_ambr_dl_mbit']}/{q['session_ambr_ul_mbit']} Mbit/s (record)")
 
 
+MIN_RATE_SHARE = 0.98
+SYNTHETIC_CONDITIONS = ("local", "local50")
+
+
+def _rt_conditions(run_dir: str) -> list[str]:
+    return sorted(c for c in os.listdir(run_dir) if os.path.exists(os.path.join(run_dir, c, "summary.json")))
+
+
+def _requests(cond_dir: str) -> list[dict]:
+    path = next((os.path.join(cond_dir, f) for f in sorted(os.listdir(cond_dir)) if f.startswith("requests_")), None)
+    if not path:
+        return []
+    with open(path) as fh:
+        return list(csv.DictReader(fh))
+
+
+def check_traces(run_dir: str) -> tuple[bool, str]:
+    problems, parts = [], []
+    for cond in _rt_conditions(run_dir):
+        d = os.path.join(run_dir, cond)
+        with open(os.path.join(d, "stages.json")) as fh:
+            st = json.load(fh)
+        with open(os.path.join(d, "summary.json")) as fh:
+            sm = json.load(fh)
+        reqs = _requests(d)
+        unanswered = sum(1 for r in reqs if str(r.get("http_status", "0")) in ("0", "000", ""))
+        missing = st.get("without_trace")
+        served = {k: v for b in sm["by_status"].values() for k, v in b.get("served_by", {}).items()}
+        if missing is None:
+            problems.append(f"{cond}: traces not counted (aggregated before the count was kept)")
+        elif missing:
+            problems.append(f"{cond}: {missing} request(s) without a trace")
+        if unanswered:
+            problems.append(f"{cond}: {unanswered} request(s) without an HTTP answer")
+        if served.get("unknown"):
+            problems.append(f"{cond}: {served['unknown']} trace(s) with a missing hop")
+        if cond in SYNTHETIC_CONDITIONS:
+            not200 = sum(1 for r in reqs if str(r.get("http_status", "")) not in ("200", "0", "000", ""))
+            if not200:
+                problems.append(f"{cond}: {not200} request(s) answered other than 200")
+            ok200 = sm["by_status"].get("200", {}).get("served_by", {})
+            other = {k: v for k, v in ok200.items() if k != "adapter"}
+            if other:
+                problems.append(f"{cond}: 200s not answered by the adapter: {other}")
+        parts.append(f"{cond} {st['traces']}")
+    return not problems, "; ".join(problems) if problems else \
+        "every request answered and traced, every hop present (traces after warm-up: " + ", ".join(parts) + ")"
+
+
+def check_load(run_dir: str) -> tuple[bool, str]:
+    problems, parts = [], []
+    for cond in _rt_conditions(run_dir):
+        d = os.path.join(run_dir, cond)
+        if not os.path.exists(os.path.join(d, "load.json")):
+            continue
+        with open(os.path.join(d, "load.json")) as fh:
+            nominal = float(json.load(fh)["rate_per_s"])
+        starts = sorted(float(r["start_epoch"]) for r in _requests(d) if r.get("start_epoch"))
+        late = sorted(float(r["late_s"]) for r in _requests(d) if r.get("late_s"))
+        if len(starts) < 2:
+            problems.append(f"{cond}: fewer than two requests sent")
+            continue
+        sent = (len(starts) - 1) / (starts[-1] - starts[0])
+        p99 = percentile(late, 0.99)
+        if sent < MIN_RATE_SHARE * nominal:
+            problems.append(f"{cond}: sent {sent:.1f}/s of {nominal:g}/s")
+        if p99 > 1 / nominal:
+            problems.append(f"{cond}: 99% of requests within {p99 * 1000:.0f} ms of schedule, over one period")
+        parts.append(f"{cond} {sent:.2f}/s of {nominal:g}/s, p99 lateness {p99 * 1000:.1f} ms")
+    if not parts and not problems:
+        return True, "no open-loop condition"
+    return not problems, "; ".join(problems) if problems else "; ".join(parts)
+
+
+def check_wifi(run_dir: str) -> tuple[bool, str]:
+    d = os.path.join(run_dir, "rest")
+    try:
+        with open(os.path.join(d, "wifi-devices-end.json")) as fh:
+            end = json.load(fh)
+        w = next(x for x in run_windows(d) if x["label"] == "rest")
+    except (OSError, ValueError, StopIteration):
+        return True, "no rest condition"
+    if end is None:
+        return True, "WiFi adapter not reachable: scans not known"
+    t = lambda k: datetime.datetime.strptime(w[k], "%Y-%m-%dT%H:%M:%SZ").replace(  # noqa: E731
+        tzinfo=datetime.timezone.utc).timestamp()
+    seen = [x["id"] for x in end if x.get("lastSeen") and t("start_utc") <= float(x["lastSeen"]) <= t("end_utc")]
+    return True, (f"WiFi scans received at rest from {len(seen)} device(s)" if seen
+                  else "no WiFi scan received at rest")
+
+
 def check_footprint(run_dir: str) -> tuple[bool, str]:
     path = os.path.join(run_dir, "footprint.json")
     if not os.path.exists(path):
@@ -176,8 +278,12 @@ def check_footprint(run_dir: str) -> tuple[bool, str]:
     nodes, names, vms = footprint._load(run_dir)
     gaps, seen = [], set()
 
-    def gap(label: str, times: list[float]) -> None:
+    def gap(label: str, times: list[float], only_present: bool = False) -> None:
+        # A pod is checked in the windows where it has samples: one replaced
+        # between conditions did not exist in the others.
         for a, b in windows:
+            if only_present and not any(a <= x <= b for x in times):
+                continue
             t = sorted(x for x in times if a - MAX_GAP_S <= x <= b + MAX_GAP_S)
             edges = [a] + t + [b] if t else [a, b]
             worst = max(y - x for x, y in zip(edges, edges[1:]))
@@ -191,7 +297,7 @@ def check_footprint(run_dir: str) -> tuple[bool, str]:
             inside = [x[0] for x in s if any(a <= x[0] <= b for a, b in windows)]
             if inside:
                 seen.add(uid)
-                gap(f"{node} pod {names.get(uid, (None, uid))[1]}", [x[0] for x in s])
+                gap(f"{node} pod {names.get(uid, (None, uid))[1]}", [x[0] for x in s], only_present=True)
     for vm, s in vms.items():
         gap(f"vm-process {vm}", [x[0] for x in s])
     unnamed = sorted(uid for uid in seen if uid not in names)
@@ -216,6 +322,9 @@ def main() -> int:
     elif campaign == "rtt":
         checks = [("schedule", lambda: check_schedule(run_dir)), ("echoes", lambda: check_echoes(run_dir)),
                   ("cell", lambda: check_cell(run_dir)), ("qos", lambda: check_qos(run_dir))]
+    elif campaign == "response-time":
+        checks = [("traces", lambda: check_traces(run_dir)), ("load", lambda: check_load(run_dir)),
+                  ("wifi", lambda: check_wifi(run_dir))]
     if glob.glob(os.path.join(run_dir, "raw", "footprint", "*")):
         checks.append(("footprint", lambda: check_footprint(run_dir)))
     if not checks:
