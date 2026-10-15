@@ -46,6 +46,15 @@
     "cache": {
       "enum": ["hit", "miss"],
       "description": "Present on a stage that keeps a cache of the source behind it, whose calls write no hop line of their own: the vendor-adapter's GET /measurement/{id}. `hit`: answered from the cache, the source was not called. `miss`: the source was called, whatever it answered."
+    },
+    "connection": {
+      "enum": ["new", "reused"],
+      "description": "With `cache: miss`, when the request to the source was sent: on a connection opened for it (TCP and, over https, TLS setup inside this hop's span), or on one kept from an earlier call."
+    },
+    "upstream_ms": {
+      "type": "number",
+      "minimum": 0,
+      "description": "With `cache: miss`, when the source answered: milliseconds from the request being sent to the source until its response headers arrived. The source's own time plus the network round trip, without connection setup."
     }
   }
 }

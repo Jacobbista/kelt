@@ -18,7 +18,7 @@ A failed check flags the run, it does not remove it. Checks by campaign:
   the attempt; not applicable when the UE is behind a router (mode nat).
 - response-time: every request with an HTTP answer has its trace (hop lines
   joined by x-correlator); every request answered; no trace with a missing hop
-  (served by "unknown"); for maxAge=0 on the synthetic source (local,
+  (served by "unknown"), and no hop line rejected by the schema; for maxAge=0 on the synthetic source (local,
   local50) every request answered 200, by the adapter. Open-loop conditions (load.json):
   sent at no less than 98% of the nominal rate, 99% of the requests sent
   within one period of their schedule. The rest condition: whether the WiFi
@@ -206,6 +206,8 @@ def check_traces(run_dir: str) -> tuple[bool, str]:
         unanswered = sum(1 for r in reqs if str(r.get("http_status", "0")) in ("0", "000", ""))
         missing = st.get("without_trace")
         served = {k: v for b in sm["by_status"].values() for k, v in b.get("served_by", {}).items()}
+        if st.get("rejected_lines"):
+            problems.append(f"{cond}: {st['rejected_lines']} hop line(s) did not validate against the schema")
         if missing is None:
             problems.append(f"{cond}: traces not counted (aggregated before the count was kept)")
         elif missing:

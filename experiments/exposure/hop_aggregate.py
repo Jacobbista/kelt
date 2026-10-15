@@ -250,6 +250,7 @@ def main() -> int:
                     "p99": round(_percentile(xs, 0.99), 3), "n": len(xs)}
         out = {"traces": len(rows), "warmup_dropped": warmup, "vendor_match": vendor,
                "recorded": len(wanted) if wanted is not None else None, "without_trace": missing,
+               "rejected_lines": rejected,
                "e2e_ms": q("e2e_ms"), "wan_free_ms": q("wan_free_ms"),
                "self_ms": {s: q(s + "_self_ms") for s in services},
                "span_ms": {s: q(s + "_span_ms") for s in services}}

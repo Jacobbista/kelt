@@ -106,6 +106,18 @@ class ResponseTimeChecksTest(unittest.TestCase):
                      "local50: 1 request(s) without an HTTP answer", "local50: 200s not answered by the adapter"):
             self.assertIn(part, msg)
 
+    def test_rejected_hop_lines_fail(self):
+        import json
+        import tempfile
+        root = tempfile.mkdtemp()
+        self.cond(root, "fresh", {"vendor": 3})
+        p = os.path.join(root, "fresh", "stages.json")
+        with open(p, "w") as fh:
+            json.dump({"traces": 3, "without_trace": 0, "rejected_lines": 26}, fh)
+        ok, msg = check_run.check_traces(root)
+        self.assertFalse(ok)
+        self.assertIn("fresh: 26 hop line(s) did not validate against the schema", msg)
+
     def test_synthetic_condition_answers_only_200(self):
         import tempfile
         root = tempfile.mkdtemp()
