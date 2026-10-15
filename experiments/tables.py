@@ -176,9 +176,14 @@ def deployment_of(pod: str) -> str:
 
 
 def exposure_rows(runs: list[str]) -> list[dict]:
+    """A condition listed as discarded in its run (window.json) is left out; the
+    table header names it."""
     rows = []
     for d in runs:
+        gone = {x["what"] for x in discarded(d)}
         for cond, c in _load(os.path.join(d, "footprint.json")).items():
+            if cond in gone:
+                continue
             g = c["groups"].get("exposure")
             items = [("group", "exposure", g)] if g else []
             items += [("deployment", deployment_of(p["pod"]), p) for p in c["pods"] if p["group"] == "exposure"]

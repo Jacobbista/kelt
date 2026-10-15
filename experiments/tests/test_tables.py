@@ -277,3 +277,15 @@ class ExposureRowsTest(unittest.TestCase):
         self.assertIn("| what | rest | hit | fresh | local | local50 |", md)
         self.assertIn("| synthetic-adapter | — | — | — | — | 120 / 240 |", md)
         self.assertIn("| exposure, all pods | — | — | — | — | 300 / 400 |", md)
+
+    def test_a_discarded_condition_is_left_out(self):
+        root = tempfile.mkdtemp()
+        st = lambda m: {"mean": m, "max": m, "n": 60}
+        doc = {c: {"nodes": {}, "groups": {"exposure": {"cpu_mcores": st(1.0), "mem_mib": st(1.0)}}, "pods": []}
+               for c in ("rest", "hit")}
+        d = mk(root, "response-time", "20261015T100000Z")
+        with open(os.path.join(d, "footprint.json"), "w") as fh:
+            json.dump(doc, fh)
+        with open(os.path.join(d, "window.json"), "w") as fh:
+            json.dump({"windows": [], "discarded": [{"what": "rest", "reason": "measured again"}]}, fh)
+        self.assertEqual([r["condition"] for r in tables.exposure_rows([d])], ["hit"])

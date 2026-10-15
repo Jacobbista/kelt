@@ -139,13 +139,19 @@ rt_undo() {
   RT_LOAD=0
 }
 
-# The WiFi adapter's devices with the time of their last scan, as JSON.
+# The WiFi adapter's devices with the time of their last scan, as JSON, read
+# through the API server's service proxy: a process started in the pod would be
+# counted in the pod's own CPU.
 wifi_seen() {
-  kubectl exec -n "$LOAD_POS_NS" "deploy/${KELT_WIFI_DEPLOY:-wifi-adapter}" -- python3 -c '
-import json, urllib.request
-d = json.load(urllib.request.urlopen("http://localhost:8080/devices", timeout=10))
+  kubectl get --raw "/api/v1/namespaces/$LOAD_POS_NS/services/${KELT_WIFI_DEPLOY:-wifi-adapter}:8080/proxy/devices" \
+    | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except ValueError:
+    print("null"); sys.exit()
 print(json.dumps([{"id": x["id"], "lastSeen": x.get("lastSeen"), "located": x.get("position") is not None}
-                  for x in d.get("devices", [])]))' 2>/dev/null || echo null
+                  for x in d.get("devices", [])]))'
 }
 
 # window_args <dir> <label> <skip s>: "--window <label> <start> <end>" in epoch
