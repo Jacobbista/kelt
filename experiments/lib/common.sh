@@ -58,7 +58,8 @@ kubectl() {
     # stdin of a calling `while read` loop.
     local remote="sudo k3s kubectl" a stdin=/dev/null
     for a in "$@"; do remote+=" $(printf '%q' "$a")"; [ "$a" != "-" ] || stdin=/dev/stdin; done
-    vagrant ssh master -c "$remote" 2>/dev/null <"$stdin" | sed '/^\[Testbed\]/d'
+    # A stale SSH agent socket in the caller's environment hangs vagrant ssh.
+    SSH_AUTH_SOCK= vagrant ssh master -c "$remote" 2>/dev/null <"$stdin" | sed '/^\[Testbed\]/d'
   fi
 }
 
