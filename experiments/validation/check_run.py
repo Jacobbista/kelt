@@ -223,6 +223,8 @@ def check_traces(run_dir: str) -> tuple[bool, str]:
             if other:
                 problems.append(f"{cond}: 200s not answered by the adapter: {other}")
         parts.append(f"{cond} {st['traces']}")
+    if not parts:
+        return True, "no request condition"
     return not problems, "; ".join(problems) if problems else \
         "every request answered and traced, every hop present (traces after warm-up: " + ", ".join(parts) + ")"
 
@@ -252,21 +254,76 @@ def check_load(run_dir: str) -> tuple[bool, str]:
     return not problems, "; ".join(problems) if problems else "; ".join(parts)
 
 
+INGEST_STAGE = "POST /ingest/wifi-scan"
+
+
+def ingests(run_dir: str, a: float, b: float) -> dict[str, int]:
+    """The WiFi adapter's hop lines for a scan ingest received inside [a, b], by
+    status, from the hop-log snapshots of the condition (northbound 0.19.4)."""
+    out: dict[str, int] = {}
+    for path in glob.glob(os.path.join(run_dir, "hoplog_*.txt")):
+        with open(path) as fh:
+            for ln in fh:
+                i = ln.find("{")
+                if i < 0 or INGEST_STAGE not in ln:
+                    continue
+                try:
+                    h = json.loads(ln[i:])
+                except ValueError:
+                    continue
+                if h.get("event") == "hop" and h.get("stage") == INGEST_STAGE and a <= h["t_receive"] <= b:
+                    k = str(h.get("status"))
+                    out[k] = out.get(k, 0) + 1
+    return out
+
+
 def check_wifi(run_dir: str) -> tuple[bool, str]:
     d = os.path.join(run_dir, "rest")
     try:
-        with open(os.path.join(d, "wifi-devices-end.json")) as fh:
-            end = json.load(fh)
         w = next(x for x in run_windows(d) if x["label"] == "rest")
     except (OSError, ValueError, StopIteration):
         return True, "no rest condition"
-    if end is None:
-        return True, "WiFi adapter not reachable: scans not known"
     t = lambda k: datetime.datetime.strptime(w[k], "%Y-%m-%dT%H:%M:%SZ").replace(  # noqa: E731
         tzinfo=datetime.timezone.utc).timestamp()
-    seen = [x["id"] for x in end if x.get("lastSeen") and t("start_utc") <= float(x["lastSeen"]) <= t("end_utc")]
-    return True, (f"WiFi scans received at rest from {len(seen)} device(s)" if seen
-                  else "no WiFi scan received at rest")
+    if not glob.glob(os.path.join(d, "hoplog_*.txt")):
+        return False, "no hop-log snapshot of the rest condition: ingests not counted"
+    got = ingests(d, t("start_utc"), t("end_utc"))
+    try:
+        with open(os.path.join(d, "wifi-devices-end.json")) as fh:
+            end = json.load(fh) or []
+    except (OSError, ValueError):
+        end = []
+    located = sorted(x["id"] for x in end if x.get("located"))
+    msg = (f"WiFi scan ingests at rest: {sum(got.values())} ("
+           + ", ".join(f"{k} {v}" for k, v in sorted(got.items())) + "); "
+           + (f"located at the end: {len(located)} device(s)" if located else "no device located at the end")
+           if got else "no WiFi scan ingest at rest")
+    sent = scanner_outcomes(os.path.join(d, "scanner-journal.txt"))
+    if sent is None:
+        return True, msg
+    n = sum(v for k, v in sent.items() if not k.startswith("of which"))
+    agree = abs(n - sum(got.values())) <= 1   # one scan may straddle each edge
+    return agree, f"{msg}; the scanner logged {n} scan(s) in the window" + ("" if agree else ": they do not agree")
+
+
+def scanner_outcomes(path: str) -> dict[str, int] | None:
+    """Scans a scanner logged in the window, by outcome: the word after the
+    arrow on its per-scan line ("56 APs in 3.1s → dropped"), and the adapter's
+    status when it refused one ("adapter 422")."""
+    try:
+        with open(path) as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return None
+    out: dict[str, int] = {}
+    refused = sum(1 for ln in lines if "adapter 422" in ln)
+    for ln in lines:
+        if " APs in " in ln and "→" in ln:
+            k = ln.split("→", 1)[1].split()[0] if ln.split("→", 1)[1].split() else "?"
+            out[k] = out.get(k, 0) + 1
+    if refused:
+        out["of which refused 422"] = refused
+    return out
 
 
 def check_footprint(run_dir: str) -> tuple[bool, str]:

@@ -49,7 +49,7 @@ vendor, or an adapter with no vendor behind it.
 
 | Condition | Request |
 |---|---|
-| `rest` | nothing sent for `KELT_RESOURCE_S` (default 300 s): the footprint at rest. The WiFi adapter's `/devices` is read at the start and the end, and the check reports whether a scan arrived inside the window |
+| `rest` | nothing sent for `KELT_RESOURCE_S` (default 300 s): the footprint at rest. The WiFi adapter writes one hop line per scan ingest (`POST /ingest/wifi-scan`, with its status, northbound 0.19.4); the check counts those inside the window, and the adapter's `/devices` at the end says whether a scanner was located. With `KELT_SCANNER_SSH` set, the scanner's journal over the window is read too (unit `KELT_SCANNER_UNIT`, default `scanner`; messages only), and its scans must match the adapter's lines within one at the edges |
 | `hit` | the Wittra asset, no `maxAge`, at `KELT_LAT_RATE` (default 5/s) |
 | `fresh` | the Wittra asset, no `maxAge`, `KELT_LAT_FRESH_COUNT` (default 300) at `KELT_LAT_FRESH_RATE` (default 0.15/s) |
 | `local` | the synthetic asset, `maxAge=0`: no external call; placed for the run when it has no position, and removed after only if placed there |

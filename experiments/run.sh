@@ -105,8 +105,10 @@ run_verification() {
 
 # ── response-time: where the time of a location request goes ─────────────────
 #   rest     nothing sent, KELT_RESOURCE_S (300 s): the footprint at rest, and
-#            whether the WiFi adapter received scans (its /devices lastSeen at
-#            the start and the end)
+#            the WiFi scans the adapter received (its hop lines, one per
+#            ingest; its /devices at the start and the end says whether a
+#            scanner was located); with KELT_SCANNER_SSH, the scanner's journal
+#            of the window too (unit KELT_SCANNER_UNIT, default scanner)
 #   hit      the vendor asset, no maxAge, at the default rate: mostly gateway and
 #            adapter cache hits
 #   fresh    the vendor asset, no maxAge, one request every 1/rate s with rate below
@@ -142,7 +144,8 @@ wifi_seen() {
   kubectl exec -n "$LOAD_POS_NS" "deploy/${KELT_WIFI_DEPLOY:-wifi-adapter}" -- python3 -c '
 import json, urllib.request
 d = json.load(urllib.request.urlopen("http://localhost:8080/devices", timeout=10))
-print(json.dumps([{"id": x["id"], "lastSeen": x.get("lastSeen")} for x in d.get("devices", [])]))' 2>/dev/null || echo null
+print(json.dumps([{"id": x["id"], "lastSeen": x.get("lastSeen"), "located": x.get("position") is not None}
+                  for x in d.get("devices", [])]))' 2>/dev/null || echo null
 }
 
 # window_args <dir> <label> <skip s>: "--window <label> <start> <end>" in epoch
@@ -189,6 +192,16 @@ run_response_time() {
         wifi_seen >"$run_dir/rest/wifi-devices-start.json"
         window open "$run_dir/rest" rest; sleep "$rest_s"; window close "$run_dir/rest" rest
         wifi_seen >"$run_dir/rest/wifi-devices-end.json"
+        # The adapter's hop lines: one per scan ingest (northbound 0.19.4).
+        hoplog_snapshot "$run_dir/rest" rest
+        # A WiFi scanner's own log over the window (KELT_SCANNER_SSH, read only,
+        # messages only): the check compares its scans with the adapter's lines.
+        if [ -n "${KELT_SCANNER_SSH:-}" ]; then
+          read -r _ _ s e < <(window_args "$run_dir/rest" rest 0)
+          ssh -o BatchMode=yes -o ConnectTimeout=10 "$KELT_SCANNER_SSH" \
+            "journalctl -u ${KELT_SCANNER_UNIT:-scanner} --since @${s%.*} --until @${e%.*} -o cat --no-pager" \
+            >"$run_dir/rest/scanner-journal.txt" 2>/dev/null || log "WARNING: the scanner's journal could not be read"
+        fi
         fpwin+=($(window_args "$run_dir/rest" rest 0))
         continue ;;
       hit|fresh) src=wittra ;;

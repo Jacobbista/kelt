@@ -129,7 +129,7 @@ class ResponseTimeChecksTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("sent 40.0/s of 50/s", msg)
 
-    def test_wifi_scans_inside_the_rest_window(self):
+    def rest_dir(self, hops, devices, journal=None):
         import json
         import tempfile
         root = tempfile.mkdtemp()
@@ -138,13 +138,35 @@ class ResponseTimeChecksTest(unittest.TestCase):
         with open(os.path.join(d, "window.json"), "w") as fh:
             json.dump({"windows": [{"label": "rest", "start_utc": "2026-10-15T10:00:00Z",
                                     "end_utc": "2026-10-15T10:05:00Z"}]}, fh)
+        with open(os.path.join(d, "hoplog_wifi-adapter_rest.txt"), "w") as fh:
+            for t, st in hops:
+                fh.write("INFO:hop:" + json.dumps({"event": "hop", "service": "wifi-adapter", "stage": "POST /ingest/wifi-scan",
+                                                   "correlator": f"c{t}", "status": st, "t_receive": t, "t_emit": t,
+                                                   "span_ms": 1.0}) + "\n")
         with open(os.path.join(d, "wifi-devices-end.json"), "w") as fh:
-            json.dump([{"id": "robot", "lastSeen": 1792058500.0}], fh)   # 10:01:40Z
-        self.assertEqual(check_run.check_wifi(root), (True, "WiFi scans received at rest from 1 device(s)"))
-        with open(os.path.join(d, "wifi-devices-end.json"), "w") as fh:
-            json.dump([], fh)
-        self.assertEqual(check_run.check_wifi(root), (True, "no WiFi scan received at rest"))
+            json.dump(devices, fh)
+        if journal is not None:
+            with open(os.path.join(d, "scanner-journal.txt"), "w") as fh:
+                fh.write("".join(f"  56 APs in 3.1s → sent (backlog 0)\n" for _ in range(journal)))
+        return root
 
+    def test_wifi_ingests_inside_the_rest_window(self):
+        start = 1792058400.0   # 2026-10-15T10:00:00Z
+        root = self.rest_dir([(start + 10, 200), (start + 13, 200), (start - 50, 200)],
+                             [{"id": "s", "lastSeen": start + 13, "located": False}], journal=2)
+        self.assertEqual(check_run.check_wifi(root), (True, "WiFi scan ingests at rest: 2 (200 2); no device located "
+                                                            "at the end; the scanner logged 2 scan(s) in the window"))
+
+    def test_scanner_and_adapter_disagree(self):
+        start = 1792058400.0
+        root = self.rest_dir([(start + 10, 200)], [], journal=5)
+        ok, msg = check_run.check_wifi(root)
+        self.assertFalse(ok)
+        self.assertIn("do not agree", msg)
+
+    def test_no_ingest(self):
+        root = self.rest_dir([], [])
+        self.assertEqual(check_run.check_wifi(root), (True, "no WiFi scan ingest at rest"))
 
 class FootprintCheckTest(unittest.TestCase):
     def run_with(self, pods, names):
@@ -173,3 +195,17 @@ class FootprintCheckTest(unittest.TestCase):
         ok, msg = self.run_with({"new": range(100, 111)}, {})
         self.assertFalse(ok)
         self.assertIn("pods without a name: 1", msg)
+
+
+class ScannerOutcomesTest(unittest.TestCase):
+    def test_counts_by_outcome(self):
+        import tempfile
+        p = os.path.join(tempfile.mkdtemp(), "scanner-journal.txt")
+        with open(p, "w") as fh:
+            fh.write('  [!] adapter 422: {"detail":"no known access points in scan"} (dropped)\n'
+                     "  58 APs in 3.1s → dropped (backlog 0)\n"
+                     "  56 APs in 3.2s → sent (backlog 0)\n")
+        self.assertEqual(check_run.scanner_outcomes(p), {"dropped": 1, "sent": 1, "of which refused 422": 1})
+
+    def test_no_journal(self):
+        self.assertIsNone(check_run.scanner_outcomes("/nonexistent/scanner-journal.txt"))
