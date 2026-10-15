@@ -423,12 +423,12 @@ northbound_image_names:
   vendor_adapter:     vendor-adapter
   location_app:       location-app
 northbound_image_tags:
-  positioning_engine: "0.19.3"
-  camara_gateway:     "0.19.3"
+  positioning_engine: "0.19.4"
+  camara_gateway:     "0.19.4"
   placement_editor:   "0.19.1"
-  synthetic_adapter:  "0.19.3"
-  wifi_adapter:       "0.19.3"
-  vendor_adapter:     "0.19.3"
+  synthetic_adapter:  "0.19.4"
+  wifi_adapter:       "0.19.4"
+  vendor_adapter:     "0.19.4"
   location_app:       "0.19.1"
 
 # ── Dashboard images ─────────────────────────────────────────────────────────
