@@ -154,8 +154,14 @@ def response_time_rows(runs: list[str]) -> list[dict]:
                 base = {"run": os.path.basename(d), "condition": cond, "status": st,
                         "rate_per_s": s.get("achieved_rate_per_s"),
                         "served_by": ", ".join(f"{k} {v}" for k, v in sorted(b.get("served_by", {}).items()))}
+                conn = b.get("vendor_connection") or {}
+                base["vendor_connection"] = ", ".join(f"{k} {v}" for k, v in sorted(conn.items()))
                 series = [("end to end", b["e2e_ms"]), ("stack (reached vendor)", b["stack_ms"]),
                           ("vendor call (adapter span)", b["vendor_ms"])]
+                # northbound 0.19.6+: the adapter span split at the vendor's answer.
+                if (b.get("upstream_ms") or {}).get("n"):
+                    series += [("vendor upstream (vendor + round trip)", b["upstream_ms"]),
+                               ("vendor-adapter rest (own work + connection setup)", b["adapter_rest_ms"])]
                 series += [(f"{k} own", v) for k, v in b["per_component"].items()]
                 for name, q in series:
                     rows.append({**base, "series": name, "n": q["n"], "median_ms": q["median"],

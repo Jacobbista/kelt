@@ -202,23 +202,33 @@ def main() -> int:
         fh.write("correlator,e2e_ms,wan_free_ms,"
                  + ",".join(f"{s}_self_ms" for s in services) + ","
                  + ",".join(f"{s}_span_ms" for s in services) + ","
-                 + ",".join(f"{s}_cache" for s in services) + "\n")
+                 + ",".join(f"{s}_cache" for s in services) + ","
+                 + ",".join(f"{s}_connection" for s in services) + ","
+                 + ",".join(f"{s}_upstream_ms" for s in services) + "\n")
         for corr, trace in traces.items():
             self_ms, span_ms, e2e = _self_costs(trace)
             wan = sum(v for s, v in span_ms.items() if vendor in s)
             # `cache` (hit|miss) on a stage that caches the source behind it
             # (vendor-adapter 0.19.2+); empty where the line carries none.
             cache = {h.get("service", "?"): h["cache"] for h in trace if h.get("cache") in ("hit", "miss")}
+            # On a vendor-adapter miss (0.19.6+): whether the call opened a
+            # connection, and the vendor's own time plus the round trip.
+            conn = {h.get("service", "?"): h["connection"] for h in trace if h.get("connection") in ("new", "reused")}
+            upstream = {h.get("service", "?"): h["upstream_ms"] for h in trace if isinstance(h.get("upstream_ms"), (int, float))}
             row = {"correlator": corr, "e2e_ms": e2e, "wan_free_ms": max(0.0, e2e - wan)}
             for s in services:
                 row[f"{s}_self_ms"] = self_ms.get(s, 0.0)
                 row[f"{s}_span_ms"] = span_ms.get(s, 0.0)
                 row[f"{s}_cache"] = cache.get(s, "")
+                row[f"{s}_connection"] = conn.get(s, "")
+                row[f"{s}_upstream_ms"] = upstream.get(s, "")
             rows.append(row)
             fh.write(f"{corr},{e2e:.3f},{row['wan_free_ms']:.3f},"
                      + ",".join(f"{self_ms.get(s, 0.0):.3f}" for s in services) + ","
                      + ",".join(f"{span_ms.get(s, 0.0):.3f}" for s in services) + ","
-                     + ",".join(cache.get(s, "") for s in services) + "\n")
+                     + ",".join(cache.get(s, "") for s in services) + ","
+                     + ",".join(conn.get(s, "") for s in services) + ","
+                     + ",".join(f"{upstream[s]:.3f}" if s in upstream else "" for s in services) + "\n")
 
     def stat(key: str) -> str:
         xs = [r[key] for r in rows]

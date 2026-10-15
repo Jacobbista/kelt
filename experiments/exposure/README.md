@@ -85,6 +85,8 @@ present, every `maxAge=0` request on the synthetic source answered 200 by the ad
 the open-loop rate at no less than 98% of the nominal and 99% of its requests
 within one period of their schedule, and the footprint samples.
 
+From northbound 0.19.6 the vendor-adapter's hop line on a cache miss also carries `connection` (`new` or `reused`) and `upstream_ms` (from the request sent to the vendor to its response headers: the vendor's time plus the round trip); the summary reports `upstream_ms`, the rest of the adapter's span (its own work and any connection setup) and the count of new and reused connections.
+
 The vendor share is the adapter's span on the requests that reached the vendor;
 the stack share is the request's total minus that span, on the same requests.
 See `../README.md` for the caches, which decide how many requests reach the

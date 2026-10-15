@@ -30,6 +30,19 @@ class SummaryTest(unittest.TestCase):
         self.assertEqual(s["stack_ms"]["n"], 0)
         self.assertEqual(s["e2e_ms"]["n"], 3)
 
+    def test_upstream_and_connection_on_the_calls_that_reached_the_vendor(self):
+        rows = [{"e2e_ms": "200", "wittra_span_ms": "150", "wittra_upstream_ms": "130", "wittra_connection": "reused"},
+                {"e2e_ms": "260", "wittra_span_ms": "220", "wittra_upstream_ms": "140", "wittra_connection": "new"},
+                {"e2e_ms": "30", "wittra_span_ms": "0.3", "wittra_upstream_ms": "", "wittra_connection": ""}]
+        s = rts.summarise(rows, "wittra_span_ms")
+        self.assertEqual(s["vendor_connection"], {"reused": 1, "new": 1})
+        self.assertEqual(s["upstream_ms"]["n"], 2)
+        self.assertEqual(sorted([s["adapter_rest_ms"]["min"], s["adapter_rest_ms"]["max"]]), [20.0, 80.0])
+
+    def test_no_upstream_fields_before_0_19_6(self):
+        s = rts.summarise(ROWS, "wittra_span_ms")
+        self.assertEqual((s["upstream_ms"]["n"], s["vendor_connection"]), (0, {}))
+
     def test_per_component(self):
         s = rts.summarise(ROWS, "wittra_span_ms")
         self.assertEqual(s["per_component"]["camara-gateway"]["median"], 21.0)

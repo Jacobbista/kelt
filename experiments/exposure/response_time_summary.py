@@ -27,6 +27,13 @@ def summarise(rows: list[dict], vendor_col: str | None) -> dict:
     e2e = [float(r["e2e_ms"]) for r in rows]
     reached = [r for r in rows if vendor_col and float(r.get(vendor_col) or 0) >= MISS_MS]
     comps = sorted({k[:-len("_self_ms")] for r in rows for k in r if k.endswith("_self_ms")})
+    base = vendor_col[: -len("_span_ms")] if vendor_col else None
+    up = [r for r in reached if base and r.get(f"{base}_upstream_ms") not in (None, "")]
+    conns: dict[str, int] = {}
+    for r in reached:
+        c = r.get(f"{base}_connection") if base else None
+        if c:
+            conns[c] = conns.get(c, 0) + 1
     return {
         "traces": len(rows),
         "with_vendor_span": len(reached),
@@ -34,6 +41,12 @@ def summarise(rows: list[dict], vendor_col: str | None) -> dict:
         "e2e_ms": summary(e2e),
         "vendor_ms": summary([float(r[vendor_col]) for r in reached]) if vendor_col else summary([]),
         "stack_ms": summary([float(r["e2e_ms"]) - float(r[vendor_col]) for r in reached]),
+        # northbound 0.19.6+: the vendor's time plus the round trip (upstream),
+        # and the rest of the adapter's span (its own work and any connection
+        # setup), with how many calls opened a connection.
+        "upstream_ms": summary([float(r[f"{base}_upstream_ms"]) for r in up]),
+        "adapter_rest_ms": summary([float(r[vendor_col]) - float(r[f"{base}_upstream_ms"]) for r in up]),
+        "vendor_connection": conns,
         "per_component": {c: summary([float(r[f"{c}_self_ms"]) for r in rows if r.get(f"{c}_self_ms")])
                           for c in comps},
     }
