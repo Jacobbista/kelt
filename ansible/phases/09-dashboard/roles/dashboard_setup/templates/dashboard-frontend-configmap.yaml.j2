@@ -98,6 +98,20 @@ data:
         try_files $uri =404;
       }
 
+      # The page is revalidated on every load, so a navigation always reaches
+      # the edge; an edge login in front of the dashboard (Cloudflare Access)
+      # can only redirect a navigation, not the script and style requests the
+      # page makes after it. The SPA fallbacks end here too (internal redirect).
+      location = /index.html {
+        add_header Cache-Control "no-cache";
+      }
+
+      # Content-addressed build output: a new build has new names.
+      location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        try_files $uri =404;
+      }
+
       # SPA fallback so client-side routes work on direct hits.
       location / {
         try_files $uri $uri/ /index.html;
