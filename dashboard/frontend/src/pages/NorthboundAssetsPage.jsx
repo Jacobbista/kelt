@@ -151,9 +151,6 @@ print(r.json())`,
   );
 }
 
-// The class of the object tracked (the profile's `kind`: "Asset class"), never the
-// technology that tracks it: that is the capability's source.
-const ASSET_KINDS = ["robot", "pallet", "tool", "forklift", "vehicle", "asset"];
 // Fallback only, used until the live adapter names load. A vendor's own source name
 // appears once its adapter is deployed, it is never listed here.
 const ASSET_SOURCES = ["wifi", "fiveg", "gnss", "synthetic"];
@@ -182,13 +179,13 @@ const isSynthetic = (a) => (a?.capabilities || []).some((c) => c?.source === "sy
 const HELP = {
   assetId: "Public CAMARA handle the consumer queries by (device.assetId). A business id like pkg-4471, not a phone number.",
   positioningId: "The id the chosen adapter fetches this device by: the vendor-native device id (used verbatim in the adapter's API call), or the engine track id for a synthetic source.",
-  kind: "The class of the object tracked (a pallet, a robot), surfaced in the CAMARA profile. Not the technology that tracks it: that is the source.",
+  kind: "The class of the object tracked (a pallet, a robot), surfaced in the CAMARA profile; the technology that tracks it is the source. Free text: the kinds already in the map are suggested.",
   source: "Routes the asset: the engine serves it from the registered adapter whose name equals this (?source=). Pick a deployed adapter.",
   org: "Tenant. The gateway matches it against the token org claim, so a consumer sees only its own org's assets.",
 };
 
 // test arrow char below
-function AssetModal({ initial, isNew, busy, onSave, onClose }) {
+function AssetModal({ initial, isNew, busy, onSave, onClose, siteKinds = [] }) {
   const [form, setForm] = useState(() => ({ ...EMPTY_ASSET, ...initial }));
   const [meta, setMeta] = useState(() =>
     Object.entries(initial?.metadata || {}).map(([k, v]) => ({ k, v: String(v) })));
@@ -280,7 +277,7 @@ function AssetModal({ initial, isNew, busy, onSave, onClose }) {
               <input className={inputCls} list="asset-kinds" placeholder="pallet" value={form.kind}
                 onChange={(e) => set({ kind: e.target.value })} />
               <datalist id="asset-kinds">
-                {ASSET_KINDS.map((k) => <option key={k} value={k} />)}
+                {siteKinds.map((k) => <option key={k} value={k} />)}
               </datalist>
             </Field>
           </div>
@@ -678,7 +675,8 @@ export default function NorthboundAssetsPage() {
           <DiscoverModal onOnboard={onboardCandidate} onClose={() => setDiscoverOpen(false)} />
         )}
         {editing && (
-          <AssetModal initial={editing} isNew={isNew} busy={busy} onSave={upsert} onClose={() => setEditing(null)} />
+          <AssetModal initial={editing} isNew={isNew} busy={busy} onSave={upsert} onClose={() => setEditing(null)}
+            siteKinds={Array.from(new Set((assets || []).map((a) => a.kind).filter(Boolean))).sort()} />
         )}
         {importConfirm && (
           <Modal

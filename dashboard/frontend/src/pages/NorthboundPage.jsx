@@ -1503,7 +1503,7 @@ function FileFieldEditor({ service, entry, toast, onApplied, shadowedBy }) {
 // and are not asked twice. accuracy_class is offered from the gateway's published
 // vocabulary; the radius input appears only where the class needs it (coarse) or on
 // request. Any other key already in the value is preserved untouched.
-const BOUND_SOURCE_KEYS = ["source", "kinds", "frame", "z", "accuracy_class", "nominalAccuracy", "reporting", "reportingInterval", "nominalVerticalAccuracy"];
+const BOUND_SOURCE_KEYS = ["source", "frame", "z", "accuracy_class", "nominalAccuracy", "reporting", "reportingInterval", "nominalVerticalAccuracy"];
 function CapabilitiesField({ entry, value, onChange, hints }) {
   const raw = value !== undefined ? value : (entry.value ?? "");
   let caps = {};
@@ -1526,6 +1526,9 @@ function CapabilitiesField({ entry, value, onChange, hints }) {
   }, []);
   const emit = (next) => {
     const clean = { ...next };
+    // An asset's kind belongs to the asset map; an adapter no longer declares
+    // kinds (northbound 0.21.0), so a stored value is dropped on the next save.
+    delete clean.kinds;
     for (const k of Object.keys(clean)) {
       const v = clean[k];
       if (v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length)) delete clean[k];
@@ -1576,19 +1579,6 @@ function CapabilitiesField({ entry, value, onChange, hints }) {
             <p className={help}>The tag every fix carries. An asset is bound to this source by that name (<span className="font-mono">capabilities[].source</span>); a name no adapter serves is refused when saving assets.</p>
           </div>
           <input className={inputCls} value={caps.source || ""} placeholder={schema?.vendor || "vendor name"} onChange={(e) => set({ source: e.target.value.trim() })} />
-        </div>
-        <div className={row}>
-          <div>
-            <div className={label}>Asset kinds it can locate</div>
-            <p className={help}>Comma separated. An asset of a kind no source declares is refused when saving assets.</p>
-          </div>
-          <input
-            className={inputCls}
-            key={(caps.kinds || []).join("|")}
-            defaultValue={(caps.kinds || []).join(", ")}
-            placeholder="asset, uwb-tag"
-            onBlur={(e) => set({ kinds: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })}
-          />
         </div>
         <div className={row}>
           <div>
