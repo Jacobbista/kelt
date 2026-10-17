@@ -1526,9 +1526,6 @@ function CapabilitiesField({ entry, value, onChange, hints }) {
   }, []);
   const emit = (next) => {
     const clean = { ...next };
-    // An asset's kind belongs to the asset map; an adapter no longer declares
-    // kinds (northbound 0.21.0), so a stored value is dropped on the next save.
-    delete clean.kinds;
     for (const k of Object.keys(clean)) {
       const v = clean[k];
       if (v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length)) delete clean[k];
