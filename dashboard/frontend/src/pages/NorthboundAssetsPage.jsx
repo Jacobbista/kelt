@@ -151,7 +151,9 @@ print(r.json())`,
   );
 }
 
-const ASSET_KINDS = ["uwb-tag", "tool", "pallet", "forklift", "asset", "ue"];
+// The class of the object tracked (the profile's `kind`: "Asset class"), never the
+// technology that tracks it: that is the capability's source.
+const ASSET_KINDS = ["robot", "pallet", "tool", "forklift", "vehicle", "asset"];
 // Fallback only, used until the live adapter names load. A vendor's own source name
 // appears once its adapter is deployed, it is never listed here.
 const ASSET_SOURCES = ["wifi", "fiveg", "gnss", "synthetic"];
@@ -180,7 +182,7 @@ const isSynthetic = (a) => (a?.capabilities || []).some((c) => c?.source === "sy
 const HELP = {
   assetId: "Public CAMARA handle the consumer queries by (device.assetId). A business id like pkg-4471, not a phone number.",
   positioningId: "The id the chosen adapter fetches this device by: the vendor-native device id (used verbatim in the adapter's API call), or the engine track id for a synthetic source.",
-  kind: "Entity class, surfaced in the CAMARA profile so a consumer knows what it is tracking.",
+  kind: "The class of the object tracked (a pallet, a robot), surfaced in the CAMARA profile. Not the technology that tracks it: that is the source.",
   source: "Routes the asset: the engine serves it from the registered adapter whose name equals this (?source=). Pick a deployed adapter.",
   org: "Tenant. The gateway matches it against the token org claim, so a consumer sees only its own org's assets.",
 };
@@ -275,9 +277,11 @@ function AssetModal({ initial, isNew, busy, onSave, onClose }) {
               {form.assetId && !idOk && <span className="text-[10px] text-rose-400">letters / digits / . _ : - (1-128)</span>}
             </Field>
             <Field label="kind" hint={HELP.kind}>
-              <select className={inputCls} value={form.kind} onChange={(e) => set({ kind: e.target.value })}>
-                {ASSET_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
-              </select>
+              <input className={inputCls} list="asset-kinds" placeholder="pallet" value={form.kind}
+                onChange={(e) => set({ kind: e.target.value })} />
+              <datalist id="asset-kinds">
+                {ASSET_KINDS.map((k) => <option key={k} value={k} />)}
+              </datalist>
             </Field>
           </div>
         )}
