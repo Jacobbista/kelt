@@ -63,10 +63,13 @@ to the source that tracks it and asks the engine; the engine never talks to
 a measurement source itself: it polls the adapter that declared that
 source over `GET /measurement/{id}` and converts the answer to WGS84 with
 its blueprint. Adapters register with the engine when they start and keep
-a heartbeat, carrying their capabilities (source name, kinds, frame,
+a heartbeat, carrying their capabilities (source name, frame,
 precision class, how the source reports); a silent adapter is evicted and the
 rest keeps serving.
-With no adapter tracking an asset the gateway answers `422 UNABLE_TO_LOCATE`.
+With no adapter registered for an asset's source the gateway answers
+`503 UNAVAILABLE`; when the source has no position for the device it answers
+`422 UNABLE_TO_LOCATE`. An asset's `kind` (the class of the object tracked)
+belongs to the asset map, not to the adapter.
 
 The two real sources reach their adapters differently, and both cross the
 private 5G: the Wi-Fi scanner is a UE whose scans land on the on-site data
@@ -203,7 +206,7 @@ operator owns and refuses to write a key the deployment provides elsewhere.
 Wiring and storage paths are shown read-only in the service's info panel.
 
 `ADAPTER_CAPABILITIES` is where a deployment states the traits of the source
-it is bound to: source, kinds, frame (`room`, `venue` or `wgs84`), z,
+it is bound to: source, frame (`room`, `venue` or `wgs84`), z,
 accuracy_class, nominalAccuracy, nominalVerticalAccuracy, reporting
 (`on_request`, `periodic` or `on_motion`) and reportingInterval. The generic
 vendor-adapter image bakes none of them. The form renders the variable as a
