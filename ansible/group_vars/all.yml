@@ -424,7 +424,7 @@ northbound_image_names:
   location_app:       location-app
 northbound_image_tags:
   positioning_engine: "0.19.6"
-  camara_gateway:     "0.19.6"
+  camara_gateway:     "0.20.0"
   placement_editor:   "0.19.1"
   synthetic_adapter:  "0.19.6"
   wifi_adapter:       "0.19.6"
