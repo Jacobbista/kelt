@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Build the thesis tables of one campaign from its runs.
 
-  tables.py <resource-use|verification|response-time|exposure-resource-use|throughput|rtt|retransmissions>
+  tables.py <resource-use|verification|response-time|response-time-split|response-time-hist|
+             response-time-stream|exposure-resource-use|throughput|rtt|retransmissions>
 
 Uses every non-pilot run of the campaign, or only the runs listed in
 runs/thesis-runs.txt when that file exists (one "<slug>/<stamp>" per
@@ -151,8 +152,11 @@ def response_time_rows(runs: list[str]) -> list[dict]:
             # One block per HTTP status: a 422 under maxAge=0 crosses the stack too
             # and is reported apart from the 200s (northbound 0.19).
             for st, b in sorted(s["by_status"].items()):
+                ld = s.get("load") or {}
                 base = {"run": os.path.basename(d), "condition": cond, "status": st,
-                        "rate_per_s": s.get("achieved_rate_per_s"),
+                        "rate_planned_per_s": ld.get("planned_per_s"),
+                        "rate_per_s": ld.get("sent_per_s", s.get("achieved_rate_per_s")),
+                        "late_p99_ms": ld.get("late_p99_ms"),
                         "served_by": ", ".join(f"{k} {v}" for k, v in sorted(b.get("served_by", {}).items()))}
                 conn = b.get("vendor_connection") or {}
                 base["vendor_connection"] = ", ".join(f"{k} {v}" for k, v in sorted(conn.items()))
@@ -165,14 +169,74 @@ def response_time_rows(runs: list[str]) -> list[dict]:
                 series += [(f"{k} own", v) for k, v in b["per_component"].items()]
                 for name, q in series:
                     rows.append({**base, "series": name, "n": q["n"], "median_ms": q["median"],
-                                 "p90_ms": q["p90"], "p99_ms": q["p99"]})
+                                 "p90_ms": q["p90"], "p99_ms": q["p99"], "max_ms": q["max"]})
+    return rows
+
+
+def _summaries(runs: list[str]):
+    for d in runs:
+        for cond in sorted(os.listdir(d)):
+            p = os.path.join(d, cond, "summary.json")
+            if os.path.exists(p):
+                yield d, cond, _load(p)
+
+
+def split_rows(runs: list[str]) -> list[dict]:
+    """The 200s of each synthetic condition on either side of the split between
+    the two values of the end-to-end time (response_time_summary.SPLIT_MS), in
+    order of the planned rate."""
+    rows = []
+    for d, cond, s in _summaries(runs):
+        if not (cond.startswith("synthetic-") or cond in ("local", "local50")):
+            continue
+        b = s["by_status"].get("200", {})
+        sp = b.get("e2e_split")
+        if not sp:
+            continue
+        n = sp["below"] + sp["above"]
+        rows.append({"run": os.path.basename(d), "condition": cond,
+                     "rate_planned_per_s": (s.get("load") or {}).get("planned_per_s"), "n": n,
+                     "threshold_ms": sp["threshold_ms"], "below": sp["below"], "above": sp["above"],
+                     "below_pct": round(100 * sp["below"] / n, 1) if n else None})
+    return sorted(rows, key=lambda r: (r["run"], r["rate_planned_per_s"] or 0))
+
+
+def hist_rows(runs: list[str]) -> list[dict]:
+    """The 1 ms histogram of the end-to-end time of each condition's 200s."""
+    return [{"run": os.path.basename(d), "condition": cond, "bin_ms": int(k), "count": v}
+            for d, cond, s in _summaries(runs)
+            for k, v in s["by_status"].get("200", {}).get("e2e_hist_1ms", {}).items()]
+
+
+def stream_rows(runs: list[str]) -> list[dict]:
+    """Each stream condition: one row per client (messages and positions per
+    second, interval between messages), then one per source with the age of its
+    positions on arrival over all clients."""
+    rows = []
+    for d in runs:
+        for cond in sorted(os.listdir(d)):
+            p = os.path.join(d, cond, "stream.json")
+            if not os.path.exists(p):
+                continue
+            st = _load(p)
+            base = {"run": os.path.basename(d), "condition": cond, "clients": st["clients"],
+                    "engine_interval_ms": st.get("engine_interval_ms")}
+            empty = dict.fromkeys(("messages_per_s", "positions_per_s", "interval_median_ms", "interval_max_ms",
+                                   "n", "median_ms", "p90_ms", "p99_ms", "max_ms"))
+            for c in st["per_client"]:
+                rows.append({**base, "what": f"client {c['client']}", **empty,
+                             **{k: c[k] for k in ("messages_per_s", "positions_per_s", "interval_median_ms",
+                                                  "interval_max_ms")}})
+            for src, q in sorted(st["age_ms"].items()):
+                rows.append({**base, "what": f"age on arrival, {src}", **empty, "n": q["n"],
+                             "median_ms": q["median"], "p90_ms": q["p90"], "p99_ms": q["p99"], "max_ms": q["max"]})
     return rows
 
 
 # The exposure stack per Deployment under each response-time condition (thesis
 # 5.11.3): the footprint the response-time campaign records, its pods summed by
-# Deployment (a pod restarted during the run keeps its Deployment).
-EXPOSURE_COLS = ("rest", "hit", "fresh", "local", "local50")
+# Deployment (a pod restarted during the run keeps its Deployment). The
+# conditions are the columns, in the order the runs took them.
 
 
 def deployment_of(pod: str) -> str:
@@ -206,14 +270,15 @@ def exposure_pivot(rows: list[dict]) -> list[str]:
     condition. Several runs: the mean of their means, the highest of their peaks."""
     names = [("group", "exposure")] + sorted({(r["level"], r["name"]) for r in rows if r["level"] == "deployment"},
                                              key=lambda x: x[1])
+    cols = list(dict.fromkeys(r["condition"] for r in rows))
     md = []
     for what, mean_k, peak_k in (("CPU, millicores", "cpu_mean_m", "cpu_peak_m"),
                                  ("Memory, MiB", "mem_mean_mib", "mem_peak_mib")):
-        md += ["", f"{what}: mean / 1 s peak", "", "| what | " + " | ".join(EXPOSURE_COLS) + " |",
-               "|" + "---|" * (len(EXPOSURE_COLS) + 1)]
+        md += ["", f"{what}: mean / 1 s peak", "", "| what | " + " | ".join(cols) + " |",
+               "|" + "---|" * (len(cols) + 1)]
         for level, name in names:
             cells = []
-            for cond in EXPOSURE_COLS:
+            for cond in cols:
                 hit = [r for r in rows if (r["condition"], r["level"], r["name"]) == (cond, level, name)
                        and r[mean_k] is not None]
                 cells.append(f"{sum(r[mean_k] for r in hit) / len(hit):.0f} / {max(r[peak_k] for r in hit):.0f}"
@@ -412,10 +477,13 @@ def check_lines(runs: list[str], name: str, label: str) -> list[str]:
 
 NOTES = {"rtt": rtt_notes,
          "response-time": lambda runs: check_lines(runs, "load", "Open-loop load"),
+         "response-time-stream": lambda runs: check_lines(runs, "stream", "Stream"),
          "exposure-resource-use": lambda runs: check_lines(runs, "wifi", "WiFi adapter at rest")}
 
 BUILDERS = {"resource-use": footprint_rows, "verification": verification_rows,
-            "response-time": response_time_rows, "exposure-resource-use": exposure_rows,
+            "response-time": response_time_rows, "response-time-split": split_rows,
+            "response-time-hist": hist_rows, "response-time-stream": stream_rows,
+            "exposure-resource-use": exposure_rows,
             "throughput": throughput_rows, "rtt": rtt_rows, "retransmissions": retransmission_rows}
 
 
@@ -426,7 +494,9 @@ def main() -> int:
     slug = sys.argv[1]
     runs_dir = os.environ.get("KELT_EXP_RUNS_DIR", os.path.join(EXP, "runs"))
     campaigns = {"resource-use": FOOTPRINT_CAMPAIGNS, "retransmissions": ("throughput",),
-                 "exposure-resource-use": ("response-time",)}.get(slug, (slug,))
+                 "exposure-resource-use": ("response-time",), "response-time-split": ("response-time",),
+                 "response-time-hist": ("response-time",),
+                 "response-time-stream": ("response-time",)}.get(slug, (slug,))
     runs = [d for c in campaigns for d in select_runs(runs_dir, c, _listed(runs_dir))]
     if slug in ("resource-use", "exposure-resource-use"):
         runs = [d for d in runs if os.path.exists(os.path.join(d, "footprint.json"))]

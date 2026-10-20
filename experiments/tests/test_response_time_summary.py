@@ -24,6 +24,12 @@ class SummaryTest(unittest.TestCase):
         self.assertEqual(s["stack_ms"]["n"], 2)
         self.assertEqual(s["stack_ms"]["median"], 50.0)   # 200-150, 210-160
 
+    def test_two_values_split_at_9_ms(self):
+        rows = [{"e2e_ms": v} for v in ("5.2", "6.9", "8.99", "9.0", "12.4")]
+        s = rts.summarise(rows, None)
+        self.assertEqual(s["e2e_split"], {"threshold_ms": 9.0, "below": 3, "above": 2})
+        self.assertEqual(s["e2e_hist_1ms"], {"5": 1, "6": 1, "8": 1, "9": 1, "12": 1})
+
     def test_no_vendor_column(self):
         s = rts.summarise(ROWS, None)
         self.assertEqual(s["with_vendor_span"], 0)

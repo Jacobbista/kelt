@@ -26,13 +26,13 @@ sits inside its caller's), so the topology is not hardcoded.
   hop_aggregate.py <run-dir-or-hoplog-files...> [--vendor-service vendor]
                   [--warmup N] [--correlators requests.csv] [--json out.json]
 
---correlators restricts the traces to the x-correlator values a driver run
-recorded (the requests_*.csv response_time_driver.sh writes; a run dir is searched for
+--correlators restricts the traces to the x-correlator values a run recorded
+(the requests_*.csv response_time_load.py writes; a run dir is searched for
 one automatically). Without it every hop line in the snapshot window becomes a
 trace, health checks and the engine's own polling included, and the numbers
 mean nothing. --json writes the printed statistics as a machine-readable file.
 
-Reads the `hoplog_*.txt` snapshots a response_time_driver.sh run leaves behind (or explicit
+Reads the `hoplog_*.txt` logs run.sh keeps for each condition (or explicit
 files), writes stages.csv + a printed summary. Owner: experiments/exposure/README.md.
 """
 from __future__ import annotations

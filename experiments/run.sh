@@ -104,39 +104,100 @@ run_verification() {
 }
 
 # ── response-time: where the time of a location request goes ─────────────────
-#   rest     nothing sent, KELT_RESOURCE_S (300 s): the footprint at rest, and
-#            the WiFi scans the adapter received (its hop lines, one per
-#            ingest; its /devices at the start and the end says whether a
-#            scanner was located); with KELT_SCANNER_SSH, the scanner's journal
-#            of the window too (unit KELT_SCANNER_UNIT, default scanner)
-#   hit      the vendor asset, no maxAge, at the default rate: mostly gateway and
-#            adapter cache hits
-#   fresh    the vendor asset, no maxAge, one request every 1/rate s with rate below
-#            1/5 s, past both 5 s caches. Each request's hop line says cache hit
-#            or miss; the summary counts them. Under northbound 0.19 maxAge=0 is
-#            refused for a position that is not current by the source's
-#            declaration, so it cannot select the full path.
-#   local    the synthetic asset (reporting on_request, no adapter cache), maxAge=0:
-#            the stack with no external call; placed for the run if it has no
-#            position, and removed after only if placed here
-#   local50  KELT_LAT_LOAD_ASSETS (50) synthetic assets, each asked once a second
-#            with maxAge=0, open loop (exposure/response_time_load.py), for
-#            KELT_LAT_LOAD_WARMUP_S (10) + KELT_LAT_LOAD_S (60) s; the assets are
-#            added and placed for the condition, and removed after
-#            (exposure/load_fixture.sh)
+# Every condition but rest is sent open loop (exposure/response_time_load.py):
+# KELT_LAT_WARMUP_S (10) s of warm-up, discarded, then at least
+# KELT_LAT_MIN_COUNT (1000) requests and at least KELT_LAT_MIN_S (60) s.
+#   rest            nothing sent, KELT_RESOURCE_S (300 s): the footprint at rest,
+#                   and the WiFi scans the adapter received (its hop lines, one
+#                   per ingest; its /devices at the start and the end says
+#                   whether a scanner was located); with KELT_SCANNER_SSH, the
+#                   scanner's journal of the window too (unit KELT_SCANNER_UNIT,
+#                   default scanner)
+#   wittra-cached   the vendor asset, no maxAge, KELT_LAT_CACHED_RATE (5/s):
+#                   mostly answers from the gateway's cache
+#   wittra-cloud    the vendor asset, no maxAge, KELT_LAT_CLOUD_RATE (0.15/s),
+#                   every request past both 5 s caches. Each request's hop line
+#                   says cache hit or miss; the summary counts them. Under
+#                   northbound 0.19 maxAge=0 is refused for a position that is
+#                   not current by the source's declaration, so it cannot select
+#                   the full path.
+#   synthetic-<R>   KELT_LAT_LOAD_ASSETS (50) synthetic assets, maxAge=0, R
+#                   requests per second in total, each asset asked in turn
+#   stream-<N>      the same assets, no request: N clients on the gateway's
+#                   /positions/stream (exposure/stream_client.py) for
+#                   KELT_LAT_WARMUP_S of warm-up, then KELT_STREAM_S (300) s
+#   examples        the recorded examples (exposure/examples.py) on the vendor
+#                   asset; for the one with another organisation's token, a
+#                   temporary Keycloak client is created and deleted
+#                   (exposure/other_org.sh)
+# The load assets are added and placed before the first synthetic or stream
+# condition and removed after the last (exposure/load_fixture.sh). Each
+# synthetic condition also bounds the offset between the gateway's clock and
+# this host's (exposure/clock_offset.py), on which the stream's ages depend;
+# stream.json records the engine's broadcast interval (WEBSOCKET_INTERVAL_MS).
 # Close the vendor asset's other consumers for the whole campaign (location-app
 # map and detail panel, position-stream clients, dashboards): they keep the
 # adapter's cache warm, and they load the stack. The footprint samplers run
 # from the first condition to the last; each condition's window starts after
-# its warm-up. The summary splits the traces by HTTP status and by where they
-# were served (gateway cache, adapter cache, vendor) from their hop lines.
-RT_GW=""; RT_PLACED=""; RT_LOAD=0
+# its warm-up. The hop logs are followed for each condition (hoplog_start).
+# The summary splits the traces by HTTP status and by where they were served
+# (gateway cache, adapter cache, vendor) from their hop lines.
+RT_GW=""; RT_LOAD=0; RT_OO=0; RT_TOKEN=""; RT_TOKEN_PID=""
 rt_undo() {
-  [ -z "$RT_PLACED" ] || curl -s --max-time 10 -o /dev/null -X DELETE "$RT_GW/assets/$RT_PLACED/placement" \
-    -H "Authorization: Bearer $(camara_token)" || true
-  RT_PLACED=""
   [ "$RT_LOAD" = 0 ] || load_undo "$RT_GW" || log "WARNING: the load assets were not fully removed: run.sh response-time refuses to start until they are"
   RT_LOAD=0
+}
+rt_exit() {
+  rt_undo
+  [ "$RT_OO" = 0 ] || oo_undo
+  # The renewer's sleep first: it would hold the caller's output open.
+  [ -z "$RT_TOKEN_PID" ] || { pkill -P "$RT_TOKEN_PID" sleep; kill "$RT_TOKEN_PID"; } 2>/dev/null || true
+  [ -z "$RT_TOKEN" ] || rm -f "$RT_TOKEN" "$RT_TOKEN.other"
+}
+
+# The bearer token in a file only this user reads, renewed every 20 min (a
+# token lives an hour and wittra-cloud takes about two).
+rt_token_start() {
+  RT_TOKEN="$(umask 077; mktemp "$FOOTPRINT_TMP/kelt-rt-token.XXXXXX")"
+  camara_token >"$RT_TOKEN" || die "no CAMARA token"
+  ( while sleep 1200; do
+      if t="$(camara_token)"; then printf '%s\n' "$t" >"$RT_TOKEN.new" && mv "$RT_TOKEN.new" "$RT_TOKEN"
+      else log "WARNING: the CAMARA token was not renewed"; fi
+    done ) &
+  RT_TOKEN_PID=$!
+}
+
+# rt_plan <condition>: "rate warm-up measured" for an open-loop condition.
+rt_plan() {
+  local rate
+  case "$1" in
+    wittra-cached) rate="${KELT_LAT_CACHED_RATE:-5}" ;;
+    wittra-cloud)  rate="${KELT_LAT_CLOUD_RATE:-0.15}" ;;
+    synthetic-*)   rate="${1#synthetic-}" ;;
+    *) die "unknown condition $1 (rest | wittra-cached | wittra-cloud | synthetic-<rate> | stream-<clients>)" ;;
+  esac
+  python3 -c "import math, sys; r = float(sys.argv[1])
+print(sys.argv[1], math.ceil(r * float(sys.argv[2])), max(int(sys.argv[3]), math.ceil(r * float(sys.argv[4]))))" \
+    "$rate" "${KELT_LAT_WARMUP_S:-10}" "${KELT_LAT_MIN_COUNT:-1000}" "${KELT_LAT_MIN_S:-60}"
+}
+
+# rt_send <run dir> <condition> <bodies file>: one open-loop condition, its hop
+# logs, aggregation and summary; appends its footprint window to RT_FPWIN.
+rt_send() {
+  local run_dir="$1" cond="$2" bodies="$3" rate warm n tag
+  read -r rate warm n < <(rt_plan "$cond")
+  tag="$(basename "$run_dir")-$cond"
+  log "response-time $cond: $warm warm-up + $n requests at ${rate}/s, open loop"
+  hoplog_start "$tag" "$(python3 -c "print(int(($warm + $n) / $rate) + 300)")"
+  python3 "$EXP_ROOT/exposure/response_time_load.py" --gateway "$RT_GW" --path "$(retrieve_path)" \
+    --bodies "$bodies" --rate "$rate" --count "$((warm + n))" --warmup "$warm" --token-file "$RT_TOKEN" \
+    --run-dir "$run_dir/$cond" --condition "$cond"
+  hoplog_stop "$tag" "$run_dir/$cond" "$cond"
+  python3 "$EXP_ROOT/exposure/hop_aggregate.py" "$run_dir/$cond" --warmup "$warm" \
+    --json "$run_dir/$cond/stages.json" >"$run_dir/$cond/aggregate.txt"
+  python3 "$EXP_ROOT/exposure/response_time_summary.py" "$run_dir/$cond" vendor >/dev/null
+  case "$cond" in synthetic-*) python3 "$EXP_ROOT/exposure/clock_offset.py" "$run_dir/$cond" >/dev/null ;; esac
+  RT_FPWIN+=($(window_args "$run_dir/$cond" "$cond" "$(python3 -c "print($warm / $rate)")"))
 }
 
 # The WiFi adapter's devices with the time of their last scan, as JSON, read
@@ -165,41 +226,59 @@ t = lambda k: datetime.datetime.strptime(w[k], "%Y-%m-%dT%H:%M:%SZ").replace(tzi
 print("--window", sys.argv[2], t("start_utc") + float(sys.argv[3]), t("end_utc"))' "$1" "$2" "$3")
 }
 
+RT_FPWIN=()
 run_response_time() {
-  local token gw run_dir cond asset body src left fp budget cn cr cw status
-  local conds="${KELT_LAT_CONDITIONS:-rest hit fresh local local50}"
-  local n="${KELT_LAT_COUNT:-1000}" rate="${KELT_LAT_RATE:-5}" warm="${KELT_LAT_WARMUP:-50}"
-  local fresh_n="${KELT_LAT_FRESH_COUNT:-300}" fresh_rate="${KELT_LAT_FRESH_RATE:-0.15}"
-  local rest_s="${KELT_RESOURCE_S:-300}" load_n="${KELT_LAT_LOAD_ASSETS:-50}"
-  local load_rate="${KELT_LAT_LOAD_RATE:-${KELT_LAT_LOAD_ASSETS:-50}}" load_s="${KELT_LAT_LOAD_S:-60}" load_warm_s="${KELT_LAT_LOAD_WARMUP_S:-10}"
-  local fpwin=()
+  local gw run_dir cond asset left fp budget status rate warm n s e interval load=0
+  local conds="${KELT_LAT_CONDITIONS:-rest wittra-cached wittra-cloud synthetic-5 synthetic-10 synthetic-25 synthetic-50 synthetic-100 synthetic-200 stream-1 stream-5 examples}"
+  local rest_s="${KELT_RESOURCE_S:-300}" load_n="${KELT_LAT_LOAD_ASSETS:-50}" stream_s="${KELT_STREAM_S:-300}"
   # shellcheck source=exposure/load_fixture.sh
   source "$EXP_ROOT/exposure/load_fixture.sh"
+  # shellcheck source=exposure/other_org.sh
+  source "$EXP_ROOT/exposure/other_org.sh"
   gw="$(gateway_url)"
   curl -s --max-time 10 -o /dev/null -w '%{http_code}' "$gw/health" | grep -q '^200$' || die "gateway $gw/health is not 200"
-  if [[ " $conds " == *" local50 "* ]]; then
+  # The samplers stop on their own after the longest the campaign can take.
+  budget=$((rest_s + 1800))
+  for cond in $conds; do
+    case "$cond" in
+      rest|examples) ;;
+      stream-*) load=1; budget=$((budget + ${KELT_LAT_WARMUP_S:-10} + stream_s + 120)) ;;
+      *) [ "${cond#synthetic-}" = "$cond" ] || load=1
+         read -r rate warm n < <(rt_plan "$cond")
+         budget="$(python3 -c "print(int($budget + ($warm + $n) / $rate + 120))")" ;;
+    esac
+  done
+  if [ "$load" = 1 ]; then
     left="$(load_leftovers "$gw")"
     [ -z "$left" ] || die "leftover from an earlier run, remove it first: $(echo $left)"
   fi
+  if [[ " $conds " == *" examples "* ]]; then
+    left="$(oo_leftover)"
+    [ -z "$left" ] || die "leftover from an earlier run, remove it first: $left"
+  fi
   run_dir="$(begin_run response-time "$conds")"
-  RT_GW="$gw"; trap rt_undo EXIT
-  # The samplers stop on their own after the longest the campaign can take.
-  budget="$(python3 -c "print(int($rest_s + 2 * $n / $rate + $fresh_n / $fresh_rate + $load_s + $load_warm_s + 1800))")"
+  RT_GW="$gw"; trap rt_exit EXIT
+  rt_token_start
   fp="rt-$(basename "$run_dir")"
   footprint_start "$fp" "$budget" "$run_dir/raw/footprint/1"
   for cond in $conds; do
-    # Tokens live an hour and the campaign is longer: one per condition.
-    token="$(camara_token)"
     mkdir -p "$run_dir/$cond"
-    cn="$n"; cr="$rate"; cw="$warm"
+    case "$cond" in
+      synthetic-*|stream-*)
+        if [ "$RT_LOAD" = 0 ]; then
+          log "response-time: adding $load_n synthetic assets"
+          RT_LOAD=1; load_setup "$load_n" "$(cat "$RT_TOKEN")" "$gw"
+        fi ;;
+    esac
     case "$cond" in
       rest)
         log "response-time rest: nothing sent for $rest_s s"
+        hoplog_start "$(basename "$run_dir")-rest" "$((rest_s + 300))"
         wifi_seen >"$run_dir/rest/wifi-devices-start.json"
         window open "$run_dir/rest" rest; sleep "$rest_s"; window close "$run_dir/rest" rest
         wifi_seen >"$run_dir/rest/wifi-devices-end.json"
         # The adapter's hop lines: one per scan ingest (northbound 0.19.4).
-        hoplog_snapshot "$run_dir/rest" rest
+        hoplog_stop "$(basename "$run_dir")-rest" "$run_dir/rest" rest
         # A WiFi scanner's own log over the window (KELT_SCANNER_SSH, read only,
         # messages only): the check compares its scans with the adapter's lines.
         if [ -n "${KELT_SCANNER_SSH:-}" ]; then
@@ -208,60 +287,55 @@ run_response_time() {
             "journalctl -u ${KELT_SCANNER_UNIT:-scanner} --since @${s%.*} --until @${e%.*} -o cat --no-pager" \
             >"$run_dir/rest/scanner-journal.txt" 2>/dev/null || log "WARNING: the scanner's journal could not be read"
         fi
-        fpwin+=($(window_args "$run_dir/rest" rest 0))
-        continue ;;
-      hit|fresh) src=wittra ;;
-      local|local50) src=synthetic ;;
-      *) die "unknown condition $cond (rest|hit|fresh|local|local50)" ;;
+        RT_FPWIN+=($(window_args "$run_dir/rest" rest 0))
+        ;;
+      wittra-*)
+        asset="$(assets "$(cat "$RT_TOKEN")" "$gw" | awk -v s=wittra '$2==s && $1 !~ /^'"$LOAD_PREFIX"'/{print $1; exit}')"
+        [ -n "$asset" ] || die "no asset with source wittra for condition $cond"
+        echo "{\"device\":{\"assetId\":\"$asset\"}}" >"$run_dir/$cond/bodies.jsonl"
+        read -r status _ < <(retrieve_probe "$(cat "$RT_TOKEN")" "$gw" "$asset")
+        [ "$status" = 200 ] || die "$cond: $asset answers $status, not 200"
+        # The probe itself fills the gateway's 5 s cache: let it expire before a
+        # condition whose first request must not be served from it.
+        [ "$cond" != wittra-cloud ] || sleep 6
+        rt_send "$run_dir" "$cond" "$run_dir/$cond/bodies.jsonl"
+        ;;
+      synthetic-*)
+        python3 "$EXP_ROOT/exposure/load_assets.py" bodies "$LOAD_PREFIX" "$load_n" >"$run_dir/$cond/bodies.jsonl"
+        rt_send "$run_dir" "$cond" "$run_dir/$cond/bodies.jsonl"
+        ;;
+      stream-*)
+        n="${cond#stream-}"
+        log "response-time $cond: $n client(s) on the position stream, ${KELT_LAT_WARMUP_S:-10} s warm-up + $stream_s s"
+        python3 "$EXP_ROOT/exposure/stream_client.py" --gateway "$gw" --token-file "$RT_TOKEN" --clients "$n" \
+          --warmup "${KELT_LAT_WARMUP_S:-10}" --duration "$stream_s" --run-dir "$run_dir/$cond" --condition "$cond"
+        interval="$(kubectl get cm -n "$LOAD_POS_NS" "${KELT_ENGINE_CONFIG:-positioning-engine-config}" \
+          -o jsonpath='{.data.WEBSOCKET_INTERVAL_MS}' | tr -d '\r')"
+        python3 - "$run_dir/$cond/stream.json" "$interval" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["engine_interval_ms"] = int(sys.argv[2]) if sys.argv[2].isdigit() else None
+json.dump(d, open(p, "w"), indent=2)
+PY
+        RT_FPWIN+=($(window_args "$run_dir/$cond" "$cond" 0))
+        ;;
+      examples)
+        asset="$(assets "$(cat "$RT_TOKEN")" "$gw" | awk -v s=wittra '$2==s && $1 !~ /^'"$LOAD_PREFIX"'/{print $1; exit}')"
+        [ -n "$asset" ] || die "no asset with source wittra for the examples"
+        log "response-time examples: a temporary client of organisation $OO_ORG, then the exchanges"
+        RT_OO=1; oo_setup "$RT_TOKEN.other"
+        python3 "$EXP_ROOT/exposure/examples.py" --gateway "$gw" --token-file "$RT_TOKEN" \
+          --other-token-file "$RT_TOKEN.other" --asset "$asset" --out "$run_dir/examples" \
+          || log "WARNING: the examples were not all recorded"
+        rm -f "$RT_TOKEN.other"; oo_undo; RT_OO=0
+        ;;
+      *) die "unknown condition $cond (rest | wittra-cached | wittra-cloud | synthetic-<rate> | stream-<clients> | examples)" ;;
     esac
-    if [ "$cond" = local50 ]; then
-      log "response-time local50: adding $load_n synthetic assets"
-      RT_LOAD=1; load_setup "$load_n" "$token" "$gw"
-      python3 "$EXP_ROOT/exposure/load_assets.py" bodies "$LOAD_PREFIX" "$load_n" >"$run_dir/$cond/bodies.jsonl"
-      cw="$(python3 -c "print(int($load_rate * $load_warm_s))")"
-      cn="$(python3 -c "print(int($load_rate * ($load_warm_s + $load_s)))")"; cr="$load_rate"
-      log "response-time local50: $cn requests at ${cr}/s over $load_n assets, open loop"
-      KELT_CAMARA_TOKEN="$token" python3 "$EXP_ROOT/exposure/response_time_load.py" --gateway "$gw" \
-        --path "$(retrieve_path)" --bodies "$run_dir/$cond/bodies.jsonl" --rate "$cr" --count "$cn" \
-        --run-dir "$run_dir/$cond" --condition "$cond"
-      hoplog_snapshot "$run_dir/$cond" "$cond"
-      rt_undo
-    else
-      asset="$(assets "$token" "$gw" | awk -v s="$src" '$2==s && $1 !~ /^'"$LOAD_PREFIX"'/{print $1; exit}')"
-      [ -n "$asset" ] || die "no asset with source $src for condition $cond"
-      case "$cond" in
-        hit)   body="{\"device\":{\"assetId\":\"$asset\"}}" ;;
-        fresh) body="{\"device\":{\"assetId\":\"$asset\"}}"; cn="$fresh_n"; cr="$fresh_rate" ;;
-        local) body="{\"device\":{\"assetId\":\"$asset\"},\"maxAge\":0}"
-               # Placed only when it has no position, removed only if placed here
-               # (also on exit), so a demo placement is left as found.
-               read -r status _ < <(retrieve_probe "$token" "$gw" "$asset" "$body")
-               if [ "$status" = 422 ] && [ "$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' -X PUT \
-                    "$gw/assets/$asset/placement" -H "Authorization: Bearer $token" \
-                    -H 'Content-Type: application/json' -d '{"x":2.0,"y":2.0}')" = 200 ]; then
-                 RT_PLACED="$asset"
-                 sleep 3
-               fi ;;
-      esac
-      read -r status _ < <(retrieve_probe "$token" "$gw" "$asset" "$body")
-      [ "$status" = 200 ] || die "$cond: $asset answers $status, not 200"
-      # The probe itself fills the gateway's 5 s cache: let it expire before a
-      # condition whose first request must not be served from it.
-      [ "$cond" != fresh ] || sleep 6
-      echo "$body" >"$run_dir/$cond/body.json"
-      log "response-time $cond: $cn requests at ${cr}/s on $asset"
-      KELT_RUN_DIR="$run_dir/$cond" KELT_CAMARA_TOKEN="$token" KELT_GATEWAY_URL="$gw" \
-        KELT_RETRIEVE_BODY="$run_dir/$cond/body.json" \
-        "$EXP_ROOT/exposure/response_time_driver.sh" "$cond" "$cn" "$cr"
-      [ "$cond" != local ] || rt_undo
-    fi
-    python3 "$EXP_ROOT/exposure/hop_aggregate.py" "$run_dir/$cond" --warmup "$cw" \
-      --json "$run_dir/$cond/stages.json" >"$run_dir/$cond/aggregate.txt"
-    python3 "$EXP_ROOT/exposure/response_time_summary.py" "$run_dir/$cond" vendor >/dev/null
-    fpwin+=($(window_args "$run_dir/$cond" "$cond" "$(python3 -c "print($cw / $cr)")"))
   done
+  rt_undo
   footprint_stop "$fp" "$run_dir/raw/footprint/1"
-  footprint_summarise "$run_dir" "${fpwin[@]}"
+  footprint_summarise "$run_dir" "${RT_FPWIN[@]}"
   check_run "$run_dir"
   log "response-time -> $run_dir"
 }

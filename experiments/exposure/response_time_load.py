@@ -3,22 +3,23 @@
 each on its own schedule, without waiting for the ones before.
 
   response_time_load.py --gateway URL --path P --bodies FILE --rate R --count N --run-dir D --condition C
+                        [--warmup W] [--token-file F]
 
 Request i starts at t0 + i/R on a worker thread, whatever the earlier requests
 are doing, so a slow answer does not lower the rate the stack receives (a
 driver that waits would, and would hide the queue it causes). The bodies (one
 JSON per line) are sent in turn: with one body per asset and R equal to the
 number of assets, each asset is asked once a second. Each request opens its own
-connection, as curl does in response_time_driver.sh. The token is read from
-KELT_CAMARA_TOKEN and never written.
+connection. The token is read from --token-file, again whenever the file
+changes (run.sh renews it during a run longer than its lifetime), or else
+from KELT_CAMARA_TOKEN; it is never written.
 
-Writes <run-dir>/requests_<condition>.csv with the columns of
-response_time_driver.sh (i, http_status, x_correlator, time_total_s,
-time_starttransfer_s) and three more: start_epoch (when the request was sent),
-late_s (how long after its scheduled time) and error (a request with no HTTP
-answer has status 0), and <run-dir>/load.json with the nominal rate, the
-count and the number of bodies. Opens and closes the condition's window
-(lib/runmeta).
+Writes <run-dir>/requests_<condition>.csv (i, http_status, x_correlator,
+time_total_s, time_starttransfer_s, start_epoch: when the request was sent,
+late_s: how long after its scheduled time, error: a request with no HTTP answer
+has status 0), and <run-dir>/load.json with the nominal rate, the count, the
+first W requests that are warm-up, and the number of bodies. Opens and closes
+the condition's window (lib/runmeta).
 Owner: experiments/exposure/README.md.
 """
 from __future__ import annotations
@@ -44,6 +45,28 @@ FIELDS = ["i", "http_status", "x_correlator", "time_total_s", "time_starttransfe
 def schedule(count: int, rate: float) -> list[float]:
     """Offsets from t0 of each request, in seconds."""
     return [i / rate for i in range(count)]
+
+
+class Token:
+    """The bearer token, from a file read again when its modification time
+    changes, or a fixed value."""
+
+    def __init__(self, path: str | None, fixed: str):
+        self.path, self.value, self.mtime = path, fixed, None
+        self.lock = threading.Lock()
+
+    def get(self) -> str:
+        if not self.path:
+            return self.value
+        with self.lock:
+            try:
+                m = os.stat(self.path).st_mtime_ns
+                if m != self.mtime:
+                    with open(self.path) as fh:
+                        self.value, self.mtime = fh.read().strip(), m
+            except OSError:
+                pass
+            return self.value
 
 
 def send(url: urllib.parse.SplitResult, path: str, body: bytes, token: str, timeout: float) -> dict:
@@ -77,10 +100,12 @@ def main() -> int:
     ap.add_argument("--condition", required=True)
     ap.add_argument("--workers", type=int, default=256)
     ap.add_argument("--timeout", type=float, default=30.0)
+    ap.add_argument("--warmup", type=int, default=0)
+    ap.add_argument("--token-file")
     a = ap.parse_args()
-    token = os.environ.get("KELT_CAMARA_TOKEN", "")
-    if not token:
-        print("KELT_CAMARA_TOKEN is not set", file=sys.stderr)
+    token = Token(a.token_file, os.environ.get("KELT_CAMARA_TOKEN", ""))
+    if not token.get():
+        print("no token: --token-file is empty or KELT_CAMARA_TOKEN is not set", file=sys.stderr)
         return 2
     with open(a.bodies) as fh:
         bodies = [ln.strip().encode() for ln in fh if ln.strip()]
@@ -90,7 +115,7 @@ def main() -> int:
 
     def job(i: int, due: float) -> None:
         late = max(0.0, time.perf_counter() - due)
-        r = send(url, a.path, bodies[i % len(bodies)], token, a.timeout)
+        r = send(url, a.path, bodies[i % len(bodies)], token.get(), a.timeout)
         with lock:
             rows[i] = {"i": i + 1, **r, "late_s": f"{late:.6f}"}
 
@@ -108,8 +133,8 @@ def main() -> int:
         w.writeheader()
         w.writerows(rows)
     with open(os.path.join(a.run_dir, "load.json"), "w") as fh:
-        json.dump({"rate_per_s": a.rate, "count": a.count, "bodies": len(bodies), "workers": a.workers,
-                   "open_loop": True}, fh, indent=2)
+        json.dump({"rate_per_s": a.rate, "count": a.count, "warmup": a.warmup, "bodies": len(bodies),
+                   "workers": a.workers, "open_loop": True}, fh, indent=2)
     failed = sum(1 for r in rows if not r.get("http_status"))
     print(f"{a.count} requests at {a.rate:g}/s, {failed} without an HTTP answer", file=sys.stderr)
     return 0

@@ -159,8 +159,8 @@ iperf3 and ping. Nothing is installed on it.
 
 The CPU and memory the testbed takes: at rest (`resource-use`, 300 s with
 nothing running, `KELT_RESOURCE_S`), during every network condition (`dl1` to
-`ul4`, `idle`, `load`) and every response-time condition (`rest` to
-`local50`), recorded by the campaign that produces it. A
+`ul4`, `idle`, `load`) and every response-time condition (`rest`, the Wittra,
+synthetic and stream conditions), recorded by the campaign that produces it. A
 condition's windows are its runs' measured time: for throughput each run after
 its first 10 s, for rtt each ping from its first to its last reply (the load
 starts before the ping and ends after it).
@@ -301,7 +301,12 @@ the tables name it.
 `tables.py exposure-resource-use` gives, from the response-time runs, the CPU
 and memory of the exposure stack per Deployment (pods summed, so a restarted
 pod keeps its row) and in total, with the conditions as columns, mean and 1 s
-peak.
+peak. `tables.py response-time-split` gives, for each synthetic condition, the
+requests answered 200 below and above 9 ms end to end, and
+`tables.py response-time-hist` their 1 ms histogram, and
+`tables.py response-time-stream` the stream conditions: per client the
+messages and positions per second, per source the age of the positions on
+arrival.
 
 `tables.py retransmissions` gives, from the throughput runs, the TCP segments
 seen on `br-ran` in the data direction and the retransmitted ones, per
@@ -371,7 +376,7 @@ up, medians do not); and the distribution of the RTT at rest and under load, eac
 - The caches on a location request, and what `maxAge=0` skips, are in
   [positioning adapters](../docs/architecture/positioning-adapters.md#what-kelt-declares-per-source).
   A request reaches the vendor only with the adapter's cache cold: the
-  `fresh` condition needs the other consumers of the asset closed (the
+  `wittra-cloud` condition needs the other consumers of the asset closed (the
   location-app's map and detail panel, any position-stream client, any
   dashboard polling it) and requests more than 5 s apart. The response-time
   summary classifies each request from its hop lines (`cache: hit|miss` on the

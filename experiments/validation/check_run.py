@@ -18,10 +18,14 @@ A failed check flags the run, it does not remove it. Checks by campaign:
   the attempt; not applicable when the UE is behind a router (mode nat).
 - response-time: every request with an HTTP answer has its trace (hop lines
   joined by x-correlator); every request answered; no trace with a missing hop
-  (served by "unknown"), and no hop line rejected by the schema; for maxAge=0 on the synthetic source (local,
-  local50) every request answered 200, by the adapter. Open-loop conditions (load.json):
-  sent at no less than 98% of the nominal rate, 99% of the requests sent
-  within one period of their schedule. The rest condition: whether the WiFi
+  (served by "unknown"), and no hop line rejected by the schema; for maxAge=0
+  on the synthetic source (synthetic-<rate>; local and local50 before) every
+  request answered 200, by the adapter. Open-loop conditions (load.json): sent
+  at no less than 98% of the nominal rate, 99% of the requests sent within one
+  period of their schedule. Stream conditions: every client connected for the
+  whole window, at no less than 98% of the engine's broadcast rate, never more
+  than 2 s without a message; the offset between the gateway's clock and the
+  host's bounded from the synthetic conditions. The rest condition: whether the WiFi
   adapter received scans inside its window (reported, not judged).
 - every campaign with a footprint: one sample per second from each machine and
   each pod inside the measured windows it exists in (no gap over 2 s); every
@@ -47,8 +51,8 @@ sys.path.insert(0, os.path.join(HERE, "..", "resource-use"))
 import footprint  # noqa: E402
 from network import throughput  # noqa: E402
 from network.pcap import addr, captures, gtpu_inner, read_pcap  # noqa: E402
-from lib.stats import percentile  # noqa: E402
 from lib.runmeta import windows as run_windows  # noqa: E402
+from lib.openloop import MIN_RATE_SHARE, load_problems, load_stats, requests  # noqa: E402
 
 MAX_GAP_S = 2.0
 
@@ -178,20 +182,14 @@ def check_qos(run_dir: str) -> tuple[bool, str]:
                   f"Session-AMBR {q['session_ambr_dl_mbit']}/{q['session_ambr_ul_mbit']} Mbit/s (record)")
 
 
-MIN_RATE_SHARE = 0.98
-SYNTHETIC_CONDITIONS = ("local", "local50")
+def is_synthetic(cond: str) -> bool:
+    """maxAge=0 on the synthetic source: `synthetic-<rate>` (from 2026-10-20),
+    `local` and `local50` in the runs before."""
+    return cond.startswith("synthetic-") or cond in ("local", "local50")
 
 
 def _rt_conditions(run_dir: str) -> list[str]:
     return sorted(c for c in os.listdir(run_dir) if os.path.exists(os.path.join(run_dir, c, "summary.json")))
-
-
-def _requests(cond_dir: str) -> list[dict]:
-    path = next((os.path.join(cond_dir, f) for f in sorted(os.listdir(cond_dir)) if f.startswith("requests_")), None)
-    if not path:
-        return []
-    with open(path) as fh:
-        return list(csv.DictReader(fh))
 
 
 def check_traces(run_dir: str) -> tuple[bool, str]:
@@ -202,7 +200,7 @@ def check_traces(run_dir: str) -> tuple[bool, str]:
             st = json.load(fh)
         with open(os.path.join(d, "summary.json")) as fh:
             sm = json.load(fh)
-        reqs = _requests(d)
+        reqs = requests(d)
         unanswered = sum(1 for r in reqs if str(r.get("http_status", "0")) in ("0", "000", ""))
         missing = st.get("without_trace")
         served = {k: v for b in sm["by_status"].values() for k, v in b.get("served_by", {}).items()}
@@ -216,7 +214,7 @@ def check_traces(run_dir: str) -> tuple[bool, str]:
             problems.append(f"{cond}: {unanswered} request(s) without an HTTP answer")
         if served.get("unknown"):
             problems.append(f"{cond}: {served['unknown']} trace(s) with a missing hop")
-        if cond in SYNTHETIC_CONDITIONS:
+        if is_synthetic(cond):
             not200 = sum(1 for r in reqs if str(r.get("http_status", "")) not in ("200", "0", "000", ""))
             if not200:
                 problems.append(f"{cond}: {not200} request(s) answered other than 200")
@@ -234,26 +232,57 @@ def check_traces(run_dir: str) -> tuple[bool, str]:
 def check_load(run_dir: str) -> tuple[bool, str]:
     problems, parts = [], []
     for cond in _rt_conditions(run_dir):
-        d = os.path.join(run_dir, cond)
-        if not os.path.exists(os.path.join(d, "load.json")):
+        ls = load_stats(os.path.join(run_dir, cond))
+        if ls is None:
             continue
-        with open(os.path.join(d, "load.json")) as fh:
-            nominal = float(json.load(fh)["rate_per_s"])
-        starts = sorted(float(r["start_epoch"]) for r in _requests(d) if r.get("start_epoch"))
-        late = sorted(float(r["late_s"]) for r in _requests(d) if r.get("late_s"))
-        if len(starts) < 2:
-            problems.append(f"{cond}: fewer than two requests sent")
-            continue
-        sent = (len(starts) - 1) / (starts[-1] - starts[0])
-        p99 = percentile(late, 0.99)
-        if sent < MIN_RATE_SHARE * nominal:
-            problems.append(f"{cond}: sent {sent:.1f}/s of {nominal:g}/s")
-        if p99 > 1 / nominal:
-            problems.append(f"{cond}: 99% of requests within {p99 * 1000:.0f} ms of schedule, over one period")
-        parts.append(f"{cond} {sent:.2f}/s of {nominal:g}/s, p99 lateness {p99 * 1000:.1f} ms")
+        p = load_problems(cond, ls)
+        problems += p
+        if ls["sent_per_s"] is not None:
+            parts.append(f"{cond} {ls['sent_per_s']:.2f}/s of {ls['planned_per_s']:g}/s, "
+                         f"p99 lateness {ls['late_p99_ms']:.1f} ms")
     if not parts and not problems:
         return True, "no open-loop condition"
     return not problems, "; ".join(problems) if problems else "; ".join(parts)
+
+
+MAX_STREAM_GAP_MS = 2000.0
+
+
+def check_stream(run_dir: str) -> tuple[bool, str]:
+    conds = sorted(c for c in os.listdir(run_dir) if os.path.exists(os.path.join(run_dir, c, "stream.json")))
+    if not conds:
+        return True, "no stream condition"
+    problems, parts = [], []
+    for cond in conds:
+        d = os.path.join(run_dir, cond)
+        with open(os.path.join(d, "stream.json")) as fh:
+            st = json.load(fh)
+        interval = st.get("engine_interval_ms")
+        if not interval:
+            problems.append(f"{cond}: the engine's broadcast interval was not recorded")
+        for c in st["per_client"]:
+            who = f"{cond} client {c['client']}"
+            if c.get("closed_early"):
+                problems.append(f"{who}: {c['closed_early']}")
+            if interval and c["messages_per_s"] < MIN_RATE_SHARE * 1000 / interval:
+                problems.append(f"{who}: {c['messages_per_s']:.2f} messages/s, one every {interval} ms expected")
+            if c.get("interval_max_ms") is None or c["interval_max_ms"] > MAX_STREAM_GAP_MS:
+                problems.append(f"{who}: longest gap between messages {c.get('interval_max_ms')} ms")
+        with open(os.path.join(d, "messages.csv")) as fh:
+            sizes = [int(r["positions"]) for r in csv.DictReader(fh)]
+        parts.append(f"{cond} {st['clients']} client(s), {min(sizes) if sizes else 0} to "
+                     f"{max(sizes) if sizes else 0} positions per message")
+    clocks = sorted(glob.glob(os.path.join(run_dir, "synthetic-*", "clock.json")))
+    if clocks:
+        bounds = [json.load(open(p)) for p in clocks]
+        lo = max(b["lower_ms"] for b in bounds if b["requests"])
+        hi = min(b["upper_ms"] for b in bounds if b["requests"])
+        parts.append(f"gateway clock minus host clock in [{lo:.1f}, {hi:.1f}] ms")
+        if lo > hi:
+            problems.append(f"the clock bounds do not agree ([{lo:.1f}, {hi:.1f}] ms)")
+    else:
+        problems.append("no clock bound: the ages are not checked against the gateway's clock")
+    return not problems, "; ".join(problems) if problems else "every client connected throughout, " + "; ".join(parts)
 
 
 INGEST_STAGE = "POST /ingest/wifi-scan"
@@ -383,7 +412,7 @@ def main() -> int:
                   ("cell", lambda: check_cell(run_dir)), ("qos", lambda: check_qos(run_dir))]
     elif campaign == "response-time":
         checks = [("traces", lambda: check_traces(run_dir)), ("load", lambda: check_load(run_dir)),
-                  ("wifi", lambda: check_wifi(run_dir))]
+                  ("wifi", lambda: check_wifi(run_dir)), ("stream", lambda: check_stream(run_dir))]
     if glob.glob(os.path.join(run_dir, "raw", "footprint", "*")):
         checks.append(("footprint", lambda: check_footprint(run_dir)))
     if not checks:

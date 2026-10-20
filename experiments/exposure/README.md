@@ -34,56 +34,88 @@ takes seconds).
 
 ## response-time
 
-`run.sh response-time`: for every condition but `local50`,
-`response_time_driver.sh` sends the requests one after the other, paced on a
-schedule (request *i* at t0 + *i*/rate) and keeps the `x-correlator` of each;
+`run.sh response-time` sends every condition but `rest` open loop with
+`response_time_load.py`: request *i* starts at t0 + *i*/rate on its own thread,
+whatever the earlier requests are doing, each on its own connection, and the
+`x-correlator` of each is kept. Each condition has `KELT_LAT_WARMUP_S` (default
+10 s) of warm-up, discarded, then at least `KELT_LAT_MIN_COUNT` (default 1000)
+requests and at least `KELT_LAT_MIN_S` (default 60 s). The requests file has
+the send time and the delay behind the schedule of each request; `load.json`
+keeps the nominal rate and the warm-up count.
+
+The pod logs of the gateway and of every positioning Deployment are followed on
+the master VM for each condition (`hoplog_start` and `hoplog_stop` in
+`../lib/common.sh`), so the lines survive the kubelet's log rotation.
 `hop_aggregate.py` joins the hop lines the services log (schema:
 `hop-log.schema.json`, vendored from 5g-northbound) into one trace per request,
-drops the first `KELT_LAT_WARMUP` traces (default 50) as warm-up, and computes
-each service's own time (its span minus the spans it waited on);
-`response_time_summary.py` gives median, p90 and p99 per component, per HTTP
-status of the request, and counts where each request was answered from its hop
-lines: the gateway's cache (no engine line), the vendor-adapter's cache (its
-line says `cache: hit`, or, before 0.19.2, its span is under 10 ms), the
-vendor, or an adapter with no vendor behind it.
+drops the warm-up, and computes each service's own time (its span minus the
+spans it waited on); `response_time_summary.py` gives median, p90, p99 and
+maximum per component, per HTTP status of the request, and counts where each
+request was answered from its hop lines: the gateway's cache (no engine line),
+the vendor-adapter's cache (its line says `cache: hit`, or, before 0.19.2, its
+span is under 10 ms), the vendor, or an adapter with no vendor behind it. It
+also counts the requests on either side of 9 ms end to end and keeps the 1 ms
+histogram: at low rates the synthetic source's end-to-end time takes two
+values, about 5 to 7 ms and 11 to 14 ms, with few requests between.
 
 | Condition | Request |
 |---|---|
 | `rest` | nothing sent for `KELT_RESOURCE_S` (default 300 s): the footprint at rest. The WiFi adapter writes one hop line per scan ingest (`POST /ingest/wifi-scan`, with its status, northbound 0.19.4); the check counts those inside the window, and the adapter's `/devices` at the end says whether a scanner was located. With `KELT_SCANNER_SSH` set, the scanner's journal over the window is read too (unit `KELT_SCANNER_UNIT`, default `scanner`; messages only), and its scans must match the adapter's lines within one at the edges |
-| `hit` | the Wittra asset, no `maxAge`, at `KELT_LAT_RATE` (default 5/s) |
-| `fresh` | the Wittra asset, no `maxAge`, `KELT_LAT_FRESH_COUNT` (default 300) at `KELT_LAT_FRESH_RATE` (default 0.15/s) |
-| `local` | the synthetic asset, `maxAge=0`: no external call; placed for the run when it has no position, and removed after only if placed there |
-| `local50` | `KELT_LAT_LOAD_ASSETS` (default 50) synthetic assets, each asked once a second with `maxAge=0` (`KELT_LAT_LOAD_RATE`, default one request per asset per second), for `KELT_LAT_LOAD_WARMUP_S` (10 s, discarded) and `KELT_LAT_LOAD_S` (60 s) |
+| `wittra-cached` | the Wittra asset, no `maxAge`, at `KELT_LAT_CACHED_RATE` (default 5/s) |
+| `wittra-cloud` | the Wittra asset, no `maxAge`, at `KELT_LAT_CLOUD_RATE` (default 0.15/s), past both 5 s caches |
+| `synthetic-<rate>` | `KELT_LAT_LOAD_ASSETS` (default 50) synthetic assets, `maxAge=0`, `<rate>` requests per second in total, the assets asked in turn |
+| `stream-<clients>` | the same assets and no request: `<clients>` clients on the gateway's `/positions/stream` for `KELT_LAT_WARMUP_S` of warm-up, then `KELT_STREAM_S` (default 300 s) |
+| `examples` | the recorded examples (`examples.py`) on the Wittra asset: a verification with a circle of 50 m centred on its last position, one with a circle of 2 m centred 1.5 m east of it, a retrieval naming a phone number, and a retrieval with the token of another organisation; for that one `other_org.sh` creates a temporary service-account client in the realm (attribute `org`, default `other`, role `camara-location-read`) through Keycloak's admin API and deletes it right after |
+
+`KELT_LAT_CONDITIONS` selects and orders the conditions (default `rest
+wittra-cached wittra-cloud synthetic-5 synthetic-10 synthetic-25 synthetic-50
+synthetic-100 synthetic-200 stream-1 stream-5 examples`).
+
+`stream_client.py` runs the stream clients on this host, one WebSocket each,
+with the token offered as the subprotocols `bearer.jwt` and `<jwt>`, as the
+gateway expects. The gateway opens one upstream connection to the engine per
+client and forwards each broadcast as a list of positions. The engine asks
+the adapters for its broadcast only while at least one client is connected,
+once per interval for all clients; with no client it sends nothing, so the
+other conditions do not include the broadcast. For each client the
+condition records the messages and positions per second and the interval
+between messages; for each position, its age on arrival: the time of receipt
+on this host's clock minus the position's `timestamp`, the time of its fix.
+`stream.json` also records the engine's broadcast interval
+(`WEBSOCKET_INTERVAL_MS` in the engine's ConfigMap). The fix times are set in
+the cluster: every synthetic condition bounds the offset between the
+gateway's clock and this host's from its requests and the gateway's hop lines
+(`clock_offset.py`, `clock.json`), which bounds the error of each age.
 
 The vendor asset's other consumers (location-app map and detail panel,
 position-stream clients, dashboards) are closed for the whole campaign: they
-keep the adapter's cache warm and they load the stack. `KELT_LAT_CONDITIONS`
-selects and orders the conditions; a token is minted for each, since a token
-lives one hour and the campaign is longer.
+keep the adapter's cache warm and they load the stack. The token sits in a
+file only the user reads, renewed every 20 minutes, since a token lives one
+hour and `wittra-cloud` takes about two.
 
-`local50` is sent open loop by `response_time_load.py`: request *i* starts at
-t0 + *i*/rate on its own thread, whatever the earlier requests are doing, each
-on its own connection. The requests file adds the send time and the delay
-behind the schedule of each request; `load.json` keeps the nominal rate. The
-load assets come from `load_fixture.sh`: one asset per id (`kelt-load-01` to
-`kelt-load-50`, prefix `KELT_LOAD_PREFIX`) is added to the gateway's map with
-the operator token (`camara-gateway` client), each with one `synthetic`
-capability whose `positioningId` is the asset id, and each is placed on a grid
-over the room through `PUT /assets/{id}/placement`. Placing an id the
-synthetic adapter does not declare in `DEVICE_IDS` creates that device
-(northbound 0.19.3). After the condition, and on exit, the placements are
-removed, which ends the devices, and the assets are taken off the map. The
-synthetic adapter keeps placements in memory, so it runs as one replica and is
-not restarted during the run. The campaign refuses to start while a load asset
-is left in the map or a load device in the adapter, or while the adapter has
-more than one replica.
+The load assets come from `load_fixture.sh`: one asset per id
+(`kelt-load-01` to `kelt-load-50`, prefix `KELT_LOAD_PREFIX`) is added to the
+gateway's map with the operator token (`camara-gateway` client), each with one
+`synthetic` capability whose `positioningId` is the asset id, and each is
+placed on a grid over the room through `PUT /assets/{id}/placement`. Placing
+an id the synthetic adapter does not declare in `DEVICE_IDS` creates that
+device (northbound 0.19.3). They are added before the first synthetic or
+stream condition; after the last, and on exit, the placements are removed, which ends
+the devices, and the assets are taken off the map. The synthetic adapter keeps
+placements in memory, so it runs as one replica and is not restarted during
+the run. The campaign refuses to start while a load asset is left in the map
+or a load device in the adapter, or while the adapter has more than one
+replica.
 
 The footprint samplers (`../README.md`, Footprint) run from the first
 condition to the last; each condition's window starts after its warm-up.
 `check_run.py` checks every run: each request answered and traced, every hop
-present, every `maxAge=0` request on the synthetic source answered 200 by the adapter,
-the open-loop rate at no less than 98% of the nominal and 99% of its requests
-within one period of their schedule, and the footprint samples.
+present, every `maxAge=0` request on the synthetic source answered 200 by the
+adapter, each condition sent at no less than 98% of its nominal rate with 99%
+of its requests within one period of their schedule, every stream client
+connected for the whole window at no less than 98% of the broadcast rate and
+never more than 2 s without a message, the clock bound, and the footprint
+samples.
 
 From northbound 0.19.6 the vendor-adapter's hop line on a cache miss also carries `connection` (`new` or `reused`) and `upstream_ms` (from the request sent to the vendor to its response headers: the vendor's time plus the round trip); the summary reports `upstream_ms`, the rest of the adapter's span (its own work and any connection setup) and the count of new and reused connections.
 

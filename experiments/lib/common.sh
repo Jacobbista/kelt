@@ -150,17 +150,41 @@ client_token() {
     | grep . || die "token mint failed for $client (check KELT_KC_URL=$kc / realm $realm)"
 }
 
-# hoplog_snapshot <dir> <condition>: the pod logs of the gateway and of every
-# Deployment in the positioning namespace (engine and adapters) for the last
-# hour, as hoplog_<deployment>_<condition>.txt; hop_aggregate.py joins their hop
-# lines by x-correlator.
-hoplog_snapshot() {
-  local dir="$1" cond="$2" pos_ns="${KELT_POS_NS:-$(plan_value positioning_namespace)}" dep
-  kubectl logs -n "$CAMARA_NS" "deploy/${KELT_CAMARA_SVC:-camara-gateway}" --since=1h \
-    >"$dir/hoplog_gateway_${cond}.txt" 2>/dev/null || true
-  for dep in $(kubectl get deploy -n "$pos_ns" -o name 2>/dev/null | tr -d '\r'); do
-    kubectl logs -n "$pos_ns" "$dep" --since=1h >"$dir/hoplog_${dep##*/}_${cond}.txt" 2>/dev/null || true
+# hoplog_start <tag> <seconds>: follows on master, from now until hoplog_stop
+# (or <seconds> if it never comes), the pod logs of the gateway and of every
+# Deployment in the positioning namespace (engine and adapters). A follow keeps
+# the lines across the kubelet's log rotation (10 MiB), which a later
+# `kubectl logs` reads only from the current file.
+hoplog_start() {
+  local tag="$1" secs="$2" pos_ns="${KELT_POS_NS:-$(plan_value positioning_namespace)}" dep script
+  script="sudo rm -f /tmp/kelt-hop-$tag.pids /tmp/kelt-hop-$tag-*.txt"
+  for dep in "$CAMARA_NS ${KELT_CAMARA_SVC:-camara-gateway} gateway" \
+             $(kubectl get deploy -n "$pos_ns" -o name | tr -d '\r' | sed "s|^deployment.apps/\(.*\)|$pos_ns,\1,\1|"); do
+    set -- ${dep//,/ }
+    # timeout runs as root and writes its own pid: sudo does not relay a signal
+    # from the process group of the command, so a kill must reach timeout itself.
+    script+=$'\n'"setsid nohup sudo bash -c 'echo \$\$ >> /tmp/kelt-hop-$tag.pids; exec timeout $secs k3s kubectl logs -f --since=10s -n $1 deploy/$2' > /tmp/kelt-hop-$tag-$3.txt 2>/dev/null < /dev/null &"
   done
+  vm_sh master "$script"
+  sleep 3
+}
+
+# hoplog_stop <tag> <dir> <condition>: stops the follows and keeps their logs as
+# <dir>/hoplog_<deployment>_<condition>.txt; hop_aggregate.py joins their hop
+# lines by x-correlator.
+hoplog_stop() {
+  local tag="$1" dir="$2" cond="$3" tmp f name
+  sleep 3
+  tmp="$(mktemp -d)"
+  vm_sh master "sudo kill \$(cat /tmp/kelt-hop-$tag.pids 2>/dev/null) 2>/dev/null; sleep 1
+    cd /tmp && tar czf - kelt-hop-$tag-*.txt | base64 -w0 && sudo rm -f kelt-hop-$tag-*.txt kelt-hop-$tag.pids" \
+    | base64 -d | tar xzf - -C "$tmp" || log "WARNING: the hop logs of $cond were not copied"
+  for f in "$tmp"/kelt-hop-"$tag"-*.txt; do
+    [ -e "$f" ] || continue
+    name="${f##*/kelt-hop-"$tag"-}"
+    mv "$f" "$dir/hoplog_${name%.txt}_${cond}.txt"
+  done
+  rmdir "$tmp" 2>/dev/null || true
 }
 
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%SZ)" "$*" >&2; }

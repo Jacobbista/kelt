@@ -7,7 +7,13 @@ adapter span contains it. The adapter also keeps the vendor's answer for
 request reached the vendor only when its adapter span is at least MISS_MS (the
 spans are bimodal: ~0.3 ms from the cache, ~150 ms with the cloud call).
 Stack share = e2e - adapter span, per request, on those requests only; the
-count is always printed next to it. Owner: experiments/README.md.
+count is always printed next to it.
+
+At low rates the end-to-end time of the synthetic source takes two values,
+about 5 to 7 ms and 11 to 14 ms, with few requests between 7 and 11 ms
+(session of 2026-10-15). SPLIT_MS = 9 divides them; the summary counts the
+requests on each side and keeps the 1 ms histogram it was read from. Owner:
+experiments/README.md.
 """
 from __future__ import annotations
 
@@ -18,9 +24,11 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from lib.openloop import load_stats  # noqa: E402
 from lib.stats import summary  # noqa: E402
 
 MISS_MS = 10.0
+SPLIT_MS = 9.0
 
 
 def summarise(rows: list[dict], vendor_col: str | None) -> dict:
@@ -49,7 +57,18 @@ def summarise(rows: list[dict], vendor_col: str | None) -> dict:
         "vendor_connection": conns,
         "per_component": {c: summary([float(r[f"{c}_self_ms"]) for r in rows if r.get(f"{c}_self_ms")])
                           for c in comps},
+        "e2e_split": {"threshold_ms": SPLIT_MS, "below": sum(1 for x in e2e if x < SPLIT_MS),
+                      "above": sum(1 for x in e2e if x >= SPLIT_MS)},
+        "e2e_hist_1ms": histogram(e2e),
     }
+
+
+def histogram(xs: list[float]) -> dict[str, int]:
+    """Counts per 1 ms bin, keyed by the bin's lower edge."""
+    out: dict[int, int] = {}
+    for x in xs:
+        out[int(x)] = out.get(int(x), 0) + 1
+    return {str(k): out[k] for k in sorted(out)}
 
 
 def served_by(row: dict, vendor_col: str | None) -> str:
@@ -94,8 +113,8 @@ def by_status(rows: list[dict], status_of: dict[str, str], vendor_col: str | Non
 
 
 def achieved_rate(requests: int, window: dict | None) -> float | None:
-    """Requests per second over the measured window (the driver sleeps after each
-    request, so this is below the nominal rate)."""
+    """Requests per second over the measured window. An open-loop condition has
+    its rate from the sender's own start times instead (load_stats)."""
     if not window or not window.get("end_utc"):
         return None
     t = lambda k: datetime.datetime.strptime(window[k], "%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
@@ -117,6 +136,7 @@ def main() -> int:
     ws = windows(run_dir)
     s["requests_sent"] = sent
     s["achieved_rate_per_s"] = achieved_rate(sent, ws[0] if ws else None)
+    s["load"] = load_stats(run_dir)
     with open(os.path.join(run_dir, "summary.json"), "w") as fh:
         json.dump(s, fh, indent=2)
     print(json.dumps(s, indent=2))

@@ -40,6 +40,23 @@ class ScheduleTest(unittest.TestCase):
         self.assertEqual(response_time_load.schedule(4, 50), [0.0, 0.02, 0.04, 0.06])
 
 
+class TokenTest(unittest.TestCase):
+    def test_file_read_again_when_it_changes(self):
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "token")
+        with open(path, "w") as fh:
+            fh.write("one\n")
+        t = response_time_load.Token(path, "fixed")
+        self.assertEqual(t.get(), "one")
+        with open(path, "w") as fh:
+            fh.write("two\n")
+        os.utime(path, ns=(1, 2_000_000_000))
+        self.assertEqual(t.get(), "two")
+
+    def test_fixed_without_file(self):
+        self.assertEqual(response_time_load.Token(None, "fixed").get(), "fixed")
+
+
 class OpenLoopTest(unittest.TestCase):
     def test_slow_answers_do_not_lower_the_rate(self):
         # 200 ms answers at 20/s: a driver that waits would send 5/s.
@@ -52,11 +69,11 @@ class OpenLoopTest(unittest.TestCase):
         Slow.seen = []
         p = subprocess.run([sys.executable, DRIVER, "--gateway", f"http://127.0.0.1:{srv.server_port}",
                             "--path", "/retrieve", "--bodies", bodies, "--rate", "20", "--count", "20",
-                            "--run-dir", d, "--condition", "local50"],
+                            "--run-dir", d, "--condition", "synthetic-20", "--warmup", "4"],
                            env={**os.environ, "KELT_CAMARA_TOKEN": "t"}, capture_output=True, text=True)
         srv.shutdown()
         self.assertEqual(p.returncode, 0, p.stderr)
-        with open(os.path.join(d, "requests_local50.csv")) as fh:
+        with open(os.path.join(d, "requests_synthetic-20.csv")) as fh:
             rows = list(csv.DictReader(fh))
         self.assertEqual([r["http_status"] for r in rows], ["200"] * 20)
         starts = sorted(float(r["start_epoch"]) for r in rows)
@@ -65,9 +82,10 @@ class OpenLoopTest(unittest.TestCase):
         self.assertEqual([b["device"]["assetId"] for _, b in Slow.seen[:2]].count("a"), 1)
         self.assertEqual(Slow.seen[0][0], "Bearer t")
         with open(os.path.join(d, "load.json")) as fh:
-            self.assertEqual(json.load(fh)["rate_per_s"], 20.0)
+            load = json.load(fh)
+        self.assertEqual((load["rate_per_s"], load["warmup"]), (20.0, 4))
         with open(os.path.join(d, "window.json")) as fh:
-            self.assertEqual(json.load(fh)["windows"][0]["label"], "local50")
+            self.assertEqual(json.load(fh)["windows"][0]["label"], "synthetic-20")
 
 
 if __name__ == "__main__":

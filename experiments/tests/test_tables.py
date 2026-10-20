@@ -239,8 +239,8 @@ class ResponseTimeRowsTest(unittest.TestCase):
     def test_one_block_per_status(self):
         import json
         import tempfile
-        q = {"n": 2, "median": 1.0, "p90": 2.0, "p99": 3.0}
-        empty = {"n": 0, "median": None, "p90": None, "p99": None}
+        q = {"n": 2, "median": 1.0, "p90": 2.0, "p99": 3.0, "max": 4.0}
+        empty = {"n": 0, "median": None, "p90": None, "p99": None, "max": None}
         per = {"traces": 2, "e2e_ms": q, "stack_ms": empty, "vendor_ms": empty,
                "per_component": {"camara-gateway": q}, "served_by": {"vendor": 1, "adapter cache": 1}}
         with tempfile.TemporaryDirectory() as d:
@@ -250,8 +250,49 @@ class ResponseTimeRowsTest(unittest.TestCase):
             rows = tables.response_time_rows([d])
         self.assertEqual(sorted({r["status"] for r in rows}), ["200", "422"])
         e2e = [r for r in rows if r["status"] == "200" and r["series"] == "end to end"][0]
-        self.assertEqual(e2e["median_ms"], 1.0)
+        self.assertEqual((e2e["median_ms"], e2e["max_ms"]), (1.0, 4.0))
         self.assertEqual(e2e["served_by"], "adapter cache 1, vendor 1")
+        self.assertEqual(e2e["rate_per_s"], 0.15)
+
+    def test_open_loop_rate_and_split(self):
+        import json
+        import tempfile
+        q = {"n": 4, "median": 1.0, "p90": 2.0, "p99": 3.0, "max": 4.0}
+        per = {"traces": 4, "e2e_ms": q, "stack_ms": q, "vendor_ms": q, "per_component": {},
+               "served_by": {"adapter": 4}, "e2e_split": {"threshold_ms": 9.0, "below": 3, "above": 1},
+               "e2e_hist_1ms": {"5": 3, "12": 1}}
+        load = {"planned_per_s": 10.0, "sent_per_s": 9.99, "late_p99_ms": 0.4, "warmup": 100, "sent": 1100}
+        with tempfile.TemporaryDirectory() as d:
+            for c in ("synthetic-10", "wittra-cached"):
+                os.makedirs(os.path.join(d, c))
+                with open(os.path.join(d, c, "summary.json"), "w") as fh:
+                    json.dump({"by_status": {"200": per}, "achieved_rate_per_s": 9.0, "load": load}, fh)
+            rows = tables.response_time_rows([d])
+            split = tables.split_rows([d])
+            hist = tables.hist_rows([d])
+        e2e = [r for r in rows if r["series"] == "end to end"][0]
+        self.assertEqual((e2e["rate_planned_per_s"], e2e["rate_per_s"], e2e["late_p99_ms"]), (10.0, 9.99, 0.4))
+        self.assertEqual([(r["condition"], r["below"], r["above"], r["below_pct"]) for r in split],
+                         [("synthetic-10", 3, 1, 75.0)])
+        self.assertIn({"run": os.path.basename(d), "condition": "synthetic-10", "bin_ms": 12, "count": 1}, hist)
+
+
+class StreamRowsTest(unittest.TestCase):
+    def test_clients_then_ages(self):
+        import json
+        import tempfile
+        q = {"n": 10, "median": 250.0, "p90": 450.0, "p99": 490.0, "max": 499.0}
+        st = {"clients": 1, "engine_interval_ms": 500, "age_ms": {"synthetic": q},
+              "per_client": [{"client": 0, "messages_per_s": 2.0, "positions_per_s": 102.0,
+                              "interval_median_ms": 500.1, "interval_max_ms": 650.0, "closed_early": None}]}
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "stream-1"))
+            with open(os.path.join(d, "stream-1", "stream.json"), "w") as fh:
+                json.dump(st, fh)
+            rows = tables.stream_rows([d])
+        self.assertEqual([r["what"] for r in rows], ["client 0", "age on arrival, synthetic"])
+        self.assertEqual((rows[0]["positions_per_s"], rows[1]["p99_ms"], rows[1]["engine_interval_ms"]),
+                         (102.0, 490.0, 500))
 
 
 class ExposureRowsTest(unittest.TestCase):
@@ -264,19 +305,22 @@ class ExposureRowsTest(unittest.TestCase):
         st = lambda m, p: {"mean": m, "max": p, "n": 60}
         pod = lambda name, group, m: {"node": "worker", "namespace": "positioning", "pod": name, "group": group,
                                       "cpu_mcores": st(m, 2 * m), "mem_mib": st(100.0, 101.0)}
-        doc = {"local50": {"nodes": {}, "groups": {"exposure": {"cpu_mcores": st(300.0, 400.0), "mem_mib": st(500.0, 510.0)}},
-                           "pods": [pod("synthetic-adapter-6c9d8f7b5-abcde", "exposure", 120.0),
-                                    pod("upf-cloud-0-x-y", "core", 9.0)]}}
+        doc = {"rest": {"nodes": {}, "groups": {"exposure": {"cpu_mcores": st(10.0, 20.0), "mem_mib": st(500.0, 510.0)}},
+                        "pods": []},
+               "synthetic-50": {"nodes": {}, "groups": {"exposure": {"cpu_mcores": st(300.0, 400.0), "mem_mib": st(500.0, 510.0)}},
+                                "pods": [pod("synthetic-adapter-6c9d8f7b5-abcde", "exposure", 120.0),
+                                         pod("upf-cloud-0-x-y", "core", 9.0)]}}
         d = mk(root, "response-time", "20261015T100000Z")
         with open(os.path.join(d, "footprint.json"), "w") as fh:
             json.dump(doc, fh)
         rows = tables.exposure_rows([d])
         self.assertEqual([(r["condition"], r["level"], r["name"]) for r in rows],
-                         [("local50", "group", "exposure"), ("local50", "deployment", "synthetic-adapter")])
+                         [("rest", "group", "exposure"), ("synthetic-50", "group", "exposure"),
+                          ("synthetic-50", "deployment", "synthetic-adapter")])
         md = tables.exposure_pivot(rows)
-        self.assertIn("| what | rest | hit | fresh | local | local50 |", md)
-        self.assertIn("| synthetic-adapter | — | — | — | — | 120 / 240 |", md)
-        self.assertIn("| exposure, all pods | — | — | — | — | 300 / 400 |", md)
+        self.assertIn("| what | rest | synthetic-50 |", md)
+        self.assertIn("| synthetic-adapter | — | 120 / 240 |", md)
+        self.assertIn("| exposure, all pods | 10 / 20 | 300 / 400 |", md)
 
     def test_a_discarded_condition_is_left_out(self):
         root = tempfile.mkdtemp()

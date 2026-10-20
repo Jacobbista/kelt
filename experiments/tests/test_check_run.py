@@ -221,3 +221,38 @@ class ScannerOutcomesTest(unittest.TestCase):
 
     def test_no_journal(self):
         self.assertIsNone(check_run.scanner_outcomes("/nonexistent/scanner-journal.txt"))
+
+
+class StreamCheckTest(unittest.TestCase):
+    def run_dir(self, clients: list[dict], interval=500, clock=(-1.0, 3.0)) -> str:
+        import json
+        import tempfile
+        root = tempfile.mkdtemp()
+        d = os.path.join(root, "stream-2")
+        os.makedirs(d)
+        with open(os.path.join(d, "stream.json"), "w") as fh:
+            json.dump({"clients": len(clients), "engine_interval_ms": interval, "per_client": clients}, fh)
+        with open(os.path.join(d, "messages.csv"), "w") as fh:
+            fh.write("client,recv_epoch,bytes,positions\n0,1.0,10,51\n1,1.5,10,51\n")
+        if clock:
+            os.makedirs(os.path.join(root, "synthetic-200"))
+            with open(os.path.join(root, "synthetic-200", "clock.json"), "w") as fh:
+                json.dump({"requests": 10, "lower_ms": clock[0], "upper_ms": clock[1]}, fh)
+        return root
+
+    @staticmethod
+    def client(n, rate=2.0, gap=600.0, closed=None):
+        return {"client": n, "messages_per_s": rate, "interval_max_ms": gap, "closed_early": closed}
+
+    def test_ok(self):
+        ok, msg = check_run.check_stream(self.run_dir([self.client(0), self.client(1)]))
+        self.assertTrue(ok, msg)
+        self.assertIn("51 to 51 positions per message", msg)
+        self.assertIn("[-1.0, 3.0] ms", msg)
+
+    def test_slow_gap_closed_and_no_clock(self):
+        ok, msg = check_run.check_stream(self.run_dir(
+            [self.client(0, rate=1.5), self.client(1, gap=2500.0, closed="closed by the gateway: 4401")], clock=None))
+        self.assertFalse(ok)
+        for part in ("client 0: 1.50 messages/s", "client 1: longest gap", "4401", "no clock bound"):
+            self.assertIn(part, msg)
