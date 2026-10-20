@@ -277,6 +277,21 @@ class ResponseTimeRowsTest(unittest.TestCase):
         self.assertIn({"run": os.path.basename(d), "condition": "synthetic-10", "bin_ms": 12, "count": 1}, hist)
 
 
+class DiscardedConditionsTest(unittest.TestCase):
+    def test_left_out_of_the_stream_rows(self):
+        import json
+        import tempfile
+        st = {"clients": 1, "engine_interval_ms": 500, "age_ms": {}, "per_client": []}
+        with tempfile.TemporaryDirectory() as d:
+            for c in ("stream-1", "stream-5"):
+                os.makedirs(os.path.join(d, c))
+                with open(os.path.join(d, c, "stream.json"), "w") as fh:
+                    json.dump(st, fh)
+            with open(os.path.join(d, "window.json"), "w") as fh:
+                json.dump({"windows": [], "discarded": [{"what": "stream-1", "reason": "refused"}]}, fh)
+            self.assertEqual(tables._conditions(d, "stream.json"), ["stream-5"])
+
+
 class StreamRowsTest(unittest.TestCase):
     def test_clients_then_ages(self):
         import json

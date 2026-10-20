@@ -141,13 +141,18 @@ def verification_rows(runs: list[str]) -> list[dict]:
     return rows
 
 
+def _conditions(d: str, name: str) -> list[str]:
+    """The conditions of run <d> with a <name> file, those listed as discarded
+    in its window.json left out (the table header names them)."""
+    gone = {x["what"] for x in discarded(d)}
+    return [c for c in sorted(os.listdir(d)) if c not in gone and os.path.exists(os.path.join(d, c, name))]
+
+
 def response_time_rows(runs: list[str]) -> list[dict]:
     rows = []
     for d in runs:
-        for cond in sorted(os.listdir(d)):
+        for cond in _conditions(d, "summary.json"):
             p = os.path.join(d, cond, "summary.json")
-            if not os.path.exists(p):
-                continue
             s = _load(p)
             # One block per HTTP status: a 422 under maxAge=0 crosses the stack too
             # and is reported apart from the 200s (northbound 0.19).
@@ -175,10 +180,8 @@ def response_time_rows(runs: list[str]) -> list[dict]:
 
 def _summaries(runs: list[str]):
     for d in runs:
-        for cond in sorted(os.listdir(d)):
-            p = os.path.join(d, cond, "summary.json")
-            if os.path.exists(p):
-                yield d, cond, _load(p)
+        for cond in _conditions(d, "summary.json"):
+            yield d, cond, _load(os.path.join(d, cond, "summary.json"))
 
 
 def split_rows(runs: list[str]) -> list[dict]:
@@ -214,11 +217,8 @@ def stream_rows(runs: list[str]) -> list[dict]:
     positions on arrival over all clients."""
     rows = []
     for d in runs:
-        for cond in sorted(os.listdir(d)):
-            p = os.path.join(d, cond, "stream.json")
-            if not os.path.exists(p):
-                continue
-            st = _load(p)
+        for cond in _conditions(d, "stream.json"):
+            st = _load(os.path.join(d, cond, "stream.json"))
             base = {"run": os.path.basename(d), "condition": cond, "clients": st["clients"],
                     "engine_interval_ms": st.get("engine_interval_ms")}
             empty = dict.fromkeys(("messages_per_s", "positions_per_s", "interval_median_ms", "interval_max_ms",
