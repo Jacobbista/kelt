@@ -45,7 +45,7 @@ ansible-playbook phases/10-northbound/playbook.yml \
 | Surface | Route | Auth |
 |---------|-------|------|
 | CAMARA | `POST /location-retrieval/v0.5/retrieve`, `POST /location-verification/v3/verify` | Bearer (`camara-location-read`) |
-| CAMARA | `WS /positions/stream?token=<jwt>` (live feed; token in query) | Bearer (`camara-location-read`) |
+| CAMARA | `WS /positions/stream` (live feed; the client offers the subprotocols `bearer.jwt` and `<jwt>`) | Bearer (`camara-location-read`) |
 | CAMARA | `/health`, `/docs` | none |
 | Engine | `GET /position/{device_id}`, `GET /health` | none (in-cluster, called by the gateway) |
 | Engine | `/ws/positions` | none (in-cluster, bridged by the gateway's `/positions/stream`) |
