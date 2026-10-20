@@ -123,3 +123,22 @@ The vendor share is the adapter's span on the requests that reached the vendor;
 the stack share is the request's total minus that span, on the same requests.
 See `../README.md` for the caches, which decide how many requests reach the
 vendor.
+
+## Host power test
+
+`host_power.sh`, run once with `sudo`, repeats `synthetic-5` (one
+`run.sh response-time` each, started as the calling user) under four host
+settings, in this order: `idle-base` (as deployed), `idle-off` (a root process
+holds `/dev/cpu_dma_latency` at 0 through Linux PM QoS, which leaves only POLL,
+so C1 is blocked as well as C2 and C3), `freq-max` (`scaling_min_freq` set to
+the maximum clock on every cpufreq policy, driver, governor and idle states
+unchanged), and `idle-base-2` (as deployed, after the restores).
+`KELT_POWER_RUNS` selects and orders them.
+
+For each run it writes `<run dir>/host/`: `setting.txt`; `turbostat.txt`, one
+sample per second per processor for the whole run; and `settings-*.json`, the
+cpufreq settings per policy, the PM QoS target and the usage and time counters
+of every idle state per processor, read back before the setting, once applied,
+in the middle of the run, at its end and after the restore. A setting that does
+not read back as intended stops the script before the run. Every setting is
+restored after its run, and by an exit trap on failure or Ctrl-C.
