@@ -2,7 +2,7 @@
 """Build the thesis tables of one campaign from its runs.
 
   tables.py <resource-use|verification|response-time|response-time-split|response-time-hist|
-             response-time-stream|exposure-resource-use|throughput|rtt|retransmissions>
+             response-time-stream|host-power|exposure-resource-use|throughput|rtt|retransmissions>
 
 Uses every non-pilot run of the campaign, or only the runs listed in
 runs/thesis-runs.txt when that file exists (one "<slug>/<stamp>" per
@@ -19,7 +19,7 @@ import sys
 EXP = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, EXP)
 from lib.runmeta import discarded  # noqa: E402
-from lib.stats import summary  # noqa: E402
+from lib.stats import percentile, summary  # noqa: E402
 
 
 def select_runs(runs_dir: str, slug: str, listed: set[str] | None) -> list[str]:
@@ -230,6 +230,56 @@ def stream_rows(runs: list[str]) -> list[dict]:
             for src, q in sorted(st["age_ms"].items()):
                 rows.append({**base, "what": f"age on arrival, {src}", **empty, "n": q["n"],
                              "median_ms": q["median"], "p90_ms": q["p90"], "p99_ms": q["p99"], "max_ms": q["max"]})
+    return rows
+
+
+IDLE_STATES = ("POLL", "C1ACPI", "C2ACPI", "C3ACPI")
+
+
+def _turbostat(path: str) -> tuple[list[dict], list[dict]]:
+    """turbostat --interval 1: the per-second summary rows and the per-processor rows."""
+    with open(path) as fh:
+        lines = [ln.rstrip("\n").split("\t") for ln in fh if ln.strip()]
+    rows = [dict(zip(lines[0], r)) for r in lines[1:] if r[0] != "Core"]
+    return [r for r in rows if r["Core"] == "-"], [r for r in rows if r["Core"] != "-"]
+
+
+def host_power_rows(runs: list[str]) -> list[dict]:
+    """Runs of exposure/host_power.sh (a host/ dir): the host setting as read back
+    once applied and after the restore, the time each idle state took during the
+    run (counters at the end minus once applied, all processors), and turbostat's
+    clock while busy (all processors, every second) and package shares."""
+    import statistics
+    rows = []
+    for d in runs:
+        h = os.path.join(d, "host")
+        if not os.path.exists(os.path.join(h, "setting.txt")):
+            continue
+        rb = {n: _load(os.path.join(h, f"settings-{n}.json")) for n in ("applied", "during-end", "after")}
+        summ, cpus = _turbostat(os.path.join(h, "turbostat.txt"))
+
+        def vals(rs, k):
+            return sorted(float(r[k]) for r in rs if r.get(k) not in (None, "", "-"))
+
+        bzy = vals(cpus, "Bzy_MHz")
+        row = {"run": os.path.basename(d), "setting": open(os.path.join(h, "setting.txt")).read().strip(),
+               "min_khz_applied": sorted({p["min_khz"] for p in rb["applied"]["policies"].values()}),
+               "pm_qos_us_applied": rb["applied"]["pm_qos_cpu_dma_latency_us"],
+               "min_khz_after": sorted({p["min_khz"] for p in rb["after"]["policies"].values()}),
+               "pm_qos_us_after": rb["after"]["pm_qos_cpu_dma_latency_us"],
+               "samples_s": len(summ),
+               "busy_mhz_median": round(statistics.median(bzy)), "busy_mhz_p10": round(percentile(bzy, 0.1)),
+               "busy_mhz_p90": round(percentile(bzy, 0.9)),
+               "avg_mhz_median": round(statistics.median(vals(summ, "Avg_MHz"))),
+               "busy_pct_median": round(statistics.median(vals(summ, "Busy%")), 1)}
+        for st in IDLE_STATES:
+            row[f"{st}_pct_median"] = round(statistics.median(vals(summ, f"{st}%")), 1)
+        a, b = rb["applied"]["idle_states"], rb["during-end"]["idle_states"]
+        for name in ("POLL", "C1_ACPI", "C2_ACPI", "C3_ACPI"):
+            row[f"{name}_s_in_run"] = round(sum(b[c][name]["time_us"] - a[c][name]["time_us"] for c in a) / 1e6, 1)
+        row["pkg_watt_median"] = round(statistics.median(vals(summ, "PkgWatt")), 1)
+        row["pkg_temp_c_median"] = round(statistics.median(vals(summ, "PkgTmp")))
+        rows.append(row)
     return rows
 
 
@@ -482,7 +532,7 @@ NOTES = {"rtt": rtt_notes,
 
 BUILDERS = {"resource-use": footprint_rows, "verification": verification_rows,
             "response-time": response_time_rows, "response-time-split": split_rows,
-            "response-time-hist": hist_rows, "response-time-stream": stream_rows,
+            "response-time-hist": hist_rows, "response-time-stream": stream_rows, "host-power": host_power_rows,
             "exposure-resource-use": exposure_rows,
             "throughput": throughput_rows, "rtt": rtt_rows, "retransmissions": retransmission_rows}
 
@@ -496,7 +546,7 @@ def main() -> int:
     campaigns = {"resource-use": FOOTPRINT_CAMPAIGNS, "retransmissions": ("throughput",),
                  "exposure-resource-use": ("response-time",), "response-time-split": ("response-time",),
                  "response-time-hist": ("response-time",),
-                 "response-time-stream": ("response-time",)}.get(slug, (slug,))
+                 "response-time-stream": ("response-time",), "host-power": ("response-time",)}.get(slug, (slug,))
     runs = [d for c in campaigns for d in select_runs(runs_dir, c, _listed(runs_dir))]
     if slug in ("resource-use", "exposure-resource-use"):
         runs = [d for d in runs if os.path.exists(os.path.join(d, "footprint.json"))]

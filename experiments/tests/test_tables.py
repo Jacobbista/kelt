@@ -277,6 +277,34 @@ class ResponseTimeRowsTest(unittest.TestCase):
         self.assertIn({"run": os.path.basename(d), "condition": "synthetic-10", "bin_ms": 12, "count": 1}, hist)
 
 
+class HostPowerRowsTest(unittest.TestCase):
+    def test_setting_idle_time_and_clock(self):
+        import json
+        import tempfile
+
+        def rb(min_khz, qos, c3_us):
+            return {"pm_qos_cpu_dma_latency_us": qos, "policies": {"policy0": {"min_khz": min_khz}},
+                    "idle_states": {"cpu0": {n: {"time_us": c3_us if n == "C3_ACPI" else 0}
+                                             for n in ("POLL", "C1_ACPI", "C2_ACPI", "C3_ACPI")}}}
+        with tempfile.TemporaryDirectory() as d:
+            h = os.path.join(d, "host")
+            os.makedirs(h)
+            with open(os.path.join(h, "setting.txt"), "w") as fh:
+                fh.write("freq-max\n")
+            for n, doc in (("applied", rb(4200000, 2000000000, 1_000_000)), ("during-end", rb(4200000, 2000000000, 3_500_000)),
+                           ("after", rb(400000, 2000000000, 3_600_000))):
+                with open(os.path.join(h, f"settings-{n}.json"), "w") as fh:
+                    json.dump(doc, fh)
+            cols = ["Core", "CPU", "Avg_MHz", "Busy%", "Bzy_MHz", "POLL%", "C1ACPI%", "C2ACPI%", "C3ACPI%", "PkgWatt", "PkgTmp"]
+            with open(os.path.join(h, "turbostat.txt"), "w") as fh:
+                fh.write("\t".join(cols) + "\n")
+                fh.write("\t".join(["-", "-", "240", "7.6", "3185", "0", "20", "16", "56", "6.6", "44"]) + "\n")
+                fh.write("\t".join(["0", "0", "250", "8", "3200", "0", "20", "16", "56", "6.6", "44"]) + "\n")
+            r = tables.host_power_rows([d])[0]
+        self.assertEqual((r["setting"], r["min_khz_applied"], r["min_khz_after"]), ("freq-max", [4200000], [400000]))
+        self.assertEqual((r["C3_ACPI_s_in_run"], r["busy_mhz_median"], r["samples_s"]), (2.5, 3200, 1))
+
+
 class DiscardedConditionsTest(unittest.TestCase):
     def test_left_out_of_the_stream_rows(self):
         import json
